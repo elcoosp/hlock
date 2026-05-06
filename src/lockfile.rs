@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use crate::payload::{PayloadData, pack_payload, unpack_payload};
 use crate::base64url::{encode, decode};
 
+#[derive(Clone)]
 pub struct Package {
     pub name: String,
     pub major: u64,
