@@ -13,9 +13,9 @@ HLOCK is designed to solve the fundamental issues with JSON/YAML lockfiles in la
 
 Package metadata is stored in a compact binary format (Base64URL encoded in the text file) with a CRC32 integrity checksum.
 
-<<<text
+```text
 package_name\tBQAAAE...base64url...\n
-<<<
+```
 
 ## Features (v0.5.0)
 
@@ -35,7 +35,7 @@ Because packages are sorted alphabetically and use Content IDs, HLOCK exposes li
 ### Semantic Diffing
 Find out exactly what changed between two lockfiles without doing string comparisons.
 
-<<<rust
+```rust
 use hlock::*;
 
 let diff = diff_lockfiles(&old_lockfile, &new_lockfile);
@@ -46,12 +46,12 @@ for change in &diff.changes {
         PackageChange::Altered(o, n) => println!("Update {} to {}.{}.{}", o.name, n.major, n.minor, n.patch),
     }
 }
-<<<
+```
 
 ### Sparse Subgraph Extraction
 Extract a fully valid, standalone lockfile containing *only* the transitive dependencies of a specific workspace package. Perfect for zero-dependency CI.
 
-<<<rust
+```rust
 use hlock::*;
 
 let root_cid = fnv::calculate("apps/web@1.0.0");
@@ -59,11 +59,11 @@ let sparse_lockfile = extract_subgraph(&full_lockfile, &[root_cid])?;
 
 // sparse_lockfile now only contains what 'apps/web' needs.
 // Write it to disk and pass it to your package fetcher.
-<<<
+```
 
 ## File Structure
 
-<<<text
+```text
 @source 0 https://registry.npmjs.org/
 @source 1 workspace
 @feature serde derive,rc
@@ -72,20 +72,20 @@ let sparse_lockfile = extract_subgraph(&full_lockfile, &[root_cid])?;
 
 serde	BQAAAE...base64url...
 app    BQAAAE...base64url...
-<<<
+```
 
 ## Rust Usage
 
 Add to your `Cargo.toml`:
 
-<<<toml
+```toml
 [dependencies]
-hlock = "0.5"
-<<<
+hlock = "0.6"
+```
 
 ### Reading & Writing
 
-<<<rust
+```rust
 use hlock::*;
 use std::path::Path;
 
@@ -98,7 +98,7 @@ let mut lockfile = Lockfile {
 
 write_lockfile(Path::new("hlock.lock"), &mut lockfile)?;
 let read_lockfile = read_lockfile(Path::new("hlock.lock"))?;
-<<<
+```
 
 ## Performance
 
