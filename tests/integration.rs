@@ -32,3 +32,24 @@ fn test_e2e_write_and_read() {
 
     std::fs::remove_file(&temp_path).ok();
 }
+
+#[test]
+fn test_e2e_nonexistent_file() {
+    assert!(read_lockfile(&PathBuf::from("target/nope.hlock")).is_err());
+}
+
+#[test]
+fn test_e2e_deep_tree() {
+    let path = PathBuf::from("target/test_deep.hlock");
+    let pkgs = vec![
+        setup_pkg("a", 1, 0, 0, vec!["b"]),
+        setup_pkg("b", 1, 0, 0, vec!["c"]),
+        setup_pkg("c", 1, 0, 0, vec![]),
+    ];
+    write_lockfile(&path, pkgs).unwrap();
+    let res = read_lockfile(&path).unwrap();
+    assert_eq!(res[0].dependencies[0], "b");
+    assert_eq!(res[1].dependencies[0], "c");
+    assert_eq!(res[2].dependencies.len(), 0);
+    std::fs::remove_file(&path).ok();
+}

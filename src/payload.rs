@@ -70,4 +70,31 @@ mod tests {
         assert_eq!(unpacked.hash, data.hash);
         assert_eq!(unpacked.dep_indices, vec![1, 5]);
     }
+
+    #[test]
+    fn test_pack_zero_deps() {
+        let data = PayloadData {
+            major: 0,
+            minor: 0,
+            patch: 0,
+            hash: [0u8; 16],
+            dep_indices: vec![],
+        };
+        let unpacked = unpack_payload(&pack_payload(&data)).unwrap();
+        assert_eq!(unpacked.dep_indices.len(), 0);
+    }
+
+    #[test]
+    fn test_unpack_missing_hash() {
+        let data = PayloadData {
+            major: 0,
+            minor: 0,
+            patch: 0,
+            hash: [0u8; 16],
+            dep_indices: vec![],
+        };
+        let mut packed = pack_payload(&data);
+        packed.truncate(3);
+        assert!(unpack_payload(&packed).is_err());
+    }
 }

@@ -1,3 +1,6 @@
+use std::path::Path;
+use std::fs;
+use std::io::{Write, BufRead, BufReader};
 use std::collections::HashMap;
 use crate::payload::{PayloadData, pack_payload, unpack_payload};
 use crate::base64url::{encode, decode};
@@ -11,32 +14,6 @@ pub struct Package {
     pub hash: [u8; 16],
     pub dependencies: Vec<String>,
 }
-
-pub fn format_line(pkg: &Package, index_map: &HashMap<String, u64>) -> String {
-    let mut dep_indices = Vec::with_capacity(pkg.dependencies.len());
-    for dep_name in &pkg.dependencies {
-        let idx = index_map.get(dep_name)
-            .unwrap_or_else(|| panic!("Missing dependency index for {}", dep_name));
-        dep_indices.push(*idx);
-    }
-
-    let payload_data = PayloadData {
-        major: pkg.major,
-        minor: pkg.minor,
-        patch: pkg.patch,
-        hash: pkg.hash,
-        dep_indices,
-    };
-
-    let binary = pack_payload(&payload_data);
-    let encoded = encode(&binary);
-
-    format!("{}\t{}", pkg.name, encoded)
-}
-
-use std::path::Path;
-use std::fs;
-use std::io::{Write, BufRead, BufReader};
 
 pub fn write_lockfile(path: &Path, mut packages: Vec<Package>) -> Result<(), String> {
     packages.sort_by(|a, b| a.name.cmp(&b.name));
@@ -88,6 +65,28 @@ pub fn read_lockfile(path: &Path) -> Result<Vec<Package>, String> {
     }
 
     Ok(packages)
+}
+
+pub fn format_line(pkg: &Package, index_map: &HashMap<String, u64>) -> String {
+    let mut dep_indices = Vec::with_capacity(pkg.dependencies.len());
+    for dep_name in &pkg.dependencies {
+        let idx = index_map.get(dep_name)
+            .unwrap_or_else(|| panic!("Missing dependency index for {}", dep_name));
+        dep_indices.push(*idx);
+    }
+
+    let payload_data = PayloadData {
+        major: pkg.major,
+        minor: pkg.minor,
+        patch: pkg.patch,
+        hash: pkg.hash,
+        dep_indices,
+    };
+
+    let binary = pack_payload(&payload_data);
+    let encoded = encode(&binary);
+
+    format!("{}\t{}", pkg.name, encoded)
 }
 
 pub fn parse_line(line: &str) -> Result<(String, PayloadData), &'static str> {
@@ -152,6 +151,21 @@ mod tests {
     fn test_parse_line_missing_tab() {
         let line = "axios_no_tab";
         assert!(parse_line(line).is_err());
+    }
+
+    #[test]
+    fn test_parse_invalid_base64() {
+        assert!(parse_line("name\t!!invalid!!").is_err());
+    }
+
+    #[test]
+    fn test_format_multiple_deps() {
+        let mut map = HashMap::new();
+        map.insert("dep1".to_string(), 0);
+        map.insert("dep2".to_string(), 1);
+        let pkg = mock_pkg("root", 1, 0, 0, vec!["dep1", "dep2"]);
+        let line = format_line(&pkg, &map);
+        assert!(line.contains('\t'));
     }
 
     #[test]

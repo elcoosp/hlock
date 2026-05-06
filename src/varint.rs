@@ -71,4 +71,19 @@ mod tests {
         decode_varint(&[0x80, 0x01, 0xFF], &mut cursor).unwrap();
         assert_eq!(cursor, 2);
     }
+
+    #[test]
+    fn test_encode_zero() {
+        assert_eq!(encode_varint(0), vec![0x00]);
+    }
+
+    #[test]
+    fn test_decode_zero() {
+        assert_eq!(decode_varint(&[0x00], &mut 0), Ok(0));
+    }
+
+    #[test]
+    fn test_roundtrip_300() {
+        assert_eq!(decode_varint(&encode_varint(300), &mut 0), Ok(300));
+    }
 }

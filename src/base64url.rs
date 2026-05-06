@@ -75,4 +75,14 @@ mod tests {
         let decoded = decode(encoded.as_bytes()).unwrap();
         assert_eq!(decoded, original);
     }
+
+    #[test]
+    fn test_encode_one_byte() {
+        assert_eq!(encode(&[0x00]), "AA");
+    }
+
+    #[test]
+    fn test_decode_invalid_char() {
+        assert!(decode(&[0xFF]).is_err());
+    }
 }
