@@ -37,4 +37,10 @@ pub enum Error {
 
     #[error("Line {line_number}: Unsupported hash algorithm {algo_id}")]
     UnknownHashAlgorithm { line_number: usize, algo_id: u8 },
+
+    #[error("Package '{package}' depends on '{content_id:08x}', which was not found in the lockfile")]
+    MissingContentId { package: String, content_id: u64 },
+
+    #[error("Package '{package}' requests feature index {idx}, but its feature table only has {count} entries")]
+    InvalidFeatureIndex { package: String, idx: usize, count: usize },
 }
