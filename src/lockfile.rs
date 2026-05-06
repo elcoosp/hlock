@@ -33,6 +33,62 @@ pub fn format_line(pkg: &Package, index_map: &HashMap<String, u64>) -> String {
     format!("{}\t{}", pkg.name, encoded)
 }
 
+use std::path::Path;
+use std::fs;
+use std::io::{Write, BufRead, BufReader};
+
+pub fn write_lockfile(path: &Path, mut packages: Vec<Package>) -> Result<(), String> {
+    packages.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut index_map = HashMap::new();
+    packages.iter().enumerate().for_each(|(i, p)| {
+        index_map.insert(p.name.clone(), i as u64);
+    });
+
+    let mut file = fs::File::create(path).map_err(|e| e.to_string())?;
+
+    for pkg in &packages {
+        let line = format_line(pkg, &index_map);
+        writeln!(file, "{}", line).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+pub fn read_lockfile(path: &Path) -> Result<Vec<Package>, String> {
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let reader = BufReader::new(file);
+    let mut name_index = HashMap::new();
+    let mut raw_entries = Vec::new();
+
+    for (idx, line_result) in reader.lines().enumerate() {
+        let line = line_result.map_err(|e| e.to_string())?;
+        if line.trim().is_empty() { continue; }
+
+        let (name, payload) = parse_line(&line)?;
+        name_index.insert(idx as u64, name.clone());
+        raw_entries.push((name, payload));
+    }
+
+    let mut packages = Vec::with_capacity(raw_entries.len());
+    for (name, payload) in raw_entries {
+        let deps = payload.dep_indices.iter().map(|idx| {
+            name_index.get(idx).cloned().unwrap_or_else(|| format!("<missing_idx_{}>", idx))
+        }).collect();
+
+        packages.push(Package {
+            name,
+            major: payload.major,
+            minor: payload.minor,
+            patch: payload.patch,
+            hash: payload.hash,
+            dependencies: deps,
+        });
+    }
+
+    Ok(packages)
+}
+
 pub fn parse_line(line: &str) -> Result<(String, PayloadData), &'static str> {
     let (name, encoded) = line.split_once('\t')
         .ok_or("Line missing tab delimiter")?;
