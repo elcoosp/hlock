@@ -1,2 +1,2 @@
-target
-wr.sh
+/target
+Cargo.lock
