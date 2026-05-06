@@ -453,6 +453,40 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_source_pruning() {
+        let lockfile = Lockfile {
+            sources: vec![
+                Source::Registry("https://unused.com/".to_string()),
+                Source::Registry("https://used.com/".to_string()),
+            ],
+            overrides: vec![],
+            features: vec![],
+            packages: vec![
+                Package { name: "alpha".to_string(), source_idx: 1, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
+            ],
+        };
+        let cid_alpha = fnv::calculate("alpha@1.0.0");
+        let res = extract_subgraph(&lockfile, &[cid_alpha]).unwrap();
+
+        assert_eq!(res.sources.len(), 1);
+        assert_eq!(res.sources[0], Source::Registry("https://used.com/".to_string()));
+        assert_eq!(res.packages[0].source_idx, 0);
+    }
+
+    #[test]
+    fn test_extract_preserves_metadata() {
+        let lockfile = Lockfile {
+            sources: vec![Source::Registry("r".to_string())],
+            overrides: vec![Override { name: "lodash".to_string(), from_version: "4.0.0".to_string(), ty: DepType::Runtime, to_version: "4.17.21".to_string() }],
+            features: vec![("cli".to_string(), vec!["verbose".to_string()])],
+            packages: vec![mock_pkg("cli", 1, 0, 0, vec![], vec![], vec![])],
+        };
+        let res = extract_subgraph(&lockfile, &[fnv::calculate("cli@1.0.0")]).unwrap();
+        assert_eq!(res.overrides.len(), 1);
+        assert_eq!(res.features.len(), 1);
+    }
+
+    #[test]
     fn test_diff_empty_lockfiles() {
         let old = Lockfile { sources: vec![], overrides: vec![], features: vec![], packages: vec![] };
         let new = Lockfile { sources: vec![], overrides: vec![], features: vec![], packages: vec![] };
