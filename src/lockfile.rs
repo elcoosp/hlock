@@ -18,9 +18,23 @@ pub enum Source {
 pub enum HashAlgorithm { Sha1, Sha256, Sha512, Blake3 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlsaPredicate {
+    pub builder: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Attestation {
+    None,
+    ExternalBundleSha256([u8; 32]),
+    InlineSlsa(SlsaPredicate),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrityHash {
     pub algo: HashAlgorithm,
     pub digest: Vec<u8>,
+    pub attestation: Attestation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,7 +297,7 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
                 2 => HashAlgorithm::Sha512,
                 _ => HashAlgorithm::Blake3,
             };
-            IntegrityHash { algo, digest: d.clone() }
+            IntegrityHash { algo, digest: d.clone(), attestation: Attestation::None }
         }).collect();
 
         let mut dependencies = Vec::new();
@@ -376,6 +390,7 @@ mod tests {
                     _ => HashAlgorithm::Blake3,
                 },
                 digest: d.clone(),
+                attestation: Attestation::None,
             }).collect(),
             features: features.iter().map(|s| s.to_string()).collect(),
             dependencies: deps.iter().map(|(n, ty, f)| Dependency {

@@ -46,4 +46,7 @@ pub enum Error {
 
     #[error("Requested extraction root '{content_id:08x}' does not exist in the lockfile")]
     RootContentIdMissing { content_id: u64 },
+
+    #[error("Line {line_number}: Unsupported attestation type {type_id}")]
+    UnknownAttestationType { line_number: usize, type_id: u8 },
 }
