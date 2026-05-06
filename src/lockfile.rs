@@ -40,9 +40,9 @@ pub struct IntegrityHash {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TargetOS { Any, Linux, MacOS, Windows }
+pub enum TargetOS { Any, Linux, MacOS, Windows, FreeBSD, Android, IOS, Unknown }
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TargetArch { Any, X86_64, Aarch64, Wasm32 }
+pub enum TargetArch { Any, X86_64, Aarch64, Wasm32, Arm, S390x, Ppc64le, Unknown }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DepType {
@@ -233,8 +233,16 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
                 DepType::Peer => (0x02, None, None),
                 DepType::Optional => (0x03, None, None),
                 DepType::OptionalTarget(target_os, target_arch) => {
-                    let os_id = match target_os { TargetOS::Any => 0x00, TargetOS::Linux => 0x01, TargetOS::MacOS => 0x02, TargetOS::Windows => 0x03 };
-                    let arch_id = match target_arch { TargetArch::Any => 0x00, TargetArch::X86_64 => 0x01, TargetArch::Aarch64 => 0x02, TargetArch::Wasm32 => 0x03 };
+                    let os_id = match target_os {
+                        TargetOS::Any => 0x00, TargetOS::Linux => 0x01, TargetOS::MacOS => 0x02,
+                        TargetOS::Windows => 0x03, TargetOS::FreeBSD => 0x04, TargetOS::Android => 0x05,
+                        TargetOS::IOS => 0x06, TargetOS::Unknown => 0xFF,
+                    };
+                    let arch_id = match target_arch {
+                        TargetArch::Any => 0x00, TargetArch::X86_64 => 0x01, TargetArch::Aarch64 => 0x02,
+                        TargetArch::Wasm32 => 0x03, TargetArch::Arm => 0x04, TargetArch::S390x => 0x05,
+                        TargetArch::Ppc64le => 0x06, TargetArch::Unknown => 0xFF,
+                    };
                     (0x04, Some(os_id), Some(arch_id))
                 }
             };
@@ -317,8 +325,16 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
                 2 => DepType::Peer,
                 3 => DepType::Optional,
                 4 => {
-                    let os = dep.target_os.map(|o| match o { 1 => TargetOS::Linux, 2 => TargetOS::MacOS, 3 => TargetOS::Windows, _ => TargetOS::Any }).unwrap_or(TargetOS::Any);
-                    let arch = dep.target_arch.map(|a| match a { 1 => TargetArch::X86_64, 2 => TargetArch::Aarch64, 3 => TargetArch::Wasm32, _ => TargetArch::Any }).unwrap_or(TargetArch::Any);
+                    let os = dep.target_os.map(|o| match o {
+                        0x00 => TargetOS::Any, 0x01 => TargetOS::Linux, 0x02 => TargetOS::MacOS,
+                        0x03 => TargetOS::Windows, 0x04 => TargetOS::FreeBSD, 0x05 => TargetOS::Android,
+                        0x06 => TargetOS::IOS, _ => TargetOS::Unknown,
+                    }).unwrap_or(TargetOS::Any);
+                    let arch = dep.target_arch.map(|a| match a {
+                        0x00 => TargetArch::Any, 0x01 => TargetArch::X86_64, 0x02 => TargetArch::Aarch64,
+                        0x03 => TargetArch::Wasm32, 0x04 => TargetArch::Arm, 0x05 => TargetArch::S390x,
+                        0x06 => TargetArch::Ppc64le, _ => TargetArch::Unknown,
+                    }).unwrap_or(TargetArch::Any);
                     DepType::OptionalTarget(os, arch)
                 }
                 _ => DepType::Runtime,
@@ -552,6 +568,18 @@ mod tests {
         let diff = diff_lockfiles(&old, &new);
         assert_eq!(diff.unchanged_count, 1);
         assert!(diff.changes.is_empty());
+    }
+
+    #[test]
+    fn test_target_os_expanded_variants() {
+        let os = TargetOS::FreeBSD;
+        let os2 = TargetOS::Android;
+        let os3 = TargetOS::IOS;
+        let os4 = TargetOS::Unknown;
+        assert_eq!(format!("{:?}", os), "FreeBSD");
+        assert_eq!(format!("{:?}", os2), "Android");
+        assert_eq!(format!("{:?}", os3), "IOS");
+        assert_eq!(format!("{:?}", os4), "Unknown");
     }
 
     #[test]
