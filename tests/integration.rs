@@ -19,6 +19,7 @@ fn test_e2e_write_and_read_v5() {
                 features: vec![],
                 resolved_peers: vec![],
                 dependencies: vec![Dependency { name: "beta".to_string(), dep_type: DepType::Runtime, requested_features: vec![] }],
+                ..Default::default()
             },
             Package {
                 name: "beta".to_string(),
@@ -29,6 +30,7 @@ fn test_e2e_write_and_read_v5() {
                 features: vec![],
                 resolved_peers: vec![],
                 dependencies: vec![],
+                ..Default::default()
             },
         ],
     };
@@ -57,6 +59,7 @@ fn test_e2e_workspace_roundtrip() {
                 features: vec![],
                 resolved_peers: vec![],
                 dependencies: vec![],
+                ..Default::default()
             },
         ],
     };
@@ -76,6 +79,7 @@ fn test_string_api_crc_corruption() {
         packages: vec![Package {
             name: "z".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
             hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![],
+            ..Default::default()
         }],
     };
     let serialized = serialize(&mut lockfile).unwrap();
@@ -104,6 +108,7 @@ fn test_e2e_features_roundtrip() {
                 features: vec!["derive".to_string(), "rc".to_string()],
                 resolved_peers: vec![],
                 dependencies: vec![],
+                ..Default::default()
             },
             Package {
                 name: "app".to_string(),
@@ -117,6 +122,7 @@ fn test_e2e_features_roundtrip() {
                     dep_type: DepType::Runtime,
                     requested_features: vec!["derive".to_string()],
                 }],
+                ..Default::default()
             },
         ],
     };
@@ -143,6 +149,7 @@ fn test_e2e_optional_target_roundtrip() {
                 features: vec![],
                 resolved_peers: vec![],
                 dependencies: vec![],
+                ..Default::default()
             },
             Package {
                 name: "app".to_string(),
@@ -156,6 +163,7 @@ fn test_e2e_optional_target_roundtrip() {
                     dep_type: DepType::OptionalTarget(TargetOS::Linux, TargetArch::X86_64),
                     requested_features: vec![],
                 }],
+                ..Default::default()
             },
         ],
     };
@@ -171,7 +179,7 @@ fn test_e2e_diff_after_adding_package() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
         packages: vec![
-            Package { name: "core".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
+            Package { name: "core".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![], ..Default::default() },
         ],
     };
     let serialized_v1 = serialize(&mut v1).unwrap();
@@ -180,8 +188,8 @@ fn test_e2e_diff_after_adding_package() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
         packages: vec![
-            Package { name: "core".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
-            Package { name: "utils".to_string(), logical_name: None, source_idx: 0, major: 2, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
+            Package { name: "core".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![], ..Default::default() },
+            Package { name: "utils".to_string(), logical_name: None, source_idx: 0, major: 2, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![], ..Default::default() },
         ],
     };
 
@@ -205,9 +213,9 @@ fn test_e2e_extract_and_serialize_is_valid() {
         packages: vec![
             Package { name: "app".to_string(), logical_name: None, source_idx: 1, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![
                 Dependency { name: "serde".to_string(), dep_type: DepType::Runtime, requested_features: vec![] }
-            ]},
-            Package { name: "serde".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![IntegrityHash { algo: HashAlgorithm::Sha256, digest: vec![0; 32], attestation: Attestation::None }], features: vec![], resolved_peers: vec![], dependencies: vec![] },
-            Package { name: "unused".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
+            ], ..Default::default() },
+            Package { name: "serde".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![IntegrityHash { algo: HashAlgorithm::Sha256, digest: vec![0; 32], attestation: Attestation::None }], features: vec![], resolved_peers: vec![], dependencies: vec![], ..Default::default() },
+            Package { name: "unused".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![], ..Default::default() },
         ],
     };
 
@@ -241,6 +249,7 @@ fn test_e2e_v7_provenance_roundtrip() {
                 attestation: Attestation::ExternalBundleSha256([0u8; 32]),
             }],
             features: vec![], resolved_peers: vec![], dependencies: vec![],
+            ..Default::default()
         }],
     };
     write_lockfile(&temp_path, &mut lockfile).unwrap();
@@ -258,6 +267,7 @@ fn test_e2e_graph_manipulation_ignores_provenance() {
             name: "a".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
             hashes: vec![IntegrityHash { algo: HashAlgorithm::Sha256, digest: vec![], attestation: Attestation::InlineSlsa(SlsaPredicate { builder: "b".to_string(), source: "s".to_string() }) }],
             features: vec![], resolved_peers: vec![], dependencies: vec![],
+            ..Default::default()
         }],
     };
     let cid = fnv::calculate("a@1.0.0");
@@ -276,8 +286,8 @@ fn test_e2e_v8_peer_resolution_topology() {
         packages: vec![
             Package { name: "app".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![
                 PeerResolution { peer_name: "react".to_string(), satisfied_by_content_id: fnv::calculate("react@18.0.0"), is_hoisted_to_root: true }
-            ], dependencies: vec![] },
-            Package { name: "react".to_string(), logical_name: None, source_idx: 0, major: 18, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
+            ], dependencies: vec![], ..Default::default() },
+            Package { name: "react".to_string(), logical_name: None, source_idx: 0, major: 18, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![], ..Default::default() },
         ],
     };
     let serialized = serialize(&mut lockfile).unwrap();
@@ -295,6 +305,7 @@ fn test_e2e_graph_extract_preserves_peers() {
             hashes: vec![], features: vec![],
             resolved_peers: vec![PeerResolution { peer_name: "b".to_string(), satisfied_by_content_id: fnv::calculate("b@1.0.0"), is_hoisted_to_root: false }],
             dependencies: vec![],
+            ..Default::default()
         }],
     };
     let sub = extract_subgraph(&lockfile, &[fnv::calculate("a@1.0.0")]).unwrap();
@@ -307,7 +318,7 @@ fn test_e2e_v8_alias_and_cas_roundtrip() {
         sources: vec![Source::CasHttp("https://cas.example.com/".to_string())],
         overrides: vec![], features: vec![],
         packages: vec![
-            Package { name: "react".to_string(), logical_name: Some("react-v18".to_string()), source_idx: 0, major: 18, minor: 2, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
+            Package { name: "react".to_string(), logical_name: Some("react-v18".to_string()), source_idx: 0, major: 18, minor: 2, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![], ..Default::default() },
         ],
     };
     let serialized = serialize(&mut lockfile).unwrap();
@@ -330,6 +341,7 @@ fn test_e2e_ipfs_source_roundtrip() {
             source_idx: 0, major: 1, minor: 0, patch: 0,
             hashes: vec![],
             features: vec![], resolved_peers: vec![], dependencies: vec![],
+            ..Default::default()
         }],
     };
     write_lockfile(&temp_path, &mut lockfile).unwrap();

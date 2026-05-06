@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::payload::{PayloadData, DepPayload, pack_payload, unpack_payload};
+use crate::payload::{PayloadData, DepPayload, PeerReqPayload, PlatformTagPayload, pack_payload, unpack_payload};
 use crate::base64url::{encode, decode};
 use crate::fnv;
 use std::collections::hash_map::HashMap;
@@ -107,7 +107,7 @@ pub struct PeerResolution {
     pub is_hoisted_to_root: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Package {
     pub name: String,
     pub logical_name: Option<String>,
@@ -119,6 +119,8 @@ pub struct Package {
     pub features: Vec<String>,
     pub resolved_peers: Vec<PeerResolution>,
     pub dependencies: Vec<Dependency>,
+    pub peer_requirements: Vec<PeerRequirement>,
+    pub platform_tags: Vec<PlatformTag>,
 }
 
 #[derive(Debug, Clone)]
@@ -211,6 +213,10 @@ fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
 }
 
 pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
+    serialize_compat(lockfile, CompatMode::V9)
+}
+
+pub fn serialize_compat(lockfile: &mut Lockfile, mode: CompatMode) -> Result<String, Error> {
     let mut out = format_header(lockfile)?;
     lockfile.packages.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -274,6 +280,31 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
             });
         }
 
+        let has_v9_fields = !pkg.peer_requirements.is_empty() || !pkg.platform_tags.is_empty();
+        let peer_reqs: Vec<PeerReqPayload> = if matches!(mode, CompatMode::V9) || has_v9_fields {
+            pkg.peer_requirements.iter().map(|r| {
+                PeerReqPayload { peer_name: r.peer_name.clone(), version_range: r.version_range.clone(), is_optional: r.is_optional }
+            }).collect()
+        } else {
+            vec![]
+        };
+        let tags: Vec<PlatformTagPayload> = if matches!(mode, CompatMode::V9) || has_v9_fields {
+            pkg.platform_tags.iter().map(|t| {
+                let os_id = match t.os {
+                    TargetOS::Any => 0x00, TargetOS::Linux => 0x01, TargetOS::MacOS => 0x02,
+                    TargetOS::Windows => 0x03, TargetOS::FreeBSD => 0x04, TargetOS::Android => 0x05,
+                    TargetOS::IOS => 0x06, TargetOS::Unknown => 0xFF,
+                };
+                let arch_id = match t.arch {
+                    TargetArch::Any => 0x00, TargetArch::X86_64 => 0x01, TargetArch::Aarch64 => 0x02,
+                    TargetArch::Wasm32 => 0x03, TargetArch::Arm => 0x04, TargetArch::S390x => 0x05,
+                    TargetArch::Ppc64le => 0x06, TargetArch::Unknown => 0xFF,
+                };
+                PlatformTagPayload { os_id, arch_id }
+            }).collect()
+        } else {
+            vec![]
+        };
         let payload_data = PayloadData {
             logical_name: pkg.logical_name.clone(),
             source_idx: pkg.source_idx,
@@ -284,6 +315,8 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
             features: pkg.features.clone(),
             resolved_peers: pkg.resolved_peers.clone(),
             deps,
+            peer_requirements: peer_reqs,
+            platform_tags: tags,
         };
         let encoded = encode(&pack_payload(&payload_data));
         out.push_str(&format!("{}\t{}\n", pkg.name, encoded));
@@ -375,6 +408,23 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
             features: payload.features,
             resolved_peers: payload.resolved_peers,
             dependencies,
+            peer_requirements: payload.peer_requirements.iter().map(|r| {
+                PeerRequirement { peer_name: r.peer_name.clone(), version_range: r.version_range.clone(), is_optional: r.is_optional }
+            }).collect(),
+            platform_tags: payload.platform_tags.iter().map(|t| {
+                let os = match t.os_id {
+                    0x00 => TargetOS::Any, 0x01 => TargetOS::Linux, 0x02 => TargetOS::MacOS,
+                    0x03 => TargetOS::Windows, 0x04 => TargetOS::FreeBSD, 0x05 => TargetOS::Android,
+                    0x06 => TargetOS::IOS, _ => TargetOS::Unknown,
+                };
+                let arch = match t.arch_id {
+                    0x00 => TargetArch::Any, 0x01 => TargetArch::X86_64, 0x02 => TargetArch::Aarch64,
+                    0x03 => TargetArch::Wasm32, 0x04 => TargetArch::Arm, 0x05 => TargetArch::S390x,
+                    0x06 => TargetArch::Ppc64le, _ => TargetArch::Unknown,
+                };
+                PlatformTag { os, arch }
+            }).collect(),
+            ..Default::default()
         });
     }
     lockfile.packages = packages;
@@ -426,6 +476,7 @@ mod tests {
                 dep_type: ty.clone(),
                 requested_features: f.iter().map(|s| s.to_string()).collect(),
             }).collect(),
+            ..Default::default()
         }
     }
 
@@ -447,6 +498,7 @@ mod tests {
             features: features.iter().map(|s| s.to_string()).collect(),
             resolved_peers: vec![],
             dependencies: deps.iter().map(|(n, ty, f)| Dependency { name: n.to_string(), dep_type: ty.clone(), requested_features: f.iter().map(|s| s.to_string()).collect() }).collect(),
+            ..Default::default()
         }
     }
 
@@ -546,7 +598,7 @@ mod tests {
             overrides: vec![],
             features: vec![],
             packages: vec![
-                Package { name: "alpha".to_string(), logical_name: None, source_idx: 1, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
+                Package { name: "alpha".to_string(), logical_name: None, source_idx: 1, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![], ..Default::default() },
             ],
         };
         let cid_alpha = fnv::calculate("alpha@1.0.0");
@@ -590,6 +642,25 @@ mod tests {
     }
 
     #[test]
+    fn test_new_structs_constructible() {
+        let tag = PlatformTag { os: TargetOS::Linux, arch: TargetArch::X86_64 };
+        assert_eq!(format!("{:?}", tag.os), "Linux");
+        let req = PeerRequirement {
+            peer_name: "react".to_string(),
+            version_range: "^17.0.0".to_string(),
+            is_optional: false,
+        };
+        assert_eq!(req.peer_name, "react");
+        assert!(!req.is_optional);
+        let req_opt = PeerRequirement {
+            peer_name: "react".to_string(),
+            version_range: "".to_string(),
+            is_optional: true,
+        };
+        assert!(req_opt.is_optional);
+    }
+
+    #[test]
     fn test_target_os_expanded_variants() {
         let os = TargetOS::FreeBSD;
         let os2 = TargetOS::Android;
@@ -627,6 +698,27 @@ mod tests {
     }
 
     #[test]
+    fn test_serialize_v9_includes_peer_reqs_and_tags() {
+        let mut lockfile = Lockfile {
+            sources: vec![Source::Registry("r".to_string())],
+            overrides: vec![], features: vec![],
+            packages: vec![Package {
+                name: "react-dom".to_string(),
+                logical_name: None, source_idx: 0,
+                major: 18, minor: 0, patch: 0,
+                peer_requirements: vec![PeerRequirement { peer_name: "react".to_string(), version_range: "^17.0.0".to_string(), is_optional: false }],
+                platform_tags: vec![PlatformTag { os: TargetOS::Linux, arch: TargetArch::X86_64 }],
+                ..Default::default()
+            }],
+        };
+        let serialized = serialize_compat(&mut lockfile, CompatMode::V9).unwrap();
+        let deserialized = deserialize(&serialized).unwrap();
+        assert_eq!(deserialized.packages[0].peer_requirements.len(), 1);
+        assert_eq!(deserialized.packages[0].peer_requirements[0].peer_name, "react");
+        assert_eq!(deserialized.packages[0].platform_tags.len(), 1);
+    }
+
+    #[test]
     fn test_serialize_missing_content_id() {
         let mut lockfile = Lockfile {
             sources: vec![Source::Registry("https://r.com/".to_string())],
@@ -645,6 +737,7 @@ mod tests {
                     dep_type: DepType::Runtime,
                     requested_features: vec![],
                 }],
+                ..Default::default()
             }],
         };
         assert!(matches!(serialize(&mut lockfile), Err(Error::MissingContentId { .. })));
