@@ -2,45 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.8.0] — The Monorepo Topology Release
 
-## [0.7.0] - 2024-05-24
+### Breaking Changes
+- **Dropped v0.05 backward compatibility.** Parsers now strictly reject any payload version less than `0x06`. No fallback logic.
 
 ### Added
-- **First-Class Supply Chain Provenance**: Native binary-optimized support for SLSA v1.0 and Sigstore cryptographic attestations.
-- `Attestation`, `SlsaPredicate`, and `HashPayload` public structs.
+- **First-Class Package Aliasing** — `Package.logical_name: Option<String>` field and corresponding `LogicalNameLen`/`LogicalName` fields in the binary payload. When set, this is the name code uses to import the package (e.g., `react-v18`), while the canonical name on the text line remains the true identity for content ID computation.
+- **Peer Dependency Topology Tracking** — `Package.resolved_peers: Vec<PeerResolution>` field and `PeerCount`/`Peers` array in the binary payload. Each `PeerResolution` records the peer name, the content ID of the satisfying package, and whether it is hoisted to the workspace root.
+- **CAS HTTP Source** — `Source::CasHttp(String)` variant for `cas+https://` and `cas+http://` URI schemes. Enables registry-free content-addressable fetching.
+- **IPFS Source** — `Source::Ipfs(String)` variant for `ipfs://` URI schemes.
+- Integration tests for IPFS source roundtrip and CAS + alias roundtrip.
+- Integration tests for peer resolution topology serialization and subgraph extraction with peer preservation.
+
+### Changed
+- `PeerResolution` struct now derives `Clone`, `PartialEq`, `Eq`.
+- `PeerResolution` is re-exported from the library root.
+- Header parser recognizes `cas+` prefix and `ipfs://` scheme for source URIs.
+- Binary payload version byte remains `0x06` (unchanged from v0.7 internal schema).
+
+## [0.7.0] — SLSA Provenance Release
+
+### Added
+- **Inline SLSA Attestation** — `Attestation::InlineSlsa(SlsaPredicate)` with builder and source fields embedded directly in the hash struct.
+- **External Bundle Attestation** — `Attestation::ExternalBundleSha256([u8; 32])` for referencing detached attestation bundles.
+- Attestation type byte in binary hash layout (`0x00` None, `0x01` External, `0x02` Inline SLSA).
 - `UnknownAttestationType` error variant.
-- **Inline SLSA**: Embed builder IDs and source URIs directly in the lockfile payload.
-- **External Bundles**: Reference detached Sigstore bundles via a 32-byte SHA-256 pointer.
-- **Backward Compatibility**: Parsers now gracefully handle v0.4 payloads, implicitly mapping them to `Attestation::None`.
 
-### Changed
-- **BREAKING (Payload)**: Binary payload version bumped from `0x04` to `0x05`.
-- `IntegrityHash` struct now requires an `attestation` field.
-- Internal `PayloadData.hashes` type updated to `Vec<HashPayload>` to accommodate attestation metadata.
-
-## [0.6.0] - 2024-05-24
+## [0.6.0] — Peer Resolution Skeleton
 
 ### Added
-- **Monorepo Graph Manipulation APIs**: Introduced pure-Rust graph traversal logic in `src/graph.rs`.
-- `diff_lockfiles`: Calculates exact semantic changes (Added, Removed, Altered) between two lockfiles using a fast two-pointer array merge.
-- `extract_subgraph`: Extracts a fully valid, standalone lockfile containing only the transitive closure of specified root packages (Sparse Subgraph Extraction).
-- `PackageChange` and `LockfileDiff` public structs.
-- `RootContentIdMissing` error variant.
-- Source index remapping and metadata preservation during subgraph extraction.
-- `PartialEq` and `Eq` derives for `Package`, `Dependency`, and `IntegrityHash`.
+- `PeerResolution` struct with `peer_name`, `satisfied_by_content_id`, `is_hoisted_to_root`.
+- `resolved_peers` field on `Package`.
+- `PeerCount` and `Peers` array in binary payload layout.
+- Integration tests for peer topology roundtrip and subgraph extraction with peer preservation.
 
-## [0.5.0] - 2024-05-23
+## [0.5.0] — Content-ID Dependencies
 
 ### Added
-- **Merge-Safe Content-Addressable Graph**: Dependencies are now referenced by FNV-1a 64-bit hashes of `name@version` instead of array indices.
-- **First-Class Feature Flags**: Local per-package feature string tables in the binary payload.
-- **Platform-Targeted Dependencies**: Native support for `OptionalTarget(OS, Arch)` dependency profiles.
-- **Header Directives**: `@feature <name> [flags]` directive.
-- **Binary Payload v0x04**: New schema supporting Content IDs, local features, and target constraints.
-- Two-pass deserialization to correctly resolve forward references in sorted package arrays.
+- Dependencies referenced by FNV-1a 64-bit content IDs instead of positional indices.
+- `MissingContentId` error variant.
+- `InvalidFeatureIndex` error variant.
+- Requested feature indices encoded as varint array in dependency payload.
+- Optional target dependencies (`DepType::OptionalTarget`) with OS and arch bytes.
 
-### Changed
-- **BREAKING**: HLOCK v0.5.0 parsers intentionally reject v0.4.0 and older payloads.
-- Refactored module exports.
+## [0.1.0] — Initial Release
+
+### Added
+- Binary payload encoding with CRC32 integrity checks.
+- Base64URL transport encoding.
+- `@source`, `@override`, `@feature` header directives.
+- Registry, Local, Git, Workspace source types.
+- SHA-1, SHA-256, SHA-512, BLAKE3 hash algorithms.
+- Runtime, Dev, Peer, Optional dependency types.
+- Sparse subgraph extraction with source pruning.
+- Sorted merge-based lockfile diffing.
+- File-based and string-based serialize/deserialize API.
