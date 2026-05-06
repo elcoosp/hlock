@@ -181,7 +181,7 @@ fn test_e2e_diff_after_adding_package() {
 
 #[test]
 fn test_e2e_extract_and_serialize_is_valid() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![
             Source::Registry("https://r.com/".to_string()),
             Source::Workspace,
@@ -209,4 +209,46 @@ fn test_e2e_extract_and_serialize_is_valid() {
     assert!(names.contains("app"));
     assert!(names.contains("serde"));
     assert!(!names.contains("unused"));
+}
+
+#[test]
+fn test_e2e_v7_provenance_roundtrip() {
+    let temp_path = PathBuf::from("target/test_e2e_v7.hlock");
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![],
+        packages: vec![Package {
+            name: "crypto-lib".to_string(),
+            source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![IntegrityHash {
+                algo: HashAlgorithm::Sha256,
+                digest: vec![42u8; 32],
+                attestation: Attestation::ExternalBundleSha256([0u8; 32]),
+            }],
+            features: vec![], dependencies: vec![],
+        }],
+    };
+    write_lockfile(&temp_path, &mut lockfile).unwrap();
+    let res = read_lockfile(&temp_path).unwrap();
+    assert_eq!(res.packages[0].hashes.len(), 1);
+    assert!(matches!(&res.packages[0].hashes[0].attestation, Attestation::ExternalBundleSha256(_)));
+    std::fs::remove_file(&temp_path).ok();
+}
+
+#[test]
+fn test_e2e_graph_manipulation_ignores_provenance() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![],
+        packages: vec![Package {
+            name: "a".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![IntegrityHash { algo: HashAlgorithm::Sha256, digest: vec![], attestation: Attestation::InlineSlsa(SlsaPredicate { builder: "b".to_string(), source: "s".to_string() }) }],
+            features: vec![], dependencies: vec![],
+        }],
+    };
+    let cid = fnv::calculate("a@1.0.0");
+    let sub = extract_subgraph(&lockfile, &[cid]).unwrap();
+    match &sub.packages[0].hashes[0].attestation {
+        Attestation::InlineSlsa(p) => assert_eq!(p.builder, "b"),
+        _ => panic!("Failed to preserve attestation in subgraph"),
+    }
 }
