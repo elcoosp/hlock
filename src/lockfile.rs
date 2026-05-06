@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn test_full_write_read_cycle() {
-        let mut packages = vec![
+        let mut packages = [
             mock_pkg("axios", 1, 6, 0, vec![]),
             mock_pkg("lodash", 4, 17, 21, vec![]),
             mock_pkg("react", 18, 2, 0, vec!["lodash"]),
