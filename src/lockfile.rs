@@ -12,6 +12,8 @@ pub enum Source {
     Local(String),
     Git(String),
     Workspace,
+    CasHttp(String),
+    Ipfs(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,14 +82,23 @@ pub struct Override {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerResolution {
+    pub peer_name: String,
+    pub satisfied_by_content_id: u64,
+    pub is_hoisted_to_root: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Package {
     pub name: String,
+    pub logical_name: Option<String>,
     pub source_idx: usize,
     pub major: u64,
     pub minor: u64,
     pub patch: u64,
     pub hashes: Vec<IntegrityHash>,
     pub features: Vec<String>,
+    pub resolved_peers: Vec<PeerResolution>,
     pub dependencies: Vec<Dependency>,
 }
 
@@ -107,6 +118,8 @@ fn format_header(lockfile: &Lockfile) -> Result<String, Error> {
             Source::Local(u) => u.clone(),
             Source::Git(u) => u.clone(),
             Source::Workspace => "workspace".to_string(),
+            Source::CasHttp(u) => format!("cas+{}", u),
+            Source::Ipfs(u) => u.clone(),
         };
         out.push_str(&format!("@source {} {}\n", idx, val));
     }
@@ -145,6 +158,10 @@ fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
                 Source::Local(val.to_string())
             } else if val.starts_with("git://") || (val.starts_with("https://") && val.contains(".git")) {
                 Source::Git(val.to_string())
+            } else if val.starts_with("cas+http://") || val.starts_with("cas+https://") {
+                Source::CasHttp(val.strip_prefix("cas+").unwrap_or(val).to_string())
+            } else if val.starts_with("ipfs://") {
+                Source::Ipfs(val.to_string())
             } else {
                 Source::Registry(val.to_string())
             };
@@ -187,12 +204,7 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
         }
 
         let hashes: Vec<crate::payload::HashPayload> = pkg.hashes.iter().map(|h| {
-            let algo_id = match h.algo {
-                HashAlgorithm::Sha1 => 0,
-                HashAlgorithm::Sha256 => 1,
-                HashAlgorithm::Sha512 => 2,
-                HashAlgorithm::Blake3 => 3,
-            };
+            let algo_id = match h.algo { HashAlgorithm::Sha1 => 0, HashAlgorithm::Sha256 => 1, HashAlgorithm::Sha512 => 2, HashAlgorithm::Blake3 => 3 };
             crate::payload::HashPayload { algo_id, digest: h.digest.clone(), attestation: h.attestation.clone() }
         }).collect();
 
@@ -221,18 +233,8 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
                 DepType::Peer => (0x02, None, None),
                 DepType::Optional => (0x03, None, None),
                 DepType::OptionalTarget(target_os, target_arch) => {
-                    let os_id = match target_os {
-                        TargetOS::Any => 0x00,
-                        TargetOS::Linux => 0x01,
-                        TargetOS::MacOS => 0x02,
-                        TargetOS::Windows => 0x03,
-                    };
-                    let arch_id = match target_arch {
-                        TargetArch::Any => 0x00,
-                        TargetArch::X86_64 => 0x01,
-                        TargetArch::Aarch64 => 0x02,
-                        TargetArch::Wasm32 => 0x03,
-                    };
+                    let os_id = match target_os { TargetOS::Any => 0x00, TargetOS::Linux => 0x01, TargetOS::MacOS => 0x02, TargetOS::Windows => 0x03 };
+                    let arch_id = match target_arch { TargetArch::Any => 0x00, TargetArch::X86_64 => 0x01, TargetArch::Aarch64 => 0x02, TargetArch::Wasm32 => 0x03 };
                     (0x04, Some(os_id), Some(arch_id))
                 }
             };
@@ -246,12 +248,14 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
         }
 
         let payload_data = PayloadData {
+            logical_name: pkg.logical_name.clone(),
             source_idx: pkg.source_idx,
             major: pkg.major,
             minor: pkg.minor,
             patch: pkg.patch,
             hashes,
             features: pkg.features.clone(),
+            resolved_peers: pkg.resolved_peers.clone(),
             deps,
         };
         let encoded = encode(&pack_payload(&payload_data));
@@ -291,12 +295,7 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
     let mut packages = Vec::new();
     for (name, payload, _line_num) in parsed_payloads {
         let hashes: Vec<IntegrityHash> = payload.hashes.iter().map(|h| {
-            let algo = match h.algo_id {
-                0 => HashAlgorithm::Sha1,
-                1 => HashAlgorithm::Sha256,
-                2 => HashAlgorithm::Sha512,
-                _ => HashAlgorithm::Blake3,
-            };
+            let algo = match h.algo_id { 0 => HashAlgorithm::Sha1, 1 => HashAlgorithm::Sha256, 2 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 };
             IntegrityHash { algo, digest: h.digest.clone(), attestation: h.attestation.clone() }
         }).collect();
 
@@ -318,18 +317,8 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
                 2 => DepType::Peer,
                 3 => DepType::Optional,
                 4 => {
-                    let os = dep.target_os.map(|o| match o {
-                        1 => TargetOS::Linux,
-                        2 => TargetOS::MacOS,
-                        3 => TargetOS::Windows,
-                        _ => TargetOS::Any,
-                    }).unwrap_or(TargetOS::Any);
-                    let arch = dep.target_arch.map(|a| match a {
-                        1 => TargetArch::X86_64,
-                        2 => TargetArch::Aarch64,
-                        3 => TargetArch::Wasm32,
-                        _ => TargetArch::Any,
-                    }).unwrap_or(TargetArch::Any);
+                    let os = dep.target_os.map(|o| match o { 1 => TargetOS::Linux, 2 => TargetOS::MacOS, 3 => TargetOS::Windows, _ => TargetOS::Any }).unwrap_or(TargetOS::Any);
+                    let arch = dep.target_arch.map(|a| match a { 1 => TargetArch::X86_64, 2 => TargetArch::Aarch64, 3 => TargetArch::Wasm32, _ => TargetArch::Any }).unwrap_or(TargetArch::Any);
                     DepType::OptionalTarget(os, arch)
                 }
                 _ => DepType::Runtime,
@@ -342,12 +331,14 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
         }
         packages.push(Package {
             name,
+            logical_name: payload.logical_name,
             source_idx: payload.source_idx,
             major: payload.major,
             minor: payload.minor,
             patch: payload.patch,
             hashes,
             features: payload.features,
+            resolved_peers: payload.resolved_peers,
             dependencies,
         });
     }
@@ -380,6 +371,7 @@ mod tests {
     ) -> Package {
         Package {
             name: name.to_string(),
+            logical_name: None,
             source_idx: 0,
             major: maj, minor: min, patch: pat,
             hashes: hashes.iter().map(|(id, d)| IntegrityHash {
@@ -393,6 +385,7 @@ mod tests {
                 attestation: Attestation::None,
             }).collect(),
             features: features.iter().map(|s| s.to_string()).collect(),
+            resolved_peers: vec![],
             dependencies: deps.iter().map(|(n, ty, f)| Dependency {
                 name: n.to_string(),
                 dep_type: ty.clone(),
@@ -408,6 +401,7 @@ mod tests {
     ) -> Package {
         Package {
             name: name.to_string(),
+            logical_name: None,
             source_idx: 0,
             major: maj, minor: min, patch: pat,
             hashes: hashes.iter().map(|(id, d, a)| IntegrityHash {
@@ -416,27 +410,8 @@ mod tests {
                 attestation: a.clone(),
             }).collect(),
             features: features.iter().map(|s| s.to_string()).collect(),
+            resolved_peers: vec![],
             dependencies: deps.iter().map(|(n, ty, f)| Dependency { name: n.to_string(), dep_type: ty.clone(), requested_features: f.iter().map(|s| s.to_string()).collect() }).collect(),
-        }
-    }
-
-    #[test]
-    fn test_roundtrip_v7_with_slsa() {
-        let mut lockfile = Lockfile {
-            sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![],
-            packages: vec![
-                mock_pkg_with_attestation("secure-pkg", 1, 0, 0, vec![
-                    (0x01, vec![0; 32], Attestation::InlineSlsa(SlsaPredicate { builder: "gha".to_string(), source: "git".to_string() }))
-                ], vec![], vec![]),
-            ],
-        };
-        let serialized = serialize(&mut lockfile).unwrap();
-        let deserialized = deserialize(&serialized).unwrap();
-
-        assert_eq!(deserialized.packages[0].name, "secure-pkg");
-        match &deserialized.packages[0].hashes[0].attestation {
-            Attestation::InlineSlsa(p) => assert_eq!(p.builder, "gha"),
-            _ => panic!("Expected InlineSlsa"),
         }
     }
 
@@ -459,6 +434,26 @@ mod tests {
         assert_eq!(deserialized.packages[0].dependencies[0].requested_features.len(), 0);
         assert_eq!(deserialized.packages[1].name, "serde");
         assert_eq!(deserialized.packages[1].features[0], "derive");
+    }
+
+    #[test]
+    fn test_roundtrip_v7_with_slsa() {
+        let mut lockfile = Lockfile {
+            sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![],
+            packages: vec![
+                mock_pkg_with_attestation("secure-pkg", 1, 0, 0, vec![
+                    (0x01, vec![0; 32], Attestation::InlineSlsa(SlsaPredicate { builder: "gha".to_string(), source: "git".to_string() }))
+                ], vec![], vec![]),
+            ],
+        };
+        let serialized = serialize(&mut lockfile).unwrap();
+        let deserialized = deserialize(&serialized).unwrap();
+
+        assert_eq!(deserialized.packages[0].name, "secure-pkg");
+        match &deserialized.packages[0].hashes[0].attestation {
+            Attestation::InlineSlsa(p) => assert_eq!(p.builder, "gha"),
+            _ => panic!("Expected InlineSlsa"),
+        }
     }
 
     #[test]
@@ -516,7 +511,7 @@ mod tests {
             overrides: vec![],
             features: vec![],
             packages: vec![
-                Package { name: "alpha".to_string(), source_idx: 1, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
+                Package { name: "alpha".to_string(), logical_name: None, source_idx: 1, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
             ],
         };
         let cid_alpha = fnv::calculate("alpha@1.0.0");
@@ -592,10 +587,12 @@ mod tests {
             features: vec![],
             packages: vec![Package {
                 name: "app".to_string(),
+                logical_name: None,
                 source_idx: 0,
                 major: 1, minor: 0, patch: 0,
                 hashes: vec![],
                 features: vec![],
+                resolved_peers: vec![],
                 dependencies: vec![Dependency {
                     name: "missing".to_string(),
                     dep_type: DepType::Runtime,

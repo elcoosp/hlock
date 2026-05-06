@@ -12,18 +12,22 @@ fn test_e2e_write_and_read_v5() {
         packages: vec![
             Package {
                 name: "alpha".to_string(),
+                logical_name: None,
                 source_idx: 0,
                 major: 1, minor: 0, patch: 0,
                 hashes: vec![IntegrityHash { algo: HashAlgorithm::Sha256, digest: vec![42u8; 32], attestation: Attestation::None }],
                 features: vec![],
+                resolved_peers: vec![],
                 dependencies: vec![Dependency { name: "beta".to_string(), dep_type: DepType::Runtime, requested_features: vec![] }],
             },
             Package {
                 name: "beta".to_string(),
+                logical_name: None,
                 source_idx: 0,
                 major: 2, minor: 0, patch: 0,
                 hashes: vec![IntegrityHash { algo: HashAlgorithm::Blake3, digest: vec![42u8; 32], attestation: Attestation::None }],
                 features: vec![],
+                resolved_peers: vec![],
                 dependencies: vec![],
             },
         ],
@@ -47,9 +51,11 @@ fn test_e2e_workspace_roundtrip() {
         packages: vec![
             Package {
                 name: "core".to_string(),
+                logical_name: None,
                 source_idx: 0, major: 1, minor: 0, patch: 0,
                 hashes: vec![],
                 features: vec![],
+                resolved_peers: vec![],
                 dependencies: vec![],
             },
         ],
@@ -68,8 +74,8 @@ fn test_string_api_crc_corruption() {
         overrides: vec![],
         features: vec![],
         packages: vec![Package {
-            name: "z".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![], features: vec![], dependencies: vec![],
+            name: "z".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![],
         }],
     };
     let serialized = serialize(&mut lockfile).unwrap();
@@ -92,16 +98,20 @@ fn test_e2e_features_roundtrip() {
         packages: vec![
             Package {
                 name: "serde".to_string(),
+                logical_name: None,
                 source_idx: 0, major: 1, minor: 0, patch: 0,
                 hashes: vec![],
                 features: vec!["derive".to_string(), "rc".to_string()],
+                resolved_peers: vec![],
                 dependencies: vec![],
             },
             Package {
                 name: "app".to_string(),
+                logical_name: None,
                 source_idx: 0, major: 1, minor: 0, patch: 0,
                 hashes: vec![],
                 features: vec!["derive".to_string()],
+                resolved_peers: vec![],
                 dependencies: vec![Dependency {
                     name: "serde".to_string(),
                     dep_type: DepType::Runtime,
@@ -127,16 +137,20 @@ fn test_e2e_optional_target_roundtrip() {
         packages: vec![
             Package {
                 name: "esbuild".to_string(),
+                logical_name: None,
                 source_idx: 0, major: 0, minor: 17, patch: 0,
                 hashes: vec![],
                 features: vec![],
+                resolved_peers: vec![],
                 dependencies: vec![],
             },
             Package {
                 name: "app".to_string(),
+                logical_name: None,
                 source_idx: 0, major: 1, minor: 0, patch: 0,
                 hashes: vec![],
                 features: vec![],
+                resolved_peers: vec![],
                 dependencies: vec![Dependency {
                     name: "esbuild".to_string(),
                     dep_type: DepType::OptionalTarget(TargetOS::Linux, TargetArch::X86_64),
@@ -157,7 +171,7 @@ fn test_e2e_diff_after_adding_package() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
         packages: vec![
-            Package { name: "core".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
+            Package { name: "core".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
         ],
     };
     let serialized_v1 = serialize(&mut v1).unwrap();
@@ -166,8 +180,8 @@ fn test_e2e_diff_after_adding_package() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
         packages: vec![
-            Package { name: "core".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
-            Package { name: "utils".to_string(), source_idx: 0, major: 2, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
+            Package { name: "core".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
+            Package { name: "utils".to_string(), logical_name: None, source_idx: 0, major: 2, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
         ],
     };
 
@@ -189,11 +203,11 @@ fn test_e2e_extract_and_serialize_is_valid() {
         overrides: vec![],
         features: vec![],
         packages: vec![
-            Package { name: "app".to_string(), source_idx: 1, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![
+            Package { name: "app".to_string(), logical_name: None, source_idx: 1, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![
                 Dependency { name: "serde".to_string(), dep_type: DepType::Runtime, requested_features: vec![] }
             ]},
-            Package { name: "serde".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![IntegrityHash { algo: HashAlgorithm::Sha256, digest: vec![0; 32], attestation: Attestation::None }], features: vec![], dependencies: vec![] },
-            Package { name: "unused".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
+            Package { name: "serde".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![IntegrityHash { algo: HashAlgorithm::Sha256, digest: vec![0; 32], attestation: Attestation::None }], features: vec![], resolved_peers: vec![], dependencies: vec![] },
+            Package { name: "unused".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
         ],
     };
 
@@ -219,13 +233,14 @@ fn test_e2e_v7_provenance_roundtrip() {
         overrides: vec![], features: vec![],
         packages: vec![Package {
             name: "crypto-lib".to_string(),
+            logical_name: None,
             source_idx: 0, major: 1, minor: 0, patch: 0,
             hashes: vec![IntegrityHash {
                 algo: HashAlgorithm::Sha256,
                 digest: vec![42u8; 32],
                 attestation: Attestation::ExternalBundleSha256([0u8; 32]),
             }],
-            features: vec![], dependencies: vec![],
+            features: vec![], resolved_peers: vec![], dependencies: vec![],
         }],
     };
     write_lockfile(&temp_path, &mut lockfile).unwrap();
@@ -240,9 +255,9 @@ fn test_e2e_graph_manipulation_ignores_provenance() {
     let lockfile = Lockfile {
         sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![],
         packages: vec![Package {
-            name: "a".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0,
+            name: "a".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
             hashes: vec![IntegrityHash { algo: HashAlgorithm::Sha256, digest: vec![], attestation: Attestation::InlineSlsa(SlsaPredicate { builder: "b".to_string(), source: "s".to_string() }) }],
-            features: vec![], dependencies: vec![],
+            features: vec![], resolved_peers: vec![], dependencies: vec![],
         }],
     };
     let cid = fnv::calculate("a@1.0.0");
@@ -251,4 +266,54 @@ fn test_e2e_graph_manipulation_ignores_provenance() {
         Attestation::InlineSlsa(p) => assert_eq!(p.builder, "b"),
         _ => panic!("Failed to preserve attestation in subgraph"),
     }
+}
+
+#[test]
+fn test_e2e_v8_peer_resolution_topology() {
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![],
+        packages: vec![
+            Package { name: "app".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![
+                PeerResolution { peer_name: "react".to_string(), satisfied_by_content_id: fnv::calculate("react@18.0.0"), is_hoisted_to_root: true }
+            ], dependencies: vec![] },
+            Package { name: "react".to_string(), logical_name: None, source_idx: 0, major: 18, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
+        ],
+    };
+    let serialized = serialize(&mut lockfile).unwrap();
+    let res = deserialize(&serialized).unwrap();
+    assert_eq!(res.packages[0].resolved_peers[0].peer_name, "react");
+    assert!(res.packages[0].resolved_peers[0].is_hoisted_to_root);
+}
+
+#[test]
+fn test_e2e_graph_extract_preserves_peers() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![],
+        packages: vec![Package {
+            name: "a".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![], features: vec![],
+            resolved_peers: vec![PeerResolution { peer_name: "b".to_string(), satisfied_by_content_id: fnv::calculate("b@1.0.0"), is_hoisted_to_root: false }],
+            dependencies: vec![],
+        }],
+    };
+    let sub = extract_subgraph(&lockfile, &[fnv::calculate("a@1.0.0")]).unwrap();
+    assert_eq!(sub.packages[0].resolved_peers[0].peer_name, "b");
+}
+
+#[test]
+fn test_e2e_v8_alias_and_cas_roundtrip() {
+    let mut lockfile = Lockfile {
+        sources: vec![Source::CasHttp("https://cas.example.com/".to_string())],
+        overrides: vec![], features: vec![],
+        packages: vec![
+            Package { name: "react".to_string(), logical_name: Some("react-v18".to_string()), source_idx: 0, major: 18, minor: 2, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![] },
+        ],
+    };
+    let serialized = serialize(&mut lockfile).unwrap();
+    let deserialized = deserialize(&serialized).unwrap();
+
+    assert_eq!(deserialized.sources[0], Source::CasHttp("https://cas.example.com/".to_string()));
+    assert_eq!(deserialized.packages[0].logical_name, Some("react-v18".to_string()));
+    assert_eq!(deserialized.packages[0].major, 18);
 }

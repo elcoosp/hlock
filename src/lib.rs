@@ -12,6 +12,6 @@ pub use graph::{diff_lockfiles, extract_subgraph};
 pub use lockfile::{
     Lockfile, Package, Source, DepType, Dependency, Override,
     HashAlgorithm, IntegrityHash, TargetOS, TargetArch,
-    PackageChange, LockfileDiff, Attestation, SlsaPredicate,
+    PackageChange, LockfileDiff, Attestation, SlsaPredicate, PeerResolution,
     serialize, deserialize, write_lockfile, read_lockfile
 };

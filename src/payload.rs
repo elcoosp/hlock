@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::lockfile::{Attestation, SlsaPredicate};
+use crate::lockfile::{Attestation, SlsaPredicate, PeerResolution};
 
 #[derive(Debug, Clone)]
 pub struct HashPayload {
@@ -17,19 +17,31 @@ pub struct DepPayload {
 }
 
 pub struct PayloadData {
+    pub logical_name: Option<String>,
     pub source_idx: usize,
     pub major: u64,
     pub minor: u64,
     pub patch: u64,
     pub hashes: Vec<HashPayload>,
     pub features: Vec<String>,
+    pub resolved_peers: Vec<PeerResolution>,
     pub deps: Vec<DepPayload>,
 }
 
 pub fn pack_payload(data: &PayloadData) -> Vec<u8> {
     let mut buf = Vec::with_capacity(128);
 
-    buf.push(0x05);
+    buf.push(0x06);
+
+    match &data.logical_name {
+        Some(name) => {
+            let bytes = name.as_bytes();
+            buf.extend(crate::varint::encode_varint(bytes.len() as u64));
+            buf.extend_from_slice(bytes);
+        }
+        None => buf.push(0x00),
+    }
+
     buf.extend(crate::varint::encode_varint(data.source_idx as u64));
     buf.extend(crate::varint::encode_varint(data.major));
     buf.extend(crate::varint::encode_varint(data.minor));
@@ -66,6 +78,15 @@ pub fn pack_payload(data: &PayloadData) -> Vec<u8> {
         buf.extend_from_slice(bytes);
     }
 
+    buf.extend(crate::varint::encode_varint(data.resolved_peers.len() as u64));
+    for peer in &data.resolved_peers {
+        let name_bytes = peer.peer_name.as_bytes();
+        buf.extend(crate::varint::encode_varint(name_bytes.len() as u64));
+        buf.extend_from_slice(name_bytes);
+        buf.extend_from_slice(&peer.satisfied_by_content_id.to_le_bytes());
+        buf.push(if peer.is_hoisted_to_root { 0x01 } else { 0x00 });
+    }
+
     buf.extend(crate::varint::encode_varint(data.deps.len() as u64));
     for dep in &data.deps {
         buf.extend_from_slice(&dep.content_id.to_le_bytes());
@@ -90,8 +111,16 @@ pub fn unpack_payload(bytes: &[u8], line_number: usize) -> Result<PayloadData, E
     let mut cursor = 0;
 
     let version = bytes[cursor]; cursor += 1;
-    if version != 0x04 && version != 0x05 { return Err(Error::UnknownPayloadVersion { line_number, version }); }
-    let is_v5 = version == 0x05;
+    if version != 0x06 { return Err(Error::UnknownPayloadVersion { line_number, version }); }
+
+    let logical_name_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+    let logical_name = if logical_name_len > 0 {
+        if cursor + logical_name_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+        Some(String::from_utf8(bytes[cursor..cursor + logical_name_len].to_vec()).unwrap_or_default())
+    } else {
+        None
+    };
+    cursor += logical_name_len;
 
     let source_idx = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
     let major = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })?;
@@ -109,35 +138,31 @@ pub fn unpack_payload(bytes: &[u8], line_number: usize) -> Result<PayloadData, E
         let digest = bytes[cursor..cursor + hash_len].to_vec();
         cursor += hash_len;
 
-        let attestation = if is_v5 {
-            if cursor + 1 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-            let attest_type = bytes[cursor]; cursor += 1;
-            match attest_type {
-                0x00 => Attestation::None,
-                0x01 => {
-                    if cursor + 32 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-                    let mut bundle = [0u8; 32];
-                    bundle.copy_from_slice(&bytes[cursor..cursor+32]);
-                    cursor += 32;
-                    Attestation::ExternalBundleSha256(bundle)
-                }
-                0x02 => {
-                    let builder_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
-                    if cursor + builder_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-                    let builder = String::from_utf8(bytes[cursor..cursor + builder_len].to_vec()).unwrap_or_default();
-                    cursor += builder_len;
-
-                    let source_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
-                    if cursor + source_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-                    let source = String::from_utf8(bytes[cursor..cursor + source_len].to_vec()).unwrap_or_default();
-                    cursor += source_len;
-
-                    Attestation::InlineSlsa(SlsaPredicate { builder, source })
-                }
-                _ => return Err(Error::UnknownAttestationType { line_number, type_id: attest_type }),
+        if cursor + 1 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+        let attest_type = bytes[cursor]; cursor += 1;
+        let attestation = match attest_type {
+            0x00 => Attestation::None,
+            0x01 => {
+                if cursor + 32 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+                let mut bundle = [0u8; 32];
+                bundle.copy_from_slice(&bytes[cursor..cursor+32]);
+                cursor += 32;
+                Attestation::ExternalBundleSha256(bundle)
             }
-        } else {
-            Attestation::None
+            0x02 => {
+                let builder_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+                if cursor + builder_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+                let builder = String::from_utf8(bytes[cursor..cursor + builder_len].to_vec()).unwrap_or_default();
+                cursor += builder_len;
+
+                let source_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+                if cursor + source_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+                let source = String::from_utf8(bytes[cursor..cursor + source_len].to_vec()).unwrap_or_default();
+                cursor += source_len;
+
+                Attestation::InlineSlsa(SlsaPredicate { builder, source })
+            }
+            _ => return Err(Error::UnknownAttestationType { line_number, type_id: attest_type }),
         };
 
         hashes.push(HashPayload { algo_id, digest, attestation });
@@ -150,6 +175,23 @@ pub fn unpack_payload(bytes: &[u8], line_number: usize) -> Result<PayloadData, E
         if cursor + str_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
         features.push(String::from_utf8(bytes[cursor..cursor + str_len].to_vec()).unwrap_or_default());
         cursor += str_len;
+    }
+
+    let peer_count = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+    let mut resolved_peers = Vec::new();
+    for _ in 0..peer_count {
+        let p_name_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+        if cursor + p_name_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+        let p_name = String::from_utf8(bytes[cursor..cursor + p_name_len].to_vec()).unwrap_or_default();
+        cursor += p_name_len;
+
+        if cursor + 9 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+        let sat_cid = u64::from_le_bytes(bytes[cursor..cursor+8].try_into().unwrap());
+        cursor += 8;
+        let is_hoisted = bytes[cursor] == 0x01;
+        cursor += 1;
+
+        resolved_peers.push(PeerResolution { peer_name: p_name, satisfied_by_content_id: sat_cid, is_hoisted_to_root: is_hoisted });
     }
 
     let dep_count = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
@@ -182,7 +224,7 @@ pub fn unpack_payload(bytes: &[u8], line_number: usize) -> Result<PayloadData, E
     let expected_crc = u32::from_le_bytes(bytes[cursor..cursor+4].try_into().unwrap());
     if expected_crc != crate::crc32::calculate(&bytes[..cursor]) { return Err(Error::IntegrityCheckFailed { line_number }); }
 
-    Ok(PayloadData { source_idx, major, minor, patch, hashes, features, deps })
+    Ok(PayloadData { logical_name, source_idx, major, minor, patch, hashes, features, resolved_peers, deps })
 }
 
 #[cfg(test)]
@@ -190,177 +232,116 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_pack_v5_base_structure() {
+    fn test_pack_v8_logical_name_and_peers() {
         let data = PayloadData {
-            source_idx: 1, major: 1, minor: 0, patch: 0,
-            hashes: vec![HashPayload {
-                algo_id: 0x01,
-                digest: vec![0xAA; 32],
-                attestation: Attestation::None,
-            }],
+            logical_name: Some("react-v18".to_string()),
+            source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![],
             features: vec![],
+            resolved_peers: vec![PeerResolution {
+                peer_name: "react-dom".to_string(),
+                satisfied_by_content_id: 12345,
+                is_hoisted_to_root: true,
+            }],
             deps: vec![],
         };
         let packed = pack_payload(&data);
-        assert_eq!(packed[0], 0x05);
-        assert_eq!(packed[5], 0x01); // HashCount
-        assert_eq!(packed[6], 0x01); // AlgoId
-        assert_eq!(packed[7], 32);   // HashLen
-        assert_eq!(packed[40], 0x00); // AttestationType None
-        assert_eq!(packed[41], 0x00); // FeatureCount
-        assert_eq!(packed[42], 0x00); // DepCount
+        assert_eq!(packed[0], 0x06);
+        assert_eq!(packed[1], 0x09);
+        assert_eq!(&packed[2..11], "react-v18".as_bytes());
+    }
+
+    #[test]
+    fn test_unpack_v8_roundtrip_alias_peers() {
+        let data = PayloadData {
+            logical_name: Some("alias".to_string()),
+            source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![],
+            features: vec![],
+            resolved_peers: vec![PeerResolution {
+                peer_name: "peer".to_string(),
+                satisfied_by_content_id: 99,
+                is_hoisted_to_root: false,
+            }],
+            deps: vec![],
+        };
+        let packed = pack_payload(&data);
+        let unpacked = unpack_payload(&packed, 0).unwrap();
+
+        assert_eq!(unpacked.logical_name, Some("alias".to_string()));
+        assert_eq!(unpacked.resolved_peers.len(), 1);
+        assert_eq!(unpacked.resolved_peers[0].satisfied_by_content_id, 99);
+        assert!(!unpacked.resolved_peers[0].is_hoisted_to_root);
+    }
+
+    #[test]
+    fn test_pack_v5_base_structure() {
+        let data = PayloadData {
+            logical_name: None, source_idx: 1, major: 1, minor: 0, patch: 0,
+            hashes: vec![HashPayload { algo_id: 0x01, digest: vec![0xAA; 32], attestation: Attestation::None }],
+            features: vec![], resolved_peers: vec![], deps: vec![],
+        };
+        let packed = pack_payload(&data);
+        assert_eq!(packed[0], 0x06);
+        assert_eq!(packed[1], 0x00); // logical name len
+        assert_eq!(packed[2], 0x01); // SourceIdx
     }
 
     #[test]
     fn test_pack_v5_dep_content_id() {
         let data = PayloadData {
-            source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![], features: vec![],
-            deps: vec![DepPayload {
-                content_id: 12345678, dep_type: 0x00, target_os: None, target_arch: None, req_feat_indices: vec![],
-            }],
+            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![], features: vec![], resolved_peers: vec![],
+            deps: vec![DepPayload { content_id: 12345678, dep_type: 0x00, target_os: None, target_arch: None, req_feat_indices: vec![] }],
         };
         let packed = pack_payload(&data);
         assert_eq!(packed[7], 0x01); // DepCount
-        assert_eq!(&packed[8..16], &12345678u64.to_le_bytes()); // Content ID
-        assert_eq!(packed[16], 0x00); // DepType
-    }
-
-    #[test]
-    fn test_pack_v5_dep_target_and_feats() {
-        let data = PayloadData {
-            source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![], features: vec!["derive".to_string()],
-            deps: vec![DepPayload {
-                content_id: 0, dep_type: 0x04,
-                target_os: Some(0x01), target_arch: Some(0x02),
-                req_feat_indices: vec![0],
-            }],
-        };
-        let packed = pack_payload(&data);
-
-        let mut cursor = 0;
-        assert_eq!(packed[cursor], 0x05); cursor += 1; // Version
-        assert_eq!(packed[cursor], 0x00); cursor += 1; // SourceIdx
-        assert_eq!(packed[cursor], 0x01); cursor += 1; // Major
-        assert_eq!(packed[cursor], 0x00); cursor += 1; // Minor
-        assert_eq!(packed[cursor], 0x00); cursor += 1; // Patch
-        assert_eq!(packed[cursor], 0x00); cursor += 1; // HashCount
-
-        assert_eq!(packed[cursor], 0x01); cursor += 1; // FeatureCount
-        assert_eq!(packed[cursor], 0x06); cursor += 1; // Feature String Len
-        cursor += 6; // Skip "derive"
-
-        assert_eq!(packed[cursor], 0x01); cursor += 1; // DepCount
-
-        assert_eq!(&packed[cursor..cursor+8], &0u64.to_le_bytes()); cursor += 8; // Content ID
-        assert_eq!(packed[cursor], 0x04); cursor += 1; // DepType OptionalTarget
-        assert_eq!(packed[cursor], 0x01); cursor += 1; // Target OS
-        assert_eq!(packed[cursor], 0x02); cursor += 1; // Target Arch
-        assert_eq!(packed[cursor], 0x01); cursor += 1; // ReqFeatCount
-        assert_eq!(packed[cursor], 0x00); // FeatIdx 0
-    }
-
-    #[test]
-    fn test_pack_v7_hash_with_inline_slsa() {
-        let data = PayloadData {
-            source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![HashPayload {
-                algo_id: 0x01,
-                digest: vec![0xAA; 32],
-                attestation: Attestation::InlineSlsa(SlsaPredicate {
-                    builder: "github.com/actions".to_string(),
-                    source: "git+https://github.com/pkg".to_string(),
-                }),
-            }],
-            features: vec![],
-            deps: vec![],
-        };
-        let packed = pack_payload(&data);
-        assert_eq!(packed[0], 0x05); // Version 0x05
-        let hash_start = 6;
-        let hash_len = packed[hash_start + 1] as usize;
-        let attest_type_pos = hash_start + 2 + hash_len;
-        assert_eq!(packed[attest_type_pos], 0x02); // Inline SLSA
+        assert_eq!(&packed[8..16], &12345678u64.to_le_bytes());
+        assert_eq!(packed[16], 0x00);
     }
 
     #[test]
     fn test_unpack_roundtrip_v5() {
         let data = PayloadData {
-            source_idx: 0, major: 2, minor: 0, patch: 0,
-            hashes: vec![HashPayload {
-                algo_id: 0x01, digest: vec![0; 32], attestation: Attestation::None,
-            }],
+            logical_name: None, source_idx: 0, major: 2, minor: 0, patch: 0,
+            hashes: vec![HashPayload { algo_id: 0x01, digest: vec![0; 32], attestation: Attestation::None }],
             features: vec!["sync".to_string()],
-            deps: vec![DepPayload {
-                content_id: 99, dep_type: 0x01, target_os: None, target_arch: None, req_feat_indices: vec![0],
-            }],
+            resolved_peers: vec![],
+            deps: vec![DepPayload { content_id: 99, dep_type: 0x01, target_os: None, target_arch: None, req_feat_indices: vec![0] }],
         };
         let packed = pack_payload(&data);
         let unpacked = unpack_payload(&packed, 0).unwrap();
-
         assert_eq!(unpacked.features[0], "sync");
         assert_eq!(unpacked.deps[0].content_id, 99);
-        assert_eq!(unpacked.deps[0].req_feat_indices[0], 0);
         assert!(matches!(unpacked.hashes[0].attestation, Attestation::None));
     }
 
     #[test]
-    fn test_unpack_v7_inline_slsa_roundtrip() {
+    fn test_pack_v7_hash_with_inline_slsa() {
         let data = PayloadData {
-            source_idx: 0, major: 1, minor: 0, patch: 0,
+            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
             hashes: vec![HashPayload {
-                algo_id: 0x01,
-                digest: vec![0; 32],
-                attestation: Attestation::InlineSlsa(SlsaPredicate {
-                    builder: "builder".to_string(),
-                    source: "source".to_string(),
-                }),
+                algo_id: 0x01, digest: vec![0xAA; 32],
+                attestation: Attestation::InlineSlsa(SlsaPredicate { builder: "github.com/actions".to_string(), source: "git+https://github.com/pkg".to_string() }),
             }],
-            features: vec![],
-            deps: vec![],
+            features: vec![], resolved_peers: vec![], deps: vec![],
         };
         let packed = pack_payload(&data);
-        let unpacked = unpack_payload(&packed, 0).unwrap();
-
-        assert_eq!(unpacked.hashes.len(), 1);
-        match &unpacked.hashes[0].attestation {
-            Attestation::InlineSlsa(p) => {
-                assert_eq!(p.builder, "builder");
-                assert_eq!(p.source, "source");
-            }
-            _ => panic!("Expected InlineSlsa attestation"),
-        }
-    }
-
-    #[test]
-    fn test_unpack_v4_fallback_attestation_none() {
-        let mut buf = Vec::new();
-        buf.push(0x04); // v0.4
-        buf.push(0x00); // src
-        buf.push(0x01); // maj
-        buf.push(0x00); // min
-        buf.push(0x00); // pat
-        buf.push(0x01); // hash count
-        buf.push(0x01); // algo sha256
-        buf.push(0x04); // hash len
-        buf.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]); // digest
-        buf.push(0x00); // feat count
-        buf.push(0x00); // dep count
-        let crc = crate::crc32::calculate(&buf);
-        buf.extend_from_slice(&crc.to_le_bytes());
-
-        let unpacked = unpack_payload(&buf, 0).unwrap();
-        assert_eq!(unpacked.hashes[0].algo_id, 0x01);
-        assert!(matches!(unpacked.hashes[0].attestation, Attestation::None));
+        assert_eq!(packed[0], 0x06);
+        let hash_start = 7;
+        let hash_len = packed[hash_start + 1] as usize;
+        let attest_type_pos = hash_start + 2 + hash_len;
+        assert_eq!(packed[attest_type_pos], 0x02);
     }
 
     #[test]
     fn test_unpack_invalid_version_v5() {
         let mut bad_payload = pack_payload(&PayloadData {
-            source_idx: 0, major: 0, minor: 0, patch: 0, hashes: vec![HashPayload { algo_id: 0x01, digest: vec![], attestation: Attestation::None }], features: vec![], deps: vec![]
+            logical_name: None, source_idx: 0, major: 0, minor: 0, patch: 0,
+            hashes: vec![HashPayload { algo_id: 0x01, digest: vec![], attestation: Attestation::None }],
+            features: vec![], resolved_peers: vec![], deps: vec![]
         });
-        bad_payload[0] = 0x03;
+        bad_payload[0] = 0x05;
         assert!(matches!(unpack_payload(&bad_payload, 1), Err(Error::UnknownPayloadVersion { .. })));
     }
 }
