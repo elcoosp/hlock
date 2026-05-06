@@ -283,8 +283,8 @@ mod tests {
         };
         let packed = pack_payload(&data);
         assert_eq!(packed[0], 0x06);
-        assert_eq!(packed[1], 0x00); // logical name len
-        assert_eq!(packed[2], 0x01); // SourceIdx
+        assert_eq!(packed[1], 0x00);
+        assert_eq!(packed[2], 0x01);
     }
 
     #[test]
@@ -295,7 +295,10 @@ mod tests {
             deps: vec![DepPayload { content_id: 12345678, dep_type: 0x00, target_os: None, target_arch: None, req_feat_indices: vec![] }],
         };
         let packed = pack_payload(&data);
-        assert_eq!(packed[7], 0x01); // DepCount
+
+        // Header: 06 00 00 01 00 00 00 00 = 7 bytes
+        // DepCount is at index 7
+        assert_eq!(packed[7], 0x01);
         assert_eq!(&packed[8..16], &12345678u64.to_le_bytes());
         assert_eq!(packed[16], 0x00);
     }
