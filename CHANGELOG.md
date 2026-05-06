@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2024-05-24
+### Added
+- `Source::Workspace` variant to define local monorepo packages.
+- `HashAlgorithm` enum (`Sha1`, `Sha256`, `Sha512`, `Blake3`) for typed cryptographic identifiers.
+- `IntegrityHash` struct combining `HashAlgorithm` and a dynamic digest `Vec<u8>`.
+- Support for multiple simultaneous integrity hashes per package (e.g., SHA-256 + BLAKE3).
+- Validation enforcing that `Source::Workspace` packages cannot possess integrity hashes (`Error::InvalidWorkspaceHash`).
+- Validation for unsupported hash algorithms in payloads (`Error::UnknownHashAlgorithm`).
+
+### Changed
+- **BREAKING:** `Package.hash` field replaced by `Package.hashes: Vec<IntegrityHash>`.
+- **BREAKING:** Payload version byte bumped to `0x03`. HLOCK v0.4.0 will intentionally reject v0.3.0 and older payloads.
+- **BREAKING:** Binary payload hash format changed from a single dynamic array to an array of `(AlgoId, Len, Digest)` structs.
+
 ## [0.3.0] - 2024-05-24
 ### Added
 - File header block for global metadata (parsed before package graph).
