@@ -43,4 +43,7 @@ pub enum Error {
 
     #[error("Package '{package}' requests feature index {idx}, but its feature table only has {count} entries")]
     InvalidFeatureIndex { package: String, idx: usize, count: usize },
+
+    #[error("Requested extraction root '{content_id:08x}' does not exist in the lockfile")]
+    RootContentIdMissing { content_id: u64 },
 }

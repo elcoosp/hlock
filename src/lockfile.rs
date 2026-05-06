@@ -341,50 +341,6 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
     Ok(lockfile)
 }
 
-pub fn diff_lockfiles(old: &Lockfile, new: &Lockfile) -> LockfileDiff {
-    let mut changes = Vec::new();
-    let mut unchanged_count = 0;
-    let mut i = 0;
-    let mut j = 0;
-
-    while i < old.packages.len() && j < new.packages.len() {
-        let old_pkg = &old.packages[i];
-        let new_pkg = &new.packages[j];
-
-        match old_pkg.name.cmp(&new_pkg.name) {
-            std::cmp::Ordering::Less => {
-                changes.push(PackageChange::Removed(old_pkg.clone()));
-                i += 1;
-            }
-            std::cmp::Ordering::Greater => {
-                changes.push(PackageChange::Added(new_pkg.clone()));
-                j += 1;
-            }
-            std::cmp::Ordering::Equal => {
-                if old_pkg.major == new_pkg.major && old_pkg.minor == new_pkg.minor && old_pkg.patch == new_pkg.patch && old_pkg.hashes == new_pkg.hashes {
-                    unchanged_count += 1;
-                } else {
-                    changes.push(PackageChange::Altered(old_pkg.clone(), new_pkg.clone()));
-                }
-                i += 1;
-                j += 1;
-            }
-        }
-    }
-
-    while i < old.packages.len() {
-        changes.push(PackageChange::Removed(old.packages[i].clone()));
-        i += 1;
-    }
-
-    while j < new.packages.len() {
-        changes.push(PackageChange::Added(new.packages[j].clone()));
-        j += 1;
-    }
-
-    LockfileDiff { changes, unchanged_count }
-}
-
 pub fn write_lockfile(path: &Path, lockfile: &mut Lockfile) -> Result<(), Error> {
     let content = serialize(lockfile)?;
     fs::write(path, content)?;
@@ -399,6 +355,7 @@ pub fn read_lockfile(path: &Path) -> Result<Lockfile, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{extract_subgraph, diff_lockfiles};
 
     fn mock_pkg(
         name: &str,
@@ -448,6 +405,51 @@ mod tests {
         assert_eq!(deserialized.packages[0].dependencies[0].requested_features.len(), 0);
         assert_eq!(deserialized.packages[1].name, "serde");
         assert_eq!(deserialized.packages[1].features[0], "derive");
+    }
+
+    #[test]
+    fn test_extract_missing_root() {
+        let lockfile = Lockfile {
+            sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![],
+            packages: vec![mock_pkg("alpha", 1, 0, 0, vec![], vec![], vec![])],
+        };
+        let fake_cid = 999999999;
+        let res = extract_subgraph(&lockfile, &[fake_cid]);
+        assert!(matches!(res, Err(Error::RootContentIdMissing { content_id: 999999999 })));
+    }
+
+    #[test]
+    fn test_extract_single_root_no_deps() {
+        let lockfile = Lockfile {
+            sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![],
+            packages: vec![mock_pkg("alpha", 1, 0, 0, vec![], vec![], vec![])],
+        };
+        let cid = fnv::calculate("alpha@1.0.0");
+        let res = extract_subgraph(&lockfile, &[cid]).unwrap();
+        assert_eq!(res.packages.len(), 1);
+        assert_eq!(res.packages[0].name, "alpha");
+    }
+
+    #[test]
+    fn test_extract_transitive_deps() {
+        let lockfile = Lockfile {
+            sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![],
+            packages: vec![
+                mock_pkg("alpha", 1, 0, 0, vec![], vec![], vec![("beta", DepType::Runtime, vec![])]),
+                mock_pkg("beta", 1, 0, 0, vec![], vec![], vec![("gamma", DepType::Runtime, vec![])]),
+                mock_pkg("gamma", 1, 0, 0, vec![], vec![], vec![]),
+                mock_pkg("omega", 1, 0, 0, vec![], vec![], vec![]),
+            ],
+        };
+        let cid_alpha = fnv::calculate("alpha@1.0.0");
+        let res = extract_subgraph(&lockfile, &[cid_alpha]).unwrap();
+
+        assert_eq!(res.packages.len(), 3);
+        let names: Vec<&str> = res.packages.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"alpha"));
+        assert!(names.contains(&"beta"));
+        assert!(names.contains(&"gamma"));
+        assert!(!names.contains(&"omega"));
     }
 
     #[test]
