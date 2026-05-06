@@ -6,4 +6,8 @@ pub mod error;
 pub mod crc32;
 
 pub use error::Error;
-pub use lockfile::{Lockfile, Package, Source, DepType, Dependency, Override, serialize, deserialize, write_lockfile, read_lockfile};
+pub use lockfile::{
+    Lockfile, Package, Source, DepType, Dependency, Override,
+    HashAlgorithm, IntegrityHash,
+    serialize, deserialize, write_lockfile, read_lockfile
+};
