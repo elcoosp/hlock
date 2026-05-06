@@ -186,14 +186,14 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
             return Err(Error::InvalidWorkspaceHash { line_number: 0 });
         }
 
-        let hashes: Vec<(u8, Vec<u8>)> = pkg.hashes.iter().map(|h| {
+        let hashes: Vec<crate::payload::HashPayload> = pkg.hashes.iter().map(|h| {
             let algo_id = match h.algo {
                 HashAlgorithm::Sha1 => 0,
                 HashAlgorithm::Sha256 => 1,
                 HashAlgorithm::Sha512 => 2,
                 HashAlgorithm::Blake3 => 3,
             };
-            (algo_id, h.digest.clone())
+            crate::payload::HashPayload { algo_id, digest: h.digest.clone(), attestation: h.attestation.clone() }
         }).collect();
 
         let mut deps = Vec::new();
@@ -290,14 +290,14 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
 
     let mut packages = Vec::new();
     for (name, payload, _line_num) in parsed_payloads {
-        let hashes: Vec<IntegrityHash> = payload.hashes.iter().map(|(id, d)| {
-            let algo = match *id {
+        let hashes: Vec<IntegrityHash> = payload.hashes.iter().map(|h| {
+            let algo = match h.algo_id {
                 0 => HashAlgorithm::Sha1,
                 1 => HashAlgorithm::Sha256,
                 2 => HashAlgorithm::Sha512,
                 _ => HashAlgorithm::Blake3,
             };
-            IntegrityHash { algo, digest: d.clone(), attestation: Attestation::None }
+            IntegrityHash { algo, digest: h.digest.clone(), attestation: h.attestation.clone() }
         }).collect();
 
         let mut dependencies = Vec::new();
