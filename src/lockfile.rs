@@ -82,6 +82,25 @@ pub struct Override {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlatformTag {
+    pub os: TargetOS,
+    pub arch: TargetArch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerRequirement {
+    pub peer_name: String,
+    pub version_range: String,
+    pub is_optional: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompatMode {
+    V8,
+    V9,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerResolution {
     pub peer_name: String,
     pub satisfied_by_content_id: u64,
