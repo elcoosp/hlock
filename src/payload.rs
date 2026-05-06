@@ -192,7 +192,7 @@ mod tests {
         assert_eq!(packed[cursor], 0x01); cursor += 1; // Target OS
         assert_eq!(packed[cursor], 0x02); cursor += 1; // Target Arch
         assert_eq!(packed[cursor], 0x01); cursor += 1; // ReqFeatCount
-        assert_eq!(packed[cursor], 0x00); cursor += 1; // FeatIdx 0
+        assert_eq!(packed[cursor], 0x00); // FeatIdx 0
     }
 
     #[test]
