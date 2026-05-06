@@ -14,7 +14,7 @@ HLOCK is designed to solve the fundamental issues with JSON/YAML lockfiles in la
 Package metadata is stored in a compact binary format (Base64URL encoded in the text file) with a CRC32 integrity checksum.
 
 ```text
-package_name\tBQAAAE...base64url...\n
+package_name  BQAAAE...base64url...
 ```
 
 ## Features (v0.5.0)
