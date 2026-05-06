@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_unpack_unknown_algo() {
-        let mut payload = pack_payload(&PayloadData {
+        let payload = pack_payload(&PayloadData {
             source_idx: 0, major: 0, minor: 0, patch: 0,
             hashes: vec![(0xFF, vec![0x00; 32])],
             deps: vec![]
