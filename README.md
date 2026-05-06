@@ -8,67 +8,85 @@ Traditional lockfiles (JSON, TOML, YAML) are deeply nested trees. This creates m
 ## The Solution: HLOCK
 HLOCK is a line-oriented, hybrid text/binary format.
 - **Human & Git Friendly:** One package equals exactly one line. Adding or updating a package changes exactly one line in `git diff`.
-- **Machine Optimized:** Version numbers and dependency arrays are packed into dense binary structures using Unsigned LEB128 (Varints) and Base64URL encoded directly onto the line.
+- **Machine Optimized:** Version numbers, dependency profiles, and source indices are packed into dense binary structures using Unsigned LEB128 (Varints) and Base64URL encoded directly onto the line.
+- **Rich Metadata:** Supports multiple registries, local paths, git sources, and dev/prod dependency profiles via a clean file header.
 
 ### Format Example
+
+    @source 0 https://registry.npmjs.org/
+    @source 1 https://packages.my-company.com/
+    @override react 18.2.0 -> 18.2.1
 
     axios	AQIDAAAAAAAAAAAAAAAAAAAAAAAAAAA
     lodash	EBERAAAAAAAAAAAAAAAAAAAAAAAAAA
     react	EgIAAAAAAAAAAAAAAAAAAAAAAAAAAQ
 
-The left side of the tab is the plain-text package name. The right side is a dense Base64URL payload containing a version header, the Semver, a dynamic-length integrity hash, dependency indices, and a CRC32 checksum.
+The file is split into a **Header** (sources and overrides) and a **Package Graph** (one tab-delimited package per line). The right side of the tab is a dense Base64URL payload containing a version header, a source index, the Semver, a dynamic-length integrity hash, dependency indices with profile types, and a CRC32 checksum.
 
 ## Usage
 
 Add `hlock` to your `Cargo.toml`:
 
     [dependencies]
-    hlock = "0.2.0"
+    hlock = "0.3.0"
 
 ### String API (Core)
-The core logic is decoupled from the filesystem. You can serialize to a string and write it anywhere.
+The core logic is decoupled from the filesystem. You serialize a unified `Lockfile` struct to a string.
 
 ```rust
-use hlock::{Package, serialize, deserialize};
+use hlock::{Lockfile, Package, Source, DepType, Dependency, serialize, deserialize};
 
-let mut packages = vec![
-    Package {
-        name: "lodash".to_string(),
-        major: 4,
-        minor: 17,
-        patch: 21,
-        hash: vec![0xAA; 32], // e.g., full SHA-256 hash
-        dependencies: vec![],
-    },
-    Package {
-        name: "react".to_string(),
-        major: 18,
-        minor: 2,
-        patch: 0,
-        hash: vec![0xBB; 32],
-        dependencies: vec!["lodash".to_string()],
-    },
-];
+let mut lockfile = Lockfile {
+    sources: vec![
+        Source::Registry("https://registry.npmjs.org/".to_string()),
+    ],
+    overrides: vec![],
+    packages: vec![
+        Package {
+            name: "lodash".to_string(),
+            source_idx: 0,
+            major: 4, minor: 17, patch: 21,
+            hash: vec![0xAA; 32],
+            dependencies: vec![],
+        },
+        Package {
+            name: "react".to_string(),
+            source_idx: 0,
+            major: 18, minor: 2, patch: 0,
+            hash: vec![0xBB; 32],
+            dependencies: vec![
+                Dependency { name: "lodash".to_string(), dep_type: DepType::Runtime }
+            ],
+        },
+        Package {
+            name: "jest".to_string(),
+            source_idx: 0,
+            major: 29, minor: 0, patch: 0,
+            hash: vec![0xCC; 32],
+            dependencies: vec![
+                Dependency { name: "react".to_string(), dep_type: DepType::Peer }
+            ],
+        },
+    ],
+};
 
-let lockfile_string = serialize(&mut packages).unwrap();
-let parsed_packages = deserialize(&lockfile_string).unwrap();
+let lockfile_string = serialize(&mut lockfile).unwrap();
+let parsed_lockfile = deserialize(&lockfile_string).unwrap();
 ```
 
 ### File I/O (Wrappers)
 Thin wrappers are provided for standard filesystem operations.
 
 ```rust
-use hlock::{Package, write_lockfile, read_lockfile};
+use hlock::{write_lockfile, read_lockfile};
 use std::path::Path;
 
-// write_lockfile and read_lockfile work exactly like the string API,
-// but handle std::fs::write and std::fs::read_to_string for you.
-write_lockfile(Path::new("hlock.lock"), &mut packages).unwrap();
-let packages = read_lockfile(Path::new("hlock.lock")).unwrap();
+write_lockfile(Path::new("hlock.lock"), &mut lockfile).unwrap();
+let parsed_lockfile = read_lockfile(Path::new("hlock.lock")).unwrap();
 ```
 
 ### Error Handling
-HLOCK v2.0 uses rich, context-aware errors to pinpoint exactly what went wrong in a lockfile.
+HLOCK uses rich, context-aware errors to pinpoint exactly what went wrong in a lockfile.
 
 ```rust
 use hlock::{deserialize, Error};
@@ -77,19 +95,22 @@ match deserialize("bad_base64\t!!!") {
     Err(Error::InvalidBase64 { line_number }) => {
         println!("Syntax error on line {}", line_number);
     }
-    Err(Error::IntegrityCheckFailed { line_number }) => {
-        println!("CRC32 mismatch on line {}", line_number);
+    Err(Error::MissingSource { line_number, index }) => {
+        println!("Line {} references undefined source {}", line_number, index);
+    }
+    Err(Error::UnknownDepType { line_number, type_id }) => {
+        println!("Line {} has invalid dependency profile {}", line_number, type_id);
     }
     _ => {}
 }
 ```
 
-## Under the Hood (v2.0 Spec)
-1. **Payload Versioning:** Every binary payload starts with a `0x01` version byte, allowing future parsers to safely reject unsupported formats.
-2. **Dynamic Hashes:** Instead of hardcoding a 16-byte truncated hash, the payload specifies the exact length of the hash, supporting SHA-256 (32 bytes), BLAKE3 (32 bytes), or anything else.
-3. **CRC32 Checksums:** A 4-byte CRC32 IEEE checksum is appended to the end of every payload. If a line gets partially corrupted via a bad `git merge` or disk fault, `hlock` throws a precise `IntegrityCheckFailed` error instead of panicking.
-4. **Index Mapping:** Dependencies are stored as references to 0-based line indices (taking 1-2 bytes) rather than full strings.
-5. **Varint Encoding:** Semver numbers are packed using LEB128, meaning `v18.2.0` takes only 3 bytes instead of 6 characters.
+## Under the Hood (v0.3.0 Spec)
+1. **File Headers:** The top of the file defines `@source` indices (deduplicating registry URLs) and `@override` substitution rules.
+2. **Dependency Profiles:** Instead of just an array of line indices, each dependency in the binary payload is a tuple of `(LineIndex, DepType)`, allowing parsers to distinguish between `Runtime`, `Dev`, `Peer`, and `Optional` dependencies.
+3. **Source Mapping:** Each package payload includes a `source_idx` pointing back to the header, allowing monorepos to fetch packages from multiple registries or local paths simultaneously.
+4. **Dynamic Hashes:** The payload specifies the exact length of the hash, supporting SHA-256 (32 bytes), BLAKE3 (32 bytes), or anything else.
+5. **CRC32 Checksums:** A 4-byte CRC32 IEEE checksum is appended to the end of every payload to catch corruption.
 
 ## License
 MIT
