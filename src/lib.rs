@@ -10,5 +10,6 @@ pub use error::Error;
 pub use lockfile::{
     Lockfile, Package, Source, DepType, Dependency, Override,
     HashAlgorithm, IntegrityHash, TargetOS, TargetArch,
+    PackageChange, LockfileDiff,
     serialize, deserialize, write_lockfile, read_lockfile
 };

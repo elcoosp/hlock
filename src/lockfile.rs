@@ -17,7 +17,7 @@ pub enum Source {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HashAlgorithm { Sha1, Sha256, Sha512, Blake3 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrityHash {
     pub algo: HashAlgorithm,
     pub digest: Vec<u8>,
@@ -37,11 +37,24 @@ pub enum DepType {
     OptionalTarget(TargetOS, TargetArch),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dependency {
     pub name: String,
     pub dep_type: DepType,
     pub requested_features: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PackageChange {
+    Added(Package),
+    Removed(Package),
+    Altered(Package, Package),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockfileDiff {
+    pub changes: Vec<PackageChange>,
+    pub unchanged_count: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -52,7 +65,7 @@ pub struct Override {
     pub to_version: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Package {
     pub name: String,
     pub source_idx: usize,
