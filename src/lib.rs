@@ -4,6 +4,7 @@ pub mod payload;
 pub mod lockfile;
 pub mod error;
 pub mod crc32;
+pub mod fnv;
 
 pub use error::Error;
 pub use lockfile::{
