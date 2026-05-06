@@ -341,6 +341,50 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
     Ok(lockfile)
 }
 
+pub fn diff_lockfiles(old: &Lockfile, new: &Lockfile) -> LockfileDiff {
+    let mut changes = Vec::new();
+    let mut unchanged_count = 0;
+    let mut i = 0;
+    let mut j = 0;
+
+    while i < old.packages.len() && j < new.packages.len() {
+        let old_pkg = &old.packages[i];
+        let new_pkg = &new.packages[j];
+
+        match old_pkg.name.cmp(&new_pkg.name) {
+            std::cmp::Ordering::Less => {
+                changes.push(PackageChange::Removed(old_pkg.clone()));
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                changes.push(PackageChange::Added(new_pkg.clone()));
+                j += 1;
+            }
+            std::cmp::Ordering::Equal => {
+                if old_pkg.major == new_pkg.major && old_pkg.minor == new_pkg.minor && old_pkg.patch == new_pkg.patch && old_pkg.hashes == new_pkg.hashes {
+                    unchanged_count += 1;
+                } else {
+                    changes.push(PackageChange::Altered(old_pkg.clone(), new_pkg.clone()));
+                }
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+
+    while i < old.packages.len() {
+        changes.push(PackageChange::Removed(old.packages[i].clone()));
+        i += 1;
+    }
+
+    while j < new.packages.len() {
+        changes.push(PackageChange::Added(new.packages[j].clone()));
+        j += 1;
+    }
+
+    LockfileDiff { changes, unchanged_count }
+}
+
 pub fn write_lockfile(path: &Path, lockfile: &mut Lockfile) -> Result<(), Error> {
     let content = serialize(lockfile)?;
     fs::write(path, content)?;
@@ -404,6 +448,50 @@ mod tests {
         assert_eq!(deserialized.packages[0].dependencies[0].requested_features.len(), 0);
         assert_eq!(deserialized.packages[1].name, "serde");
         assert_eq!(deserialized.packages[1].features[0], "derive");
+    }
+
+    #[test]
+    fn test_diff_empty_lockfiles() {
+        let old = Lockfile { sources: vec![], overrides: vec![], features: vec![], packages: vec![] };
+        let new = Lockfile { sources: vec![], overrides: vec![], features: vec![], packages: vec![] };
+        let diff = diff_lockfiles(&old, &new);
+        assert_eq!(diff.unchanged_count, 0);
+        assert!(diff.changes.is_empty());
+    }
+
+    #[test]
+    fn test_diff_unchanged_packages() {
+        let pkg = mock_pkg("serde", 1, 0, 0, vec![(0x01, vec![0; 32])], vec![], vec![]);
+        let old = Lockfile { sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![], packages: vec![pkg.clone()] };
+        let new = old.clone();
+        let diff = diff_lockfiles(&old, &new);
+        assert_eq!(diff.unchanged_count, 1);
+        assert!(diff.changes.is_empty());
+    }
+
+    #[test]
+    fn test_diff_added_removed_altered() {
+        let old = Lockfile {
+            sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![],
+            packages: vec![
+                mock_pkg("alpha", 1, 0, 0, vec![], vec![], vec![]),
+                mock_pkg("beta", 1, 0, 0, vec![(0x01, vec![0; 32])], vec![], vec![]),
+            ],
+        };
+        let new = Lockfile {
+            sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![],
+            packages: vec![
+                mock_pkg("beta", 2, 0, 0, vec![(0x01, vec![0; 32])], vec![], vec![]),
+                mock_pkg("gamma", 1, 0, 0, vec![], vec![], vec![]),
+            ],
+        };
+
+        let diff = diff_lockfiles(&old, &new);
+
+        assert!(matches!(&diff.changes[0], PackageChange::Removed(p) if p.name == "alpha"));
+        assert!(matches!(&diff.changes[1], PackageChange::Altered(o, n) if o.name == "beta" && o.major == 1 && n.major == 2));
+        assert!(matches!(&diff.changes[2], PackageChange::Added(p) if p.name == "gamma"));
+        assert_eq!(diff.unchanged_count, 0);
     }
 
     #[test]
