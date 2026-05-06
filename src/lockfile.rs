@@ -1,4 +1,7 @@
 use crate::error::Error;
+use crate::payload::{PayloadData, pack_payload, unpack_payload};
+use crate::base64url::{encode, decode};
+use std::collections::HashMap;
 use std::path::Path;
 use std::fs;
 
@@ -112,12 +115,104 @@ fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
     Err(Error::InvalidHeader { line_number: 0, reason: "Missing empty line separator after header".to_string() })
 }
 
-pub fn serialize(_lockfile: &mut Lockfile) -> Result<String, Error> {
-    todo!()
+pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
+    let mut out = format_header(lockfile)?;
+
+    lockfile.packages.sort_by(|a, b| a.name.cmp(&b.name));
+
+    let mut index_map = HashMap::new();
+    lockfile.packages.iter().enumerate().for_each(|(i, p)| {
+        index_map.insert(p.name.clone(), i as u64);
+    });
+
+    for pkg in &lockfile.packages {
+        if pkg.source_idx >= lockfile.sources.len() {
+            return Err(Error::MissingSource { line_number: 0, index: pkg.source_idx });
+        }
+
+        let mut deps = Vec::with_capacity(pkg.dependencies.len());
+        for dep in &pkg.dependencies {
+            let idx = index_map.get(&dep.name)
+                .ok_or_else(|| Error::MissingPackage { package: pkg.name.clone(), missing_dep: dep.name.clone() })?;
+
+            let type_id = match dep.dep_type {
+                DepType::Runtime => 0x00,
+                DepType::Dev => 0x01,
+                DepType::Peer => 0x02,
+                DepType::Optional => 0x03,
+            };
+            deps.push((*idx, type_id));
+        }
+
+        let payload_data = PayloadData {
+            source_idx: pkg.source_idx,
+            major: pkg.major,
+            minor: pkg.minor,
+            patch: pkg.patch,
+            hash: pkg.hash.clone(),
+            deps,
+        };
+
+        let binary = pack_payload(&payload_data);
+        let encoded = encode(&binary);
+
+        out.push_str(&format!("{}\t{}\n", pkg.name, encoded));
+    }
+
+    Ok(out)
 }
 
-pub fn deserialize(_content: &str) -> Result<Lockfile, Error> {
-    todo!()
+pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
+    let (mut lockfile, pkg_content) = parse_header(content)?;
+
+    let mut name_index = HashMap::new();
+    let mut raw_entries = Vec::new();
+
+    for (idx, line) in pkg_content.lines().enumerate() {
+        if line.trim().is_empty() { continue; }
+        let line_num = idx + content.lines().count() - pkg_content.lines().count();
+
+        let (name, encoded) = line.split_once('\t')
+            .ok_or(Error::MissingDelimiter { line_number: line_num })?;
+
+        let binary = decode(encoded.as_bytes())
+            .map_err(|_| Error::InvalidBase64 { line_number: line_num })?;
+
+        let payload = unpack_payload(&binary, line_num)?;
+
+        if payload.source_idx >= lockfile.sources.len() {
+            return Err(Error::MissingSource { line_number: line_num, index: payload.source_idx });
+        }
+
+        name_index.insert(idx as u64, name.to_string());
+        raw_entries.push((name.to_string(), payload));
+    }
+
+    for (name, payload) in raw_entries {
+        let dependencies = payload.deps.iter().map(|(line_idx, type_id)| {
+            let dep_name = name_index.get(line_idx).cloned().unwrap_or_else(|| format!("<missing_idx_{}>", line_idx));
+            let dep_type = match type_id {
+                0x00 => DepType::Runtime,
+                0x01 => DepType::Dev,
+                0x02 => DepType::Peer,
+                0x03 => DepType::Optional,
+                _ => DepType::Runtime,
+            };
+            Dependency { name: dep_name, dep_type }
+        }).collect();
+
+        lockfile.packages.push(Package {
+            name,
+            source_idx: payload.source_idx,
+            major: payload.major,
+            minor: payload.minor,
+            patch: payload.patch,
+            hash: payload.hash,
+            dependencies,
+        });
+    }
+
+    Ok(lockfile)
 }
 
 pub fn write_lockfile(path: &Path, lockfile: &mut Lockfile) -> Result<(), Error> {
@@ -165,5 +260,56 @@ mod tests {
     fn test_parse_invalid_header() {
         let content = "@source bad_url\n\nrest";
         assert!(matches!(parse_header(content), Err(Error::InvalidHeader { .. })));
+    }
+
+    #[test]
+    fn test_full_roundtrip() {
+        let mut lockfile = Lockfile {
+            sources: vec![Source::Registry("https://reg.com/".to_string())],
+            overrides: vec![],
+            packages: vec![
+                Package {
+                    name: "beta".to_string(),
+                    source_idx: 0,
+                    major: 1, minor: 0, patch: 0,
+                    hash: vec![0u8; 16],
+                    dependencies: vec![],
+                },
+                Package {
+                    name: "alpha".to_string(),
+                    source_idx: 0,
+                    major: 1, minor: 0, patch: 0,
+                    hash: vec![0u8; 16],
+                    dependencies: vec![Dependency { name: "beta".to_string(), dep_type: DepType::Dev }],
+                },
+            ],
+        };
+
+        let serialized = serialize(&mut lockfile).unwrap();
+        assert!(serialized.starts_with("@source"));
+
+        let deserialized = deserialize(&serialized).unwrap();
+        assert_eq!(deserialized.packages.len(), 2);
+        assert_eq!(deserialized.packages[0].name, "alpha");
+        assert_eq!(deserialized.packages[0].dependencies[0].name, "beta");
+        assert_eq!(deserialized.packages[0].dependencies[0].dep_type, DepType::Dev);
+    }
+
+    #[test]
+    fn test_missing_source_ref() {
+        let mut lockfile = Lockfile {
+            sources: vec![],
+            overrides: vec![],
+            packages: vec![
+                Package {
+                    name: "alpha".to_string(),
+                    source_idx: 0,
+                    major: 1, minor: 0, patch: 0,
+                    hash: vec![0u8; 16],
+                    dependencies: vec![],
+                },
+            ],
+        };
+        assert!(matches!(serialize(&mut lockfile), Err(Error::MissingSource { .. })));
     }
 }
