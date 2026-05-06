@@ -13,16 +13,30 @@ fn test_e2e_write_and_read_v5() {
             Package {
                 name: "alpha".to_string(),
                 source_idx: 0,
-                major: 1, minor: 0, patch: 0,
-                hashes: vec![IntegrityHash { algo: HashAlgorithm::Sha256, digest: vec![42u8; 32] }],
+                major: 1,
+                minor: 0,
+                patch: 0,
+                hashes: vec![IntegrityHash {
+                    algo: HashAlgorithm::Sha256,
+                    digest: vec![42u8; 32],
+                }],
                 features: vec![],
-                dependencies: vec![Dependency { name: "beta".to_string(), dep_type: DepType::Runtime, requested_features: vec![] }],
+                dependencies: vec![Dependency {
+                    name: "beta".to_string(),
+                    dep_type: DepType::Runtime,
+                    requested_features: vec![],
+                }],
             },
             Package {
                 name: "beta".to_string(),
                 source_idx: 0,
-                major: 2, minor: 0, patch: 0,
-                hashes: vec![IntegrityHash { algo: HashAlgorithm::Blake3, digest: vec![42u8; 32] }],
+                major: 2,
+                minor: 0,
+                patch: 0,
+                hashes: vec![IntegrityHash {
+                    algo: HashAlgorithm::Blake3,
+                    digest: vec![42u8; 32],
+                }],
                 features: vec![],
                 dependencies: vec![],
             },
@@ -33,7 +47,10 @@ fn test_e2e_write_and_read_v5() {
     let read_lockfile = read_lockfile(&temp_path).expect("Read failed");
 
     assert_eq!(read_lockfile.packages.len(), 2);
-    assert_eq!(read_lockfile.packages[0].hashes[0].algo, HashAlgorithm::Sha256);
+    assert_eq!(
+        read_lockfile.packages[0].hashes[0].algo,
+        HashAlgorithm::Sha256
+    );
     std::fs::remove_file(&temp_path).ok();
 }
 
@@ -44,15 +61,16 @@ fn test_e2e_workspace_roundtrip() {
         sources: vec![Source::Workspace],
         overrides: vec![],
         features: vec![],
-        packages: vec![
-            Package {
-                name: "core".to_string(),
-                source_idx: 0, major: 1, minor: 0, patch: 0,
-                hashes: vec![],
-                features: vec![],
-                dependencies: vec![],
-            },
-        ],
+        packages: vec![Package {
+            name: "core".to_string(),
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            dependencies: vec![],
+        }],
     };
     write_lockfile(&temp_path, &mut lockfile).unwrap();
     let res = read_lockfile(&temp_path).unwrap();
@@ -68,37 +86,77 @@ fn test_string_api_crc_corruption() {
         overrides: vec![],
         features: vec![],
         packages: vec![Package {
-            name: "z".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![], features: vec![], dependencies: vec![],
+            name: "z".to_string(),
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            dependencies: vec![],
         }],
     };
     let serialized = serialize(&mut lockfile).unwrap();
     let mut tampered = serialized.chars().collect::<Vec<_>>();
     if tampered.len() > 2 {
         let idx = tampered.len() - 2;
-        if tampered[idx] != 'A' { tampered[idx] = 'A'; } else { tampered[idx] = 'B'; }
+        if tampered[idx] != 'A' {
+            tampered[idx] = 'A';
+        } else {
+            tampered[idx] = 'B';
+        }
     }
     let tampered_str: String = tampered.into_iter().collect();
-    assert!(matches!(deserialize(&tampered_str), Err(Error::IntegrityCheckFailed { .. })));
+    assert!(matches!(
+        deserialize(&tampered_str),
+        Err(Error::IntegrityCheckFailed { .. })
+    ));
 }
 
 #[test]
 fn test_e2e_diff_after_adding_package() {
     let mut v1 = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![],
-        packages: vec![
-            Package { name: "core".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
-        ],
+        overrides: vec![],
+        features: vec![],
+        packages: vec![Package {
+            name: "core".to_string(),
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            dependencies: vec![],
+        }],
     };
     let serialized_v1 = serialize(&mut v1).unwrap();
 
-    let mut v2 = Lockfile {
+    let v2 = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![],
+        overrides: vec![],
+        features: vec![],
         packages: vec![
-            Package { name: "core".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
-            Package { name: "utils".to_string(), source_idx: 0, major: 2, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
+            Package {
+                name: "core".to_string(),
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
+                hashes: vec![],
+                features: vec![],
+                dependencies: vec![],
+            },
+            Package {
+                name: "utils".to_string(),
+                source_idx: 0,
+                major: 2,
+                minor: 0,
+                patch: 0,
+                hashes: vec![],
+                features: vec![],
+                dependencies: vec![],
+            },
         ],
     };
 
@@ -120,11 +178,43 @@ fn test_e2e_extract_and_serialize_is_valid() {
         overrides: vec![],
         features: vec![],
         packages: vec![
-            Package { name: "app".to_string(), source_idx: 1, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![
-                Dependency { name: "serde".to_string(), dep_type: DepType::Runtime, requested_features: vec![] }
-            ]},
-            Package { name: "serde".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![IntegrityHash { algo: HashAlgorithm::Sha256, digest: vec![0; 32] }], features: vec![], dependencies: vec![] },
-            Package { name: "unused".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
+            Package {
+                name: "app".to_string(),
+                source_idx: 1,
+                major: 1,
+                minor: 0,
+                patch: 0,
+                hashes: vec![],
+                features: vec![],
+                dependencies: vec![Dependency {
+                    name: "serde".to_string(),
+                    dep_type: DepType::Runtime,
+                    requested_features: vec![],
+                }],
+            },
+            Package {
+                name: "serde".to_string(),
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
+                hashes: vec![IntegrityHash {
+                    algo: HashAlgorithm::Sha256,
+                    digest: vec![0; 32],
+                }],
+                features: vec![],
+                dependencies: vec![],
+            },
+            Package {
+                name: "unused".to_string(),
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
+                hashes: vec![],
+                features: vec![],
+                dependencies: vec![],
+            },
         ],
     };
 
@@ -148,18 +238,27 @@ fn test_e2e_features_roundtrip() {
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
-        features: vec![("serde".to_string(), vec!["derive".to_string(), "rc".to_string()])],
+        features: vec![(
+            "serde".to_string(),
+            vec!["derive".to_string(), "rc".to_string()],
+        )],
         packages: vec![
             Package {
                 name: "serde".to_string(),
-                source_idx: 0, major: 1, minor: 0, patch: 0,
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
                 hashes: vec![],
                 features: vec!["derive".to_string(), "rc".to_string()],
                 dependencies: vec![],
             },
             Package {
                 name: "app".to_string(),
-                source_idx: 0, major: 1, minor: 0, patch: 0,
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
                 hashes: vec![],
                 features: vec!["derive".to_string()],
                 dependencies: vec![Dependency {
@@ -172,7 +271,10 @@ fn test_e2e_features_roundtrip() {
     };
     write_lockfile(&temp_path, &mut lockfile).unwrap();
     let res = read_lockfile(&temp_path).unwrap();
-    assert_eq!(res.packages[0].dependencies[0].requested_features, vec!["derive"]);
+    assert_eq!(
+        res.packages[0].dependencies[0].requested_features,
+        vec!["derive"]
+    );
     assert_eq!(res.packages[1].features, vec!["derive", "rc"]);
     std::fs::remove_file(&temp_path).ok();
 }
@@ -187,14 +289,20 @@ fn test_e2e_optional_target_roundtrip() {
         packages: vec![
             Package {
                 name: "esbuild".to_string(),
-                source_idx: 0, major: 0, minor: 17, patch: 0,
+                source_idx: 0,
+                major: 0,
+                minor: 17,
+                patch: 0,
                 hashes: vec![],
                 features: vec![],
                 dependencies: vec![],
             },
             Package {
                 name: "app".to_string(),
-                source_idx: 0, major: 1, minor: 0, patch: 0,
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
                 hashes: vec![],
                 features: vec![],
                 dependencies: vec![Dependency {
@@ -207,6 +315,9 @@ fn test_e2e_optional_target_roundtrip() {
     };
     write_lockfile(&temp_path, &mut lockfile).unwrap();
     let res = read_lockfile(&temp_path).unwrap();
-    assert!(matches!(&res.packages[0].dependencies[0].dep_type, DepType::OptionalTarget(TargetOS::Linux, TargetArch::X86_64)));
+    assert!(matches!(
+        &res.packages[0].dependencies[0].dep_type,
+        DepType::OptionalTarget(TargetOS::Linux, TargetArch::X86_64)
+    ));
     std::fs::remove_file(&temp_path).ok();
 }
