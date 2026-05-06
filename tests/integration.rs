@@ -317,3 +317,24 @@ fn test_e2e_v8_alias_and_cas_roundtrip() {
     assert_eq!(deserialized.packages[0].logical_name, Some("react-v18".to_string()));
     assert_eq!(deserialized.packages[0].major, 18);
 }
+
+#[test]
+fn test_e2e_ipfs_source_roundtrip() {
+    let temp_path = PathBuf::from("target/test_ipfs.hlock");
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Ipfs("ipfs://QmXyZ1abcDEF".to_string())],
+        overrides: vec![], features: vec![],
+        packages: vec![Package {
+            name: "some-pkg".to_string(),
+            logical_name: None,
+            source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![],
+            features: vec![], resolved_peers: vec![], dependencies: vec![],
+        }],
+    };
+    write_lockfile(&temp_path, &mut lockfile).unwrap();
+    let res = read_lockfile(&temp_path).unwrap();
+    assert_eq!(res.sources[0], Source::Ipfs("ipfs://QmXyZ1abcDEF".to_string()));
+    assert_eq!(res.packages[0].source_idx, 0);
+    std::fs::remove_file(&temp_path).ok();
+}

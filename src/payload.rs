@@ -296,11 +296,11 @@ mod tests {
         };
         let packed = pack_payload(&data);
 
-        // Header: 06 00 00 01 00 00 00 00 = 7 bytes
-        // DepCount is at index 7
-        assert_eq!(packed[7], 0x01);
-        assert_eq!(&packed[8..16], &12345678u64.to_le_bytes());
-        assert_eq!(packed[16], 0x00);
+        // Header: 06(logical_name_len=0) 00(src) 01(maj) 00(min) 00(pat) 00(hash_count) 00(feat_count) 00(peer_count) = 9 bytes
+        // DepCount is at index 9
+        assert_eq!(packed[9], 0x01);
+        assert_eq!(&packed[10..18], &12345678u64.to_le_bytes());
+        assert_eq!(packed[18], 0x00);
     }
 
     #[test]
