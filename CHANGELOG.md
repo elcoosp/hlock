@@ -5,61 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - 2024-05-24
+## [0.6.0] - 2024-05-24
+
 ### Added
-- `Source::Workspace` variant to define local monorepo packages.
-- `HashAlgorithm` enum (`Sha1`, `Sha256`, `Sha512`, `Blake3`) for typed cryptographic identifiers.
-- `IntegrityHash` struct combining `HashAlgorithm` and a dynamic digest `Vec<u8>`.
-- Support for multiple simultaneous integrity hashes per package (e.g., SHA-256 + BLAKE3).
-- Validation enforcing that `Source::Workspace` packages cannot possess integrity hashes (`Error::InvalidWorkspaceHash`).
-- Validation for unsupported hash algorithms in payloads (`Error::UnknownHashAlgorithm`).
+- **Monorepo Graph Manipulation APIs**: Introduced pure-Rust graph traversal logic in `src/graph.rs`.
+- `diff_lockfiles`: Calculates exact semantic changes (Added, Removed, Altered) between two lockfiles using a fast two-pointer array merge.
+- `extract_subgraph`: Extracts a fully valid, standalone lockfile containing only the transitive closure of specified root packages (Sparse Subgraph Extraction).
+- `PackageChange` and `LockfileDiff` public structs.
+- `RootContentIdMissing` error variant.
+- Source index remapping and metadata preservation during subgraph extraction.
+- `PartialEq` and `Eq` derives for `Package`, `Dependency`, and `IntegrityHash`.
+
+## [0.5.0] - 2024-05-23
+
+### Added
+- **Merge-Safe Content-Addressable Graph**: Dependencies are now referenced by FNV-1a 64-bit hashes of `name@version` instead of array indices.
+- **First-Class Feature Flags**: Local per-package feature string tables in the binary payload.
+- **Platform-Targeted Dependencies**: Native support for `OptionalTarget(OS, Arch)` dependency profiles.
+- **Header Directives**: `@feature <name> [flags]` directive.
+- **Binary Payload v0x04**: New schema supporting Content IDs, local features, and target constraints.
+- Two-pass deserialization to correctly resolve forward references in sorted package arrays.
 
 ### Changed
-- **BREAKING:** `Package.hash` field replaced by `Package.hashes: Vec<IntegrityHash>`.
-- **BREAKING:** Payload version byte bumped to `0x03`. HLOCK v0.4.0 will intentionally reject v0.3.0 and older payloads.
-- **BREAKING:** Binary payload hash format changed from a single dynamic array to an array of `(AlgoId, Len, Digest)` structs.
-
-## [0.3.0] - 2024-05-24
-### Added
-- File header block for global metadata (parsed before package graph).
-- `@source <idx> <uri>` directive to define package origins (Registry, Local, Git).
-- `@override <name> <ver> -> <ver>` directive for dependency version substitutions.
-- `Source` enum (`Registry`, `Local`, `Git`) for typed package origins.
-- `DepType` enum (`Runtime`, `Dev`, `Peer`, `Optional`) for dependency profiles.
-- `Dependency` struct combining target name and `DepType`.
-- `Override` struct for version substitution rules.
-- Unified `Lockfile` struct to encapsulate sources, overrides, and packages.
-- Binary payload now includes `source_idx` mapping to the header.
-- Binary payload dependencies now encode `DepType` as a trailing byte per dependency.
-
-### Changed
-- **BREAKING:** Public API completely refactored around the `Lockfile` struct. `serialize` and `deserialize` now consume/return `Lockfile` instead of `Vec<Package>`.
-- **BREAKING:** `Package` struct now requires a `source_idx` field.
-- **BREAKING:** `Package.dependencies` changed from `Vec<String>` to `Vec<Dependency>`.
-- **BREAKING:** Payload version byte bumped to `0x02`. HLOCK v0.3.0 will intentionally reject v0.2.0 and v0.1.0 payloads.
-
-## [0.2.0] - 2024-05-24
-### Added
-- HLOCK v0.2.0 binary payload spec.
-- 1-byte version header to payload for future schema evolution.
-- 1-byte dynamic hash length prefix (supports any hash size, e.g., SHA-256, BLAKE3).
-- 4-byte CRC32 IEEE checksum trailer for payload integrity verification.
-- `crc32` module for pure-Rust checksum calculation.
-- `error` module with rich, context-aware error variants using `thiserror`.
-- Decoupled string-based API: `serialize()` and `deserialize()`.
-- File I/O is now implemented as thin wrappers (`write_lockfile`, `read_lockfile`).
-- `thiserror` dependency for ergonomic error handling.
-
-### Changed
-- **BREAKING:** `Package.hash` field changed from fixed `[u8; 16]` to dynamic `Vec<u8>`.
-- **BREAKING:** HLOCK v0.2.0 parsers will intentionally reject v0.1.0 payloads (due to missing version header).
-
-## [0.1.0] - 2024-05-24
-### Added
-- Initial implementation of the HLOCK hybrid lockfile format.
-- Zero-dependency Rust crate (Edition 2024).
-- `varint` module for Unsigned LEB128 encoding/decoding.
-- `base64url` module for RFC 4646 no-padding encoding/decoding.
-- `payload` module for packing/unpacking binary package metadata.
-- `lockfile` module providing `Package` struct, `write_lockfile`, and `read_lockfile`.
-- End-to-end integration tests validating the write/read cycle.
+- **BREAKING**: HLOCK v0.5.0 parsers intentionally reject v0.4.0 and older payloads.
+- Refactored module exports.

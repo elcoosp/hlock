@@ -1,120 +1,109 @@
 # HLOCK
 
-A blazing fast, zero-dependency (excluding `thiserror` for DX) Rust crate for serializing and deserializing the **HLOCK** (Hybrid Lockfile) format.
+A blazing fast, merge-safe, binary-packed lockfile format for package managers.
 
-## The Problem
-Traditional lockfiles (JSON, TOML, YAML) are deeply nested trees. This creates massive syntactic bloat (brackets, commas, indentation) and ruins `git diff` readability—a change deep in a dependency tree shifts all subsequent lines. Pure binary lockfiles solve the bloat but destroy `git diff` entirely and break supply chain security tooling.
+## Overview
 
-## The Solution: HLOCK
-HLOCK is a line-oriented, hybrid text/binary format.
-- **Human & Git Friendly:** One package equals exactly one line. Adding or updating a package changes exactly one line in `git diff`.
-- **Machine Optimized:** Version numbers, dependency profiles, and source indices are packed into dense binary structures using Unsigned LEB128 (Varints) and Base64URL encoded directly onto the line.
-- **Rich Metadata:** Supports multiple registries, local paths, git sources, workspace monorepos, and dev/prod dependency profiles via a clean file header.
-- **Cryptographic Flexibility:** Supports attaching multiple integrity hashes (e.g., SHA-256 and BLAKE3) to a single package to satisfy modern supply chain standards.
+HLOCK is designed to solve the fundamental issues with JSON/YAML lockfiles in large monorepos:
+1. **Merge Conflicts:** Replaced by deterministic Content-Addressable IDs (FNV-1a 64-bit).
+2. **Bloat:** Replaced by highly optimized binary payloads encoded in Base64URL.
+3. **Monorepo CI:** Native APIs for semantic diffing and sparse subgraph extraction.
 
-### Format Example
+## Binary Payload
 
-    @source 0 https://registry.npmjs.org/
-    @source 1 workspace
-    @override react 18.2.0 -> 18.2.1
+Package metadata is stored in a compact binary format (Base64URL encoded in the text file) with a CRC32 integrity checksum.
 
-    local-core	AgIAAAAAAAAAAAAAAAAAAAAAAAAAAA
-    axios	AQIDAAAAAAAAAAAAAAAAAAAAAAAAAAA
-    react	EgIAAAAAAAAAAAAAAAAAAAAAAAAAAQ
+<<<text
+package_name\tBQAAAE...base64url...\n
+<<<
 
-The file is split into a **Header** (sources, workspaces, and overrides) and a **Package Graph** (one tab-delimited package per line). The right side of the tab is a dense Base64URL payload containing a version header, a source index, the Semver, an array of typed integrity hashes, dependency indices with profile types, and a CRC32 checksum.
+## Features (v0.5.0)
 
-## Usage
+### Content-Addressable IDs
+Dependencies are referenced by a 64-bit hash of `name@version`, not array indices. This means two developers adding completely different dependency trees on separate branches will experience zero textual conflicts during `git merge`.
 
-Add `hlock` to your `Cargo.toml`:
+### Platform-Targeted Dependencies
+Native support for optional dependencies that only apply to specific OS/Arch combinations (e.g., fetch `esbuild` binaries only for `x86_64-linux`).
 
-    [dependencies]
-    hlock = "0.4.0"
+### Local Feature Tables
+Packages explicitly define their feature flags locally, and dependencies request features by index, keeping payloads incredibly small.
 
-### String API (Core)
-The core logic is decoupled from the filesystem. You serialize a unified `Lockfile` struct to a string.
+## Monorepo Graph APIs (v0.6.0)
 
-```rust
-use hlock::{Lockfile, Package, Source, DepType, Dependency, HashAlgorithm, IntegrityHash, serialize, deserialize};
+Because packages are sorted alphabetically and use Content IDs, HLOCK exposes lightning-fast `O(N)` graph manipulation algorithms.
 
-let mut lockfile = Lockfile {
-    sources: vec![
-        Source::Registry("https://registry.npmjs.org/".to_string()),
-        Source::Workspace,
-    ],
-    overrides: vec![],
-    packages: vec![
-        Package {
-            name: "local-core".to_string(),
-            source_idx: 1, // Points to Workspace
-            major: 1, minor: 0, patch: 0,
-            hashes: vec![], // Workspace packages must NOT have hashes
-            dependencies: vec![],
-        },
-        Package {
-            name: "lodash".to_string(),
-            source_idx: 0, // Points to Registry
-            major: 4, minor: 17, patch: 21,
-            hashes: vec![
-                IntegrityHash { algo: HashAlgorithm::Sha256, digest: vec![0xAA; 32] },
-                IntegrityHash { algo: HashAlgorithm::Blake3, digest: vec![0xBB; 32] },
-            ],
-            dependencies: vec![],
-        },
-        Package {
-            name: "react".to_string(),
-            source_idx: 0,
-            major: 18, minor: 2, patch: 0,
-            hashes: vec![IntegrityHash { algo: HashAlgorithm::Sha256, digest: vec![0xCC; 32] }],
-            dependencies: vec![
-                Dependency { name: "lodash".to_string(), dep_type: DepType::Runtime }
-            ],
-        },
-    ],
-};
+### Semantic Diffing
+Find out exactly what changed between two lockfiles without doing string comparisons.
 
-let lockfile_string = serialize(&mut lockfile).unwrap();
-let parsed_lockfile = deserialize(&lockfile_string).unwrap();
-```
+<<<rust
+use hlock::*;
 
-### File I/O (Wrappers)
-Thin wrappers are provided for standard filesystem operations.
+let diff = diff_lockfiles(&old_lockfile, &new_lockfile);
+for change in &diff.changes {
+    match change {
+        PackageChange::Added(p) => println!("Fetch: {}", p.name),
+        PackageChange::Removed(p) => println!("Delete: {}", p.name),
+        PackageChange::Altered(o, n) => println!("Update {} to {}.{}.{}", o.name, n.major, n.minor, n.patch),
+    }
+}
+<<<
 
-```rust
-use hlock::{write_lockfile, read_lockfile};
+### Sparse Subgraph Extraction
+Extract a fully valid, standalone lockfile containing *only* the transitive dependencies of a specific workspace package. Perfect for zero-dependency CI.
+
+<<<rust
+use hlock::*;
+
+let root_cid = fnv::calculate("apps/web@1.0.0");
+let sparse_lockfile = extract_subgraph(&full_lockfile, &[root_cid])?;
+
+// sparse_lockfile now only contains what 'apps/web' needs.
+// Write it to disk and pass it to your package fetcher.
+<<<
+
+## File Structure
+
+<<<text
+@source 0 https://registry.npmjs.org/
+@source 1 workspace
+@feature serde derive,rc
+
+<empty line>
+
+serde	BQAAAE...base64url...
+app    BQAAAE...base64url...
+<<<
+
+## Rust Usage
+
+Add to your `Cargo.toml`:
+
+<<<toml
+[dependencies]
+hlock = "0.5"
+<<<
+
+### Reading & Writing
+
+<<<rust
+use hlock::*;
 use std::path::Path;
 
-write_lockfile(Path::new("hlock.lock"), &mut lockfile).unwrap();
-let parsed_lockfile = read_lockfile(Path::new("hlock.lock")).unwrap();
-```
+let mut lockfile = Lockfile {
+    sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
+    overrides: vec![],
+    features: vec![],
+    packages: vec![/* ... */],
+};
 
-### Error Handling
-HLOCK uses rich, context-aware errors to pinpoint exactly what went wrong in a lockfile.
+write_lockfile(Path::new("hlock.lock"), &mut lockfile)?;
+let read_lockfile = read_lockfile(Path::new("hlock.lock"))?;
+<<<
 
-```rust
-use hlock::{deserialize, Error};
+## Performance
 
-match deserialize("bad_base64\t!!!") {
-    Err(Error::InvalidBase64 { line_number }) => {
-        println!("Syntax error on line {}", line_number);
-    }
-    Err(Error::InvalidWorkspaceHash { line_number }) => {
-        println!("Line {}: Workspace packages cannot have integrity hashes", line_number);
-    }
-    Err(Error::UnknownHashAlgorithm { line_number, algo_id }) => {
-        println!("Line {}: Invalid hash algorithm {}", line_number, algo_id);
-    }
-    _ => {}
-}
-```
-
-## Under the Hood (v0.4.0 Spec)
-1. **File Headers:** The top of the file defines `@source` indices (deduplicating registry URLs, defining workspaces) and `@override` substitution rules.
-2. **Workspace Support:** Introduces `@source <idx> workspace`. Packages pointing here bypass remote fetching and strictly enforce that they possess zero integrity hashes.
-3. **Multi-Algorithm Hashes:** Instead of a single hash byte array, the payload encodes an array of structs: `(AlgoId, Len, Digest)`. This allows a package to be verified against multiple cryptographic standards simultaneously.
-4. **Dependency Profiles:** Each dependency in the binary payload is a tuple of `(LineIndex, DepType)`, allowing parsers to distinguish between `Runtime`, `Dev`, `Peer`, and `Optional` dependencies.
-5. **Source Mapping:** Each package payload includes a `source_idx` pointing back to the header, allowing monorepos to fetch packages from multiple registries or local paths simultaneously.
-6. **CRC32 Checksums:** A 4-byte CRC32 IEEE checksum is appended to the end of every payload to catch corruption.
+HLOCK is designed for zero-allocation parsing where possible. The binary payload structure avoids the massive string allocation overhead inherent to parsing large JSON lockfiles (e.g., a 50MB `package-lock.json`).
 
 ## License
+
 MIT
