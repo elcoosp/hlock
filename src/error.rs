@@ -31,4 +31,10 @@ pub enum Error {
 
     #[error("Line {line_number}: Unsupported dependency type {type_id}")]
     UnknownDepType { line_number: usize, type_id: u8 },
+
+    #[error("Line {line_number}: Workspace package cannot have integrity hashes")]
+    InvalidWorkspaceHash { line_number: usize },
+
+    #[error("Line {line_number}: Unsupported hash algorithm {algo_id}")]
+    UnknownHashAlgorithm { line_number: usize, algo_id: u8 },
 }
