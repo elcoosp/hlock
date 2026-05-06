@@ -401,6 +401,45 @@ mod tests {
         }
     }
 
+    fn mock_pkg_with_attestation(
+        name: &str, maj: u64, min: u64, pat: u64,
+        hashes: Vec<(u8, Vec<u8>, Attestation)>,
+        features: Vec<&str>, deps: Vec<(&str, DepType, Vec<&str>)>
+    ) -> Package {
+        Package {
+            name: name.to_string(),
+            source_idx: 0,
+            major: maj, minor: min, patch: pat,
+            hashes: hashes.iter().map(|(id, d, a)| IntegrityHash {
+                algo: match *id { 0 => HashAlgorithm::Sha1, 1 => HashAlgorithm::Sha256, 2 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 },
+                digest: d.clone(),
+                attestation: a.clone(),
+            }).collect(),
+            features: features.iter().map(|s| s.to_string()).collect(),
+            dependencies: deps.iter().map(|(n, ty, f)| Dependency { name: n.to_string(), dep_type: ty.clone(), requested_features: f.iter().map(|s| s.to_string()).collect() }).collect(),
+        }
+    }
+
+    #[test]
+    fn test_roundtrip_v7_with_slsa() {
+        let mut lockfile = Lockfile {
+            sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![],
+            packages: vec![
+                mock_pkg_with_attestation("secure-pkg", 1, 0, 0, vec![
+                    (0x01, vec![0; 32], Attestation::InlineSlsa(SlsaPredicate { builder: "gha".to_string(), source: "git".to_string() }))
+                ], vec![], vec![]),
+            ],
+        };
+        let serialized = serialize(&mut lockfile).unwrap();
+        let deserialized = deserialize(&serialized).unwrap();
+
+        assert_eq!(deserialized.packages[0].name, "secure-pkg");
+        match &deserialized.packages[0].hashes[0].attestation {
+            Attestation::InlineSlsa(p) => assert_eq!(p.builder, "gha"),
+            _ => panic!("Expected InlineSlsa"),
+        }
+    }
+
     #[test]
     fn test_full_roundtrip_v5() {
         let mut lockfile = Lockfile {
