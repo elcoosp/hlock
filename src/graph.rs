@@ -94,7 +94,7 @@ pub fn extract_subgraph(lockfile: &Lockfile, root_content_ids: &[u64]) -> Result
     let mut extracted_packages: Vec<Package> = output_indices.into_iter().map(|i| lockfile.packages[i].clone()).collect();
     extracted_packages.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let mut used_source_indices: HashSet<usize> = extracted_packages.iter().map(|p| p.source_idx).collect();
+    let used_source_indices: HashSet<usize> = extracted_packages.iter().map(|p| p.source_idx).collect();
     let mut source_mapping: HashMap<usize, usize> = HashMap::new();
     let mut new_sources = Vec::new();
 

@@ -1,4 +1,5 @@
 use hlock::*;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 #[test]
@@ -79,6 +80,66 @@ fn test_string_api_crc_corruption() {
     }
     let tampered_str: String = tampered.into_iter().collect();
     assert!(matches!(deserialize(&tampered_str), Err(Error::IntegrityCheckFailed { .. })));
+}
+
+#[test]
+fn test_e2e_diff_after_adding_package() {
+    let mut v1 = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![],
+        packages: vec![
+            Package { name: "core".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
+        ],
+    };
+    let serialized_v1 = serialize(&mut v1).unwrap();
+
+    let mut v2 = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![],
+        packages: vec![
+            Package { name: "core".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
+            Package { name: "utils".to_string(), source_idx: 0, major: 2, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
+        ],
+    };
+
+    let parsed_v1 = deserialize(&serialized_v1).unwrap();
+    let diff = diff_lockfiles(&parsed_v1, &v2);
+
+    assert_eq!(diff.unchanged_count, 1);
+    assert_eq!(diff.changes.len(), 1);
+    assert!(matches!(&diff.changes[0], PackageChange::Added(p) if p.name == "utils"));
+}
+
+#[test]
+fn test_e2e_extract_and_serialize_is_valid() {
+    let mut lockfile = Lockfile {
+        sources: vec![
+            Source::Registry("https://r.com/".to_string()),
+            Source::Workspace,
+        ],
+        overrides: vec![],
+        features: vec![],
+        packages: vec![
+            Package { name: "app".to_string(), source_idx: 1, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![
+                Dependency { name: "serde".to_string(), dep_type: DepType::Runtime, requested_features: vec![] }
+            ]},
+            Package { name: "serde".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![IntegrityHash { algo: HashAlgorithm::Sha256, digest: vec![0; 32] }], features: vec![], dependencies: vec![] },
+            Package { name: "unused".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], dependencies: vec![] },
+        ],
+    };
+
+    let app_cid = fnv::calculate("app@1.0.0");
+    let mut subgraph = extract_subgraph(&lockfile, &[app_cid]).unwrap();
+
+    let serialized_sub = serialize(&mut subgraph).unwrap();
+    let reparsed = deserialize(&serialized_sub).unwrap();
+
+    assert_eq!(reparsed.sources.len(), 2);
+    assert_eq!(reparsed.packages.len(), 2);
+    let names: HashSet<&str> = reparsed.packages.iter().map(|p| p.name.as_str()).collect();
+    assert!(names.contains("app"));
+    assert!(names.contains("serde"));
+    assert!(!names.contains("unused"));
 }
 
 #[test]
