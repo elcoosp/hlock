@@ -22,4 +22,13 @@ pub enum Error {
 
     #[error("Package '{package}' depends on '{missing_dep}', which was not found in the lockfile")]
     MissingPackage { package: String, missing_dep: String },
+
+    #[error("Line {line_number}: Package references undefined source index {index}")]
+    MissingSource { line_number: usize, index: usize },
+
+    #[error("Invalid header syntax at line {line_number}: {reason}")]
+    InvalidHeader { line_number: usize, reason: String },
+
+    #[error("Line {line_number}: Unsupported dependency type {type_id}")]
+    UnknownDepType { line_number: usize, type_id: u8 },
 }
