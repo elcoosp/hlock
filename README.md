@@ -8,13 +8,14 @@ HLOCK is designed to solve the fundamental issues with JSON/YAML lockfiles in la
 1. **Merge Conflicts:** Replaced by deterministic Content-Addressable IDs (FNV-1a 64-bit).
 2. **Bloat:** Replaced by highly optimized binary payloads encoded in Base64URL.
 3. **Monorepo CI:** Native APIs for semantic diffing and sparse subgraph extraction.
+4. **Supply Chain Security:** First-class cryptographic provenance (SLSA/Sigstore).
 
 ## Binary Payload
 
 Package metadata is stored in a compact binary format (Base64URL encoded in the text file) with a CRC32 integrity checksum.
 
 ```text
-package_name  BQAAAE...base64url...
+package_name\tBQAAAE...base64url...\n
 ```
 
 ## Features (v0.5.0)
@@ -27,6 +28,34 @@ Native support for optional dependencies that only apply to specific OS/Arch com
 
 ### Local Feature Tables
 Packages explicitly define their feature flags locally, and dependencies request features by index, keeping payloads incredibly small.
+
+## Supply Chain Provenance (v0.7.0)
+
+HLOCK natively embeds cryptographic attestations inside the binary payload without the massive bloat associated with JSON-in-JSON SBOMs.
+
+### Inline SLSA Predicates
+Store exactly who built the package and where the source code came from, directly inside the lockfile.
+
+```rust
+use hlock::*;
+
+let secure_pkg = Package {
+    name: "crypto-lib".to_string(),
+    // ...
+    hashes: vec![IntegrityHash {
+        algo: HashAlgorithm::Sha256,
+        digest: vec![42u8; 32],
+        attestation: Attestation::InlineSlsa(SlsaPredicate {
+            builder: "github.com/my-org/.github/workflows/build.yml@refs/heads/main".to_string(),
+            source: "git+https://github.com/my-org/pkg@v1.2.3".to_string(),
+        }),
+    }],
+    // ...
+};
+```
+
+### External Sigstore Bundles
+For large attestations, store a 32-byte SHA-256 pointer to an external Sigstore bundle file alongside the lockfile.
 
 ## Monorepo Graph APIs (v0.6.0)
 
@@ -70,8 +99,8 @@ let sparse_lockfile = extract_subgraph(&full_lockfile, &[root_cid])?;
 
 <empty line>
 
-serde	BQAAAE...base64url...
-app    BQAAAE...base64url...
+serde\tBQAAAE...base64url...
+app    \tBQAAAE...base64url...
 ```
 
 ## Rust Usage
@@ -80,7 +109,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-hlock = "0.6"
+hlock = "0.7"
 ```
 
 ### Reading & Writing

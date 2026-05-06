@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2024-05-24
+
+### Added
+- **First-Class Supply Chain Provenance**: Native binary-optimized support for SLSA v1.0 and Sigstore cryptographic attestations.
+- `Attestation`, `SlsaPredicate`, and `HashPayload` public structs.
+- `UnknownAttestationType` error variant.
+- **Inline SLSA**: Embed builder IDs and source URIs directly in the lockfile payload.
+- **External Bundles**: Reference detached Sigstore bundles via a 32-byte SHA-256 pointer.
+- **Backward Compatibility**: Parsers now gracefully handle v0.4 payloads, implicitly mapping them to `Attestation::None`.
+
+### Changed
+- **BREAKING (Payload)**: Binary payload version bumped from `0x04` to `0x05`.
+- `IntegrityHash` struct now requires an `attestation` field.
+- Internal `PayloadData.hashes` type updated to `Vec<HashPayload>` to accommodate attestation metadata.
+
 ## [0.6.0] - 2024-05-24
 
 ### Added
