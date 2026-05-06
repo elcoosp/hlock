@@ -71,9 +71,9 @@ fn format_header(lockfile: &Lockfile) -> Result<String, Error> {
 fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
     let mut sources = Vec::new();
     let mut overrides = Vec::new();
-    let mut lines = content.lines().enumerate();
+    let lines = content.lines().enumerate();
 
-    while let Some((line_num, line)) = lines.next() {
+    for (line_num, line) in lines {
         if line.is_empty() {
             let header_end = content.find("\n\n").map(|i| i + 2).unwrap_or(content.len());
             let remaining = &content[header_end..];
