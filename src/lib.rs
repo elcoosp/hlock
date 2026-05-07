@@ -1,5 +1,4 @@
 pub mod base64url;
-pub mod crc32;
 pub mod error;
 pub mod fnv;
 pub mod graph;

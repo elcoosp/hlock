@@ -67,7 +67,7 @@ pub struct PayloadData {
 pub fn pack_payload(data: &PayloadData) -> Vec<u8> {
     let mut buf = Vec::with_capacity(128);
 
-    buf.push(0x07);
+    buf.push(0x08);
 
     match &data.logical_name {
         Some(name) => {
@@ -194,8 +194,8 @@ pub fn pack_payload(data: &PayloadData) -> Vec<u8> {
         }
     }
 
-    let crc = crate::crc32::calculate(&buf);
-    buf.extend_from_slice(&crc.to_le_bytes());
+    let hash = blake3::hash(&buf);
+    buf.extend_from_slice(hash.as_bytes());
     buf
 }
 
@@ -204,7 +204,7 @@ pub fn unpack_payload(bytes: &[u8], line_number: usize) -> Result<PayloadData, E
     let mut cursor = 0;
 
     let version = bytes[cursor]; cursor += 1;
-    if version != 0x07 { return Err(Error::UnknownPayloadVersion { line_number, version }); }
+    if version != 0x08 { return Err(Error::UnknownPayloadVersion { line_number, version }); }
 
     let logical_name_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
     let logical_name = if logical_name_len > 0 {
@@ -395,26 +395,210 @@ pub fn unpack_payload(bytes: &[u8], line_number: usize) -> Result<PayloadData, E
         patch_hash = Some((ph_algo, ph_digest));
     }
 
-    if cursor + 4 != bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-    let expected_crc = u32::from_le_bytes(bytes[cursor..cursor+4].try_into().unwrap());
-    if expected_crc != crate::crc32::calculate(&bytes[..cursor]) { return Err(Error::IntegrityCheckFailed { line_number }); }
+    if cursor + 32 != bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+    let expected_hash = blake3::Hash::from_bytes(bytes[cursor..cursor+32].try_into().unwrap());
+    if expected_hash != blake3::hash(&bytes[..cursor]) { return Err(Error::PayloadDigestMismatch { line_number }); }
 
     Ok(PayloadData { logical_name, source_idx, major, minor, patch, hashes, features, resolved_peers, deps, peer_requirements, platform_tags, exports, artifacts, hook_hashes, patch_hash })
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn empty_data() -> PayloadData {
+        PayloadData {
+            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
+            peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![], artifacts: vec![], hook_hashes: vec![], patch_hash: None,
+        }
+    }
+
     #[test]
-    fn test_pack_v10_script_hashes() {
+    fn test_v12_version_byte() {
+        let packed = pack_payload(&empty_data());
+        assert_eq!(packed[0], 0x08);
+    }
+
+    #[test]
+    fn test_v12_blake3_trailer() {
+        let packed = pack_payload(&empty_data());
+        assert_eq!(packed.len(), 48);
+        let trailer = &packed[packed.len() - 32..];
+        let expected = blake3::hash(&packed[..packed.len() - 32]);
+        assert_eq!(trailer, expected.as_bytes());
+    }
+
+    #[test]
+    fn test_v12_blake3_roundtrip() {
+        let data = PayloadData {
+            logical_name: Some("alias".to_string()), source_idx: 2, major: 3, minor: 1, patch: 4,
+            hashes: vec![HashPayload { algo_id: 0x01, digest: vec![0xAA; 32], attestation: Attestation::None }],
+            features: vec!["f1".to_string()],
+            resolved_peers: vec![],
+            deps: vec![DepPayload { content_id: 42, dep_type: 0x00, target_os: None, target_arch: None, req_feat_indices: vec![] }],
+            peer_requirements: vec![],
+            platform_tags: vec![PlatformTagPayload { os_id: 0x01, arch_id: 0x01 }],
+            exports: vec![ExportPayload { identifier: "./core".to_string(), hash_algo: 0x01, digest: vec![0xBB; 32] }],
+            artifacts: vec![ArtifactPayload { os_id: 0x01, arch_id: 0x01, hash_algo: 0x03, digest: vec![0xCC; 32] }],
+            hook_hashes: vec![],
+            patch_hash: None,
+        };
+        let packed = pack_payload(&data);
+        let unpacked = unpack_payload(&packed, 0).unwrap();
+        assert_eq!(unpacked.logical_name, Some("alias".to_string()));
+        assert_eq!(unpacked.source_idx, 2);
+        assert_eq!(unpacked.major, 3);
+        assert_eq!(unpacked.hashes.len(), 1);
+        assert_eq!(unpacked.features[0], "f1");
+        assert_eq!(unpacked.deps[0].content_id, 42);
+        assert_eq!(unpacked.platform_tags[0].os_id, 0x01);
+        assert_eq!(unpacked.exports[0].identifier, "./core");
+        assert_eq!(unpacked.artifacts[0].digest, vec![0xCC; 32]);
+    }
+
+    #[test]
+    fn test_unpack_rejects_old_v07_payload() {
+        let mut bad_payload = pack_payload(&empty_data());
+        bad_payload[0] = 0x07;
+        assert!(matches!(unpack_payload(&bad_payload, 1), Err(Error::UnknownPayloadVersion { .. })));
+    }
+
+    #[test]
+    fn test_pack_base_structure() {
+        let data = PayloadData {
+            logical_name: None, source_idx: 1, major: 1, minor: 0, patch: 0,
+            hashes: vec![HashPayload { algo_id: 0x01, digest: vec![0xAA; 32], attestation: Attestation::None }],
+            features: vec![], resolved_peers: vec![], deps: vec![],
+            peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![], artifacts: vec![], hook_hashes: vec![], patch_hash: None,
+        };
+        let packed = pack_payload(&data);
+        assert_eq!(packed[0], 0x08);
+        let unpacked = unpack_payload(&packed, 0).unwrap();
+        assert_eq!(unpacked.source_idx, 1);
+        assert_eq!(unpacked.hashes.len(), 1);
+    }
+
+    #[test]
+    fn test_pack_dep_content_id() {
+        let data = PayloadData {
+            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![], features: vec![], resolved_peers: vec![],
+            deps: vec![DepPayload { content_id: 12345678, dep_type: 0x00, target_os: None, target_arch: None, req_feat_indices: vec![] }],
+            peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![], artifacts: vec![], hook_hashes: vec![], patch_hash: None,
+        };
+        let packed = pack_payload(&data);
+        let unpacked = unpack_payload(&packed, 0).unwrap();
+        assert_eq!(unpacked.deps[0].content_id, 12345678);
+        assert_eq!(unpacked.deps[0].dep_type, 0x00);
+    }
+
+    #[test]
+    fn test_unpack_roundtrip() {
+        let data = PayloadData {
+            logical_name: None, source_idx: 0, major: 2, minor: 0, patch: 0,
+            hashes: vec![HashPayload { algo_id: 0x01, digest: vec![0; 32], attestation: Attestation::None }],
+            features: vec!["sync".to_string()],
+            resolved_peers: vec![],
+            deps: vec![DepPayload { content_id: 99, dep_type: 0x01, target_os: None, target_arch: None, req_feat_indices: vec![0] }],
+            peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![], artifacts: vec![], hook_hashes: vec![], patch_hash: None,
+        };
+        let packed = pack_payload(&data);
+        let unpacked = unpack_payload(&packed, 0).unwrap();
+        assert_eq!(unpacked.features[0], "sync");
+        assert_eq!(unpacked.deps[0].content_id, 99);
+        assert!(matches!(unpacked.hashes[0].attestation, Attestation::None));
+    }
+
+    #[test]
+    fn test_pack_hash_with_inline_slsa() {
+        let data = PayloadData {
+            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![HashPayload {
+                algo_id: 0x01, digest: vec![0xAA; 32],
+                attestation: Attestation::InlineSlsa(SlsaPredicate { builder: "github.com/actions".to_string(), source: "git+https://github.com/pkg".to_string() }),
+            }],
+            features: vec![], resolved_peers: vec![], deps: vec![],
+            peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![], artifacts: vec![], hook_hashes: vec![], patch_hash: None,
+        };
+        let packed = pack_payload(&data);
+        let unpacked = unpack_payload(&packed, 0).unwrap();
+        assert!(matches!(&unpacked.hashes[0].attestation, Attestation::InlineSlsa(p) if p.builder == "github.com/actions"));
+    }
+
+    #[test]
+    fn test_pack_logical_name_and_peers() {
+        let data = PayloadData {
+            logical_name: Some("react-v18".to_string()), source_idx: 0, major: 18, minor: 0, patch: 0,
+            hashes: vec![], features: vec![], resolved_peers: vec![PeerResolution {
+                peer_name: "react".to_string(), satisfied_by_content_id: 99, is_hoisted_to_root: true,
+            }], deps: vec![],
+            peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![], artifacts: vec![], hook_hashes: vec![], patch_hash: None,
+        };
+        let packed = pack_payload(&data);
+        let unpacked = unpack_payload(&packed, 0).unwrap();
+        assert_eq!(unpacked.logical_name, Some("react-v18".to_string()));
+        assert_eq!(unpacked.resolved_peers[0].peer_name, "react");
+        assert!(unpacked.resolved_peers[0].is_hoisted_to_root);
+    }
+
+    #[test]
+    fn test_pack_peer_requirements() {
         let data = PayloadData {
             logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
             hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
-            peer_requirements: vec![],
+            peer_requirements: vec![PeerReqPayload {
+                peer_name: "react".to_string(),
+                version_range: "^17.0.0".to_string(),
+                is_optional: false,
+            }],
             platform_tags: vec![],
-            exports: vec![],
-            artifacts: vec![],
+            exports: vec![], artifacts: vec![], hook_hashes: vec![],
+            patch_hash: None,
+        };
+        let packed = pack_payload(&data);
+        let unpacked = unpack_payload(&packed, 0).unwrap();
+        assert_eq!(unpacked.peer_requirements.len(), 1);
+        assert_eq!(unpacked.peer_requirements[0].peer_name, "react");
+        assert_eq!(unpacked.hook_hashes.len(), 0);
+        assert!(unpacked.patch_hash.is_none());
+    }
+
+    #[test]
+    fn test_roundtrip_peer_reqs_and_tags() {
+        let data = PayloadData {
+            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
+            peer_requirements: vec![
+                PeerReqPayload { peer_name: "react".to_string(), version_range: "^17.0.0".to_string(), is_optional: false },
+                PeerReqPayload { peer_name: "react-dom".to_string(), version_range: "".to_string(), is_optional: true },
+            ],
+            platform_tags: vec![PlatformTagPayload { os_id: 0x01, arch_id: 0x01 }, PlatformTagPayload { os_id: 0x02, arch_id: 0x02 }],
+            exports: vec![], artifacts: vec![], hook_hashes: vec![], patch_hash: None,
+        };
+        let packed = pack_payload(&data);
+        let unpacked = unpack_payload(&packed, 0).unwrap();
+        assert_eq!(unpacked.peer_requirements.len(), 2);
+        assert_eq!(unpacked.peer_requirements[0].peer_name, "react");
+        assert_eq!(unpacked.peer_requirements[0].version_range, "^17.0.0");
+        assert!(!unpacked.peer_requirements[0].is_optional);
+        assert_eq!(unpacked.platform_tags.len(), 2);
+        assert_eq!(unpacked.platform_tags[0].os_id, 0x01);
+        assert_eq!(unpacked.platform_tags[1].arch_id, 0x02);
+    }
+
+    #[test]
+    fn test_pack_script_hashes() {
+        let data = PayloadData {
+            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
+            peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![], artifacts: vec![],
             hook_hashes: vec![HookHashPayload {
                 hook_type: "postinstall".to_string(),
                 hash_algo: 0x03,
@@ -432,14 +616,12 @@ mod tests {
     }
 
     #[test]
-    fn test_pack_v10_patch_hash_present() {
+    fn test_pack_patch_hash_present() {
         let data = PayloadData {
             logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
             hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
-            exports: vec![],
-            artifacts: vec![],
-            hook_hashes: vec![],
+            exports: vec![], artifacts: vec![], hook_hashes: vec![],
             patch_hash: Some((0x03, vec![0xBB; 32])),
         };
         let packed = pack_payload(&data);
@@ -449,178 +631,9 @@ mod tests {
     }
 
     #[test]
-    fn test_pack_v10_patch_hash_absent() {
-        let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
-            peer_requirements: vec![], platform_tags: vec![],
-            exports: vec![],
-            artifacts: vec![],
-            hook_hashes: vec![],
-            patch_hash: None,
-        };
-        let packed = pack_payload(&data);
+    fn test_pack_patch_hash_absent() {
+        let packed = pack_payload(&empty_data());
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert!(unpacked.patch_hash.is_none());
-    }
-
-    #[test]
-    fn test_pack_v5_base_structure() {
-        let data = PayloadData {
-            logical_name: None, source_idx: 1, major: 1, minor: 0, patch: 0,
-            hashes: vec![HashPayload { algo_id: 0x01, digest: vec![0xAA; 32], attestation: Attestation::None }],
-            features: vec![], resolved_peers: vec![], deps: vec![],
-            peer_requirements: vec![], platform_tags: vec![],
-            exports: vec![],
-            artifacts: vec![],
-            hook_hashes: vec![], patch_hash: None,
-        };
-        let packed = pack_payload(&data);
-        assert_eq!(packed[0], 0x07);
-        assert_eq!(packed[1], 0x00);
-        assert_eq!(packed[2], 0x01);
-    }
-
-    #[test]
-    fn test_pack_v5_dep_content_id() {
-        let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![], features: vec![], resolved_peers: vec![],
-            deps: vec![DepPayload { content_id: 12345678, dep_type: 0x00, target_os: None, target_arch: None, req_feat_indices: vec![] }],
-            peer_requirements: vec![], platform_tags: vec![],
-            exports: vec![],
-            artifacts: vec![],
-            hook_hashes: vec![], patch_hash: None,
-        };
-        let packed = pack_payload(&data);
-
-        assert_eq!(packed[9], 0x01);
-        assert_eq!(&packed[10..18], &12345678u64.to_le_bytes());
-        assert_eq!(packed[18], 0x00);
-    }
-
-    #[test]
-    fn test_unpack_roundtrip_v5() {
-        let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 2, minor: 0, patch: 0,
-            hashes: vec![HashPayload { algo_id: 0x01, digest: vec![0; 32], attestation: Attestation::None }],
-            features: vec!["sync".to_string()],
-            resolved_peers: vec![],
-            deps: vec![DepPayload { content_id: 99, dep_type: 0x01, target_os: None, target_arch: None, req_feat_indices: vec![0] }],
-            peer_requirements: vec![], platform_tags: vec![],
-            exports: vec![],
-            artifacts: vec![],
-            hook_hashes: vec![], patch_hash: None,
-        };
-        let packed = pack_payload(&data);
-        let unpacked = unpack_payload(&packed, 0).unwrap();
-        assert_eq!(unpacked.features[0], "sync");
-        assert_eq!(unpacked.deps[0].content_id, 99);
-        assert!(matches!(unpacked.hashes[0].attestation, Attestation::None));
-    }
-
-    #[test]
-    fn test_pack_v7_hash_with_inline_slsa() {
-        let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![HashPayload {
-                algo_id: 0x01, digest: vec![0xAA; 32],
-                attestation: Attestation::InlineSlsa(SlsaPredicate { builder: "github.com/actions".to_string(), source: "git+https://github.com/pkg".to_string() }),
-            }],
-            features: vec![], resolved_peers: vec![], deps: vec![],
-            peer_requirements: vec![], platform_tags: vec![],
-            exports: vec![],
-            artifacts: vec![],
-            hook_hashes: vec![], patch_hash: None,
-        };
-        let packed = pack_payload(&data);
-        assert_eq!(packed[0], 0x07);
-        let hash_start = 7;
-        let hash_len = packed[hash_start + 1] as usize;
-        let attest_type_pos = hash_start + 2 + hash_len;
-        assert_eq!(packed[attest_type_pos], 0x02);
-    }
-
-    #[test]
-    fn test_pack_v8_logical_name_and_peers() {
-        let data = PayloadData {
-            logical_name: Some("react-v18".to_string()), source_idx: 0, major: 18, minor: 0, patch: 0,
-            hashes: vec![], features: vec![], resolved_peers: vec![PeerResolution {
-                peer_name: "react".to_string(), satisfied_by_content_id: 99, is_hoisted_to_root: true,
-            }], deps: vec![],
-            peer_requirements: vec![], platform_tags: vec![],
-            exports: vec![],
-            artifacts: vec![],
-            hook_hashes: vec![], patch_hash: None,
-        };
-        let packed = pack_payload(&data);
-        assert_eq!(packed[0], 0x07);
-        assert_eq!(packed[1], 0x09);
-        assert_eq!(&packed[2..11], "react-v18".as_bytes());
-    }
-
-    #[test]
-    fn test_unpack_rejects_old_v06_payload() {
-        let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 0, minor: 0, patch: 0,
-            hashes: vec![HashPayload { algo_id: 0x01, digest: vec![], attestation: Attestation::None }],
-            features: vec![], resolved_peers: vec![], deps: vec![],
-            peer_requirements: vec![], platform_tags: vec![],
-            exports: vec![],
-            artifacts: vec![],
-            hook_hashes: vec![], patch_hash: None,
-        };
-        let mut bad_payload = pack_payload(&data);
-        bad_payload[0] = 0x06; // Old version byte
-        assert!(matches!(unpack_payload(&bad_payload, 1), Err(Error::UnknownPayloadVersion { .. })));
-    }
-
-    #[test]
-    fn test_pack_v9_peer_requirements() {
-        let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
-            peer_requirements: vec![PeerReqPayload {
-                peer_name: "react".to_string(),
-                version_range: "^17.0.0".to_string(),
-                is_optional: false,
-            }],
-            platform_tags: vec![],
-            exports: vec![],
-            artifacts: vec![],
-            hook_hashes: vec![],
-            patch_hash: None,
-        };
-        let packed = pack_payload(&data);
-        let unpacked = unpack_payload(&packed, 0).unwrap();
-        assert_eq!(unpacked.peer_requirements.len(), 1);
-        assert_eq!(unpacked.peer_requirements[0].peer_name, "react");
-        assert_eq!(unpacked.hook_hashes.len(), 0);
-        assert!(unpacked.patch_hash.is_none());
-    }
-
-    #[test]
-    fn test_unpack_v9_roundtrip_peer_reqs_and_tags() {
-        let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
-            peer_requirements: vec![
-                PeerReqPayload { peer_name: "react".to_string(), version_range: "^17.0.0".to_string(), is_optional: false },
-                PeerReqPayload { peer_name: "react-dom".to_string(), version_range: "".to_string(), is_optional: true },
-            ],
-            platform_tags: vec![PlatformTagPayload { os_id: 0x01, arch_id: 0x01 }, PlatformTagPayload { os_id: 0x02, arch_id: 0x02 }],
-            exports: vec![],
-            artifacts: vec![],
-            hook_hashes: vec![], patch_hash: None,
-        };
-        let packed = pack_payload(&data);
-        let unpacked = unpack_payload(&packed, 0).unwrap();
-        assert_eq!(unpacked.peer_requirements.len(), 2);
-        assert_eq!(unpacked.peer_requirements[0].peer_name, "react");
-        assert_eq!(unpacked.peer_requirements[0].version_range, "^17.0.0");
-        assert!(!unpacked.peer_requirements[0].is_optional);
-        assert_eq!(unpacked.platform_tags.len(), 2);
-        assert_eq!(unpacked.platform_tags[0].os_id, 0x01);
-        assert_eq!(unpacked.platform_tags[1].arch_id, 0x02);
     }
 }

@@ -664,7 +664,7 @@ pub fn validate_patches(lockfile: &Lockfile, lockfile_dir: &std::path::Path) -> 
                 });
             }
         };
-        let actual = crate::crc32::calculate(&content).to_le_bytes().to_vec();
+        let actual = blake3::hash(&content).as_bytes().to_vec();
         if &actual != expected_digest {
             return Err(Error::PatchDigestMismatch {
                 package: pkg.name.clone(),
@@ -699,7 +699,7 @@ pub fn validate_scripts(lockfile: &Lockfile, lockfile_dir: &std::path::Path) -> 
             } else {
                 continue;
             };
-            let actual = crate::crc32::calculate(script_text.as_bytes()).to_le_bytes().to_vec();
+            let actual = blake3::hash(script_text.as_bytes()).as_bytes().to_vec();
             if actual != sh.digest {
                 return Err(Error::ScriptDigestMismatch {
                     package: pkg.name.clone(),
