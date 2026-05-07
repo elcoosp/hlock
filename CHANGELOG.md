@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.0] — The Cryptographic Agility & Graph Intelligence Release
+
+### Breaking Changes
+- **Payload version byte `0x07` → `0x08`.** v0.11 lockfiles cannot be read by a v0.12 parser. The `UnknownPayloadVersion` error is returned for old payloads.
+- **CRC32 trailer replaced by BLAKE3.** The 4-byte CRC32 is gone. Every binary payload now ends with a 32-byte BLAKE3 digest. The `IntegrityCheckFailed` error variant is removed; use `PayloadDigestMismatch` instead.
+- **`sign_lockfile` API changed.** Now takes `(serialized, key_id, algorithm, private_key, expires_epoch)`. The 64-byte expanded key from v0.11 is no longer accepted; pass the 32-byte Ed25519 seed directly.
+- **`verify_signature` API changed.** Now takes `(content, trusted_keys: &HashMap<String, (&[u8], SignatureAlgorithm)>)`. The bare `&[u8]` public key from v0.11 is no longer accepted. An empty trusted key map accepts only unsigned lockfiles; signed lockfiles with untrusted keys are rejected.
+
+### Added
+- **BLAKE3 payload trailer** — 32-byte BLAKE3 digest replaces CRC32. 128-bit collision resistance vs CRC32's 32-bit error detection. Faster than CRC32 on modern hardware with SIMD.
+- **Pluggable signature algorithms** — `SignatureAlgorithm` enum with `Ed25519` (0x00) and `Ed448` (0x01). Adding post-quantum signatures in future releases requires only a new ID.
+- **Signature expiration** — `@signature` directives now include `expires_epoch`. Verifiers reject expired signatures. Pass `0` for no expiration.
+- **Multi-signature support** — Multiple `@signature` directives are allowed. The verification policy is simple: all signatures must verify.
+- **Graph query API** — Six new functions in the `graph` module:
+  - `topological_sort()` — Kahn's algorithm with lexicographic tiebreak for deterministic output.
+  - `dependents_of()` — Reverse dependency lookup (BFS from target).
+  - `transitive_deps()` — Forward transitive closure (excludes self).
+  - `leaf_packages()` — Packages with no dependents (removal candidates).
+  - `detect_cycle()` — DFS three-color marking, returns cycle path.
+  - `would_create_cycle()` — Dry-run check before adding edges.
+- **`SignatureDirective` struct** — Parsed representation of `@signature` lines with `key_id`, `algorithm`, `expires_epoch`, and `signature_bytes`.
+- **New error variants** — `SignatureError::UntrustedKey`, `SignatureError::SignatureExpired`, `SignatureError::UnsupportedSignatureAlgorithm`, `SignatureError::Ed448VerificationFailed`.
+
+### Changed
+- **`@signature` directive syntax** — `@signature <key_id> <sig>` → `@signature <key_id> <algo_id> <expires_epoch> <sig>`. The v0.11 format with implicit Ed25519 and no expiration is no longer valid.
+- **`sign_lockfile` private key** — Accepts the 32-byte Ed25519 seed directly (not the 64-byte expanded key). Cleaner API, avoids "which 64 bytes?" confusion.
+
+### Removed
+- **`Error::IntegrityCheckFailed`** — Replaced by `Error::PayloadDigestMismatch`.
+- **CRC32 computation** — No CRC32 code remains in the codebase.
+
 ## [0.11.0] — The Interface & Artifact Transparency Release
 
 ### Breaking Changes
@@ -30,7 +61,7 @@ All notable changes to this project will be documented in this file.
 - **Hook hash integrity** — `HookHash` struct with `hook_type`, `hash_algo`, and `digest` fields. `Package.hook_hashes` locks lifecycle script digests.
 - **Patch support** — `PatchDirective` struct, `@patch` header directive, and `Package.patch_hash` for tracking source patches.
 - **Script digest validation** — `validate_scripts()` verifies hook digests against `package.json` script content.
-- **Patch validation** — `validate_patches()` verifies patch file existence and CRC32 digest.
+- **Patch validation** — `validate_patches()` verifies patch file existence and BLAKE3 digest.
 - **Orphan patch detection** — `Error::OrphanPatchHash` when a package has a patch hash but no `@patch` directive.
 
 ## [0.9.0] — The Platform and Provenance Release
