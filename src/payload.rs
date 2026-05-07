@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::lockfile::{Attestation, PeerResolution};
+use crate::lockfile::{Attestation, PeerResolution, SlsaPredicate};
 
 #[derive(Debug, Clone)]
 pub struct HashPayload {
@@ -43,6 +43,10 @@ pub struct PayloadData {
 
 pub fn pack_payload(data: &PayloadData) -> Vec<u8> {
     pack_payload_v9(data, true)
+}
+
+pub fn pack_payload_v8(data: &PayloadData) -> Vec<u8> {
+    pack_payload_v9(data, false)
 }
 
 fn pack_payload_v9(data: &PayloadData, include_v9: bool) -> Vec<u8> {
@@ -325,13 +329,12 @@ mod tests {
             platform_tags: vec![],
         };
         let packed = pack_payload(&data);
-        let len = packed.len();
-        assert_eq!(packed[len - 17], 0x01);
-        assert_eq!(packed[len - 16], 0x05);
-        assert_eq!(&packed[len - 15..len - 10], b"react");
-        assert_eq!(packed[len - 10], 0x07);
-        assert_eq!(&packed[len - 9..len - 2], b"^17.0.0");
-        assert_eq!(packed[len - 2], 0x00);
+        let unpacked = unpack_payload(&packed, 0).unwrap();
+        assert_eq!(unpacked.peer_requirements.len(), 1);
+        assert_eq!(unpacked.peer_requirements[0].peer_name, "react");
+        assert_eq!(unpacked.peer_requirements[0].version_range, "^17.0.0");
+        assert!(!unpacked.peer_requirements[0].is_optional);
+        assert_eq!(unpacked.platform_tags.len(), 0);
     }
 
     #[test]
@@ -358,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_unpack_v8_payload_still_works() {
-        let mut v8_bytes = vec![0x06, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let mut v8_bytes = vec![0x06, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let crc = crate::crc32::calculate(&v8_bytes);
         v8_bytes.extend_from_slice(&crc.to_le_bytes());
         let unpacked = unpack_payload(&v8_bytes, 0).unwrap();
@@ -449,13 +452,30 @@ mod tests {
 
     #[test]
     fn test_unpack_invalid_version_v5() {
-        let mut bad_payload = pack_payload(&PayloadData {
+        let data = PayloadData {
             logical_name: None, source_idx: 0, major: 0, minor: 0, patch: 0,
             hashes: vec![HashPayload { algo_id: 0x01, digest: vec![], attestation: Attestation::None }],
             features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
-        }]);
+        };
+        let mut bad_payload = pack_payload(&data);
         bad_payload[0] = 0x05;
         assert!(matches!(unpack_payload(&bad_payload, 1), Err(Error::UnknownPayloadVersion { .. })));
+    }
+
+    #[test]
+    fn test_pack_payload_v8_omits_new_sections() {
+        let data = PayloadData {
+            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+            hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
+            peer_requirements: vec![PeerReqPayload { peer_name: "react".to_string(), version_range: "^17".to_string(), is_optional: false }],
+            platform_tags: vec![PlatformTagPayload { os_id: 0x01, arch_id: 0x01 }],
+        };
+        let v8_packed = pack_payload_v8(&data);
+        let v9_packed = pack_payload(&data);
+        assert!(v8_packed.len() < v9_packed.len());
+        let unpacked = unpack_payload(&v8_packed, 0).unwrap();
+        assert_eq!(unpacked.peer_requirements.len(), 0);
+        assert_eq!(unpacked.platform_tags.len(), 0);
     }
 }

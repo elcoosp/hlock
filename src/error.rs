@@ -49,4 +49,16 @@ pub enum Error {
 
     #[error("Line {line_number}: Unsupported attestation type {type_id}")]
     UnknownAttestationType { line_number: usize, type_id: u8 },
+
+    #[error("Invalid signature: {reason}")]
+    InvalidSignature { reason: String },
+
+    #[error("Required peer '{peer_name}' for package '{package}' has version range '{range}' but resolved version '{resolved}' does not satisfy it")]
+    PeerRangeMismatch { package: String, peer_name: String, range: String, resolved: String },
+
+    #[error("Required peer '{peer_name}' for package '{package}' has no resolution")]
+    PeerRequirementUnsatisfied { package: String, peer_name: String },
+
+    #[error("No packages match the target platform ({os}, {arch})")]
+    NoPackagesForPlatform { os: String, arch: String },
 }
