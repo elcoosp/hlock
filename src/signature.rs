@@ -143,17 +143,6 @@ mod tests {
     }
 
     #[test]
-    fn test_ed25519_direct() {
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&SEED);
-        use ed25519_dalek::Signer;
-        let msg = b"hello world";
-        let sig = signing_key.sign(msg);
-        let vk = ed25519_dalek::VerifyingKey::from_bytes(&public_key()).unwrap();
-        use ed25519_dalek::Verifier;
-        assert!(vk.verify(msg, &sig).is_ok());
-    }
-
-    #[test]
     fn test_sign_and_verify_roundtrip() {
         let lockfile = "@source 0 https://reg.com/\n\npkg\tAAAA\n";
         let private_key = expanded_private_key();

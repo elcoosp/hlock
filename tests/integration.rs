@@ -350,3 +350,231 @@ fn test_e2e_ipfs_source_roundtrip() {
     assert_eq!(res.packages[0].source_idx, 0);
     std::fs::remove_file(&temp_path).ok();
 }
+
+#[test]
+fn test_e2e_v9_peer_requirements_roundtrip() {
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![],
+        packages: vec![
+            Package {
+                name: "react-dom".to_string(),
+                logical_name: None, source_idx: 0,
+                major: 18, minor: 0, patch: 0,
+                peer_requirements: vec![
+                    PeerRequirement { peer_name: "react".to_string(), version_range: ">=17.0.0".to_string(), is_optional: false },
+                    PeerRequirement { peer_name: "react-native".to_string(), version_range: "".to_string(), is_optional: true },
+                ],
+                resolved_peers: vec![
+                    PeerResolution { peer_name: "react".to_string(), satisfied_by_content_id: fnv::calculate("react@18.0.0"), is_hoisted_to_root: true },
+                ],
+                dependencies: vec![],
+                ..Default::default()
+            },
+            Package { name: "react".to_string(), logical_name: None, source_idx: 0, major: 18, minor: 0, patch: 0, ..Default::default() },
+        ],
+    };
+    let serialized = serialize(&mut lockfile).unwrap();
+    let res = deserialize(&serialized).unwrap();
+
+    let rdom = res.packages.iter().find(|p| p.name == "react-dom").unwrap();
+    assert_eq!(rdom.peer_requirements.len(), 2);
+    assert_eq!(rdom.peer_requirements[0].peer_name, "react");
+    assert_eq!(rdom.peer_requirements[0].version_range, ">=17.0.0");
+    assert!(!rdom.peer_requirements[0].is_optional);
+    assert_eq!(rdom.peer_requirements[1].peer_name, "react-native");
+    assert!(rdom.peer_requirements[1].is_optional);
+    assert_eq!(rdom.resolved_peers.len(), 1);
+}
+
+#[test]
+fn test_e2e_v9_platform_tags_roundtrip() {
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![],
+        packages: vec![
+            Package {
+                name: "esbuild-darwin-arm64".to_string(),
+                logical_name: None, source_idx: 0,
+                major: 0, minor: 17, patch: 0,
+                platform_tags: vec![PlatformTag { os: TargetOS::MacOS, arch: TargetArch::Aarch64 }],
+                ..Default::default()
+            },
+            Package {
+                name: "esbuild-linux-x64".to_string(),
+                logical_name: None, source_idx: 0,
+                major: 0, minor: 17, patch: 0,
+                platform_tags: vec![PlatformTag { os: TargetOS::Linux, arch: TargetArch::X86_64 }],
+                ..Default::default()
+            },
+            Package {
+                name: "lodash".to_string(),
+                logical_name: None, source_idx: 0,
+                major: 4, minor: 17, patch: 21,
+                platform_tags: vec![],
+                ..Default::default()
+            },
+        ],
+    };
+    let serialized = serialize(&mut lockfile).unwrap();
+    let res = deserialize(&serialized).unwrap();
+
+    assert_eq!(res.packages[0].platform_tags.len(), 1);
+    assert_eq!(res.packages[0].platform_tags[0].os, TargetOS::MacOS);
+    assert_eq!(res.packages[0].platform_tags[0].arch, TargetArch::Aarch64);
+    assert_eq!(res.packages[1].platform_tags.len(), 1);
+    assert_eq!(res.packages[1].platform_tags[0].os, TargetOS::Linux);
+    assert_eq!(res.packages[2].platform_tags.len(), 0);
+}
+
+#[test]
+fn test_e2e_v8_compat_mode_strips_v9_fields() {
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![],
+        packages: vec![Package {
+            name: "react-dom".to_string(),
+            logical_name: None, source_idx: 0,
+            major: 18, minor: 0, patch: 0,
+            peer_requirements: vec![PeerRequirement { peer_name: "react".to_string(), version_range: ">=17.0.0".to_string(), is_optional: false }],
+            platform_tags: vec![PlatformTag { os: TargetOS::Linux, arch: TargetArch::X86_64 }],
+            ..Default::default()
+        }],
+    };
+    let serialized_v8 = serialize_compat(&mut lockfile, CompatMode::V8).unwrap();
+    let res = deserialize(&serialized_v8).unwrap();
+
+    assert_eq!(res.packages[0].peer_requirements.len(), 0);
+    assert_eq!(res.packages[0].platform_tags.len(), 0);
+}
+
+#[test]
+fn test_e2e_v9_mode_preserves_v9_fields() {
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![],
+        packages: vec![Package {
+            name: "react-dom".to_string(),
+            logical_name: None, source_idx: 0,
+            major: 18, minor: 0, patch: 0,
+            peer_requirements: vec![PeerRequirement { peer_name: "react".to_string(), version_range: ">=17.0.0".to_string(), is_optional: false }],
+            platform_tags: vec![PlatformTag { os: TargetOS::Linux, arch: TargetArch::X86_64 }],
+            ..Default::default()
+        }],
+    };
+    let serialized_v9 = serialize_compat(&mut lockfile, CompatMode::V9).unwrap();
+    let res = deserialize(&serialized_v9).unwrap();
+
+    assert_eq!(res.packages[0].peer_requirements.len(), 1);
+    assert_eq!(res.packages[0].platform_tags.len(), 1);
+}
+
+#[test]
+fn test_e2e_sign_lockfile_and_verify() {
+    let seed: [u8; 32] = [
+        0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
+        0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+        0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19,
+        0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60,
+    ];
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let verifying_key_bytes = *signing_key.verifying_key().as_bytes();
+    let mut expanded_key = [0u8; 64];
+    expanded_key[..32].copy_from_slice(&seed);
+    expanded_key[32..].copy_from_slice(&verifying_key_bytes);
+
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![],
+        packages: vec![Package {
+            name: "app".to_string(), logical_name: None, source_idx: 0,
+            major: 1, minor: 0, patch: 0, ..Default::default()
+        }],
+    };
+    let serialized = serialize(&mut lockfile).unwrap();
+
+    let signed = sign_lockfile(&serialized, "ci@company.com", &expanded_key).unwrap();
+    assert!(signed.contains("@signature ci@company.com "));
+
+    let verify_result = verify_signature(&signed, &verifying_key_bytes);
+    assert!(verify_result.is_ok());
+}
+
+#[test]
+fn test_e2e_signed_lockfile_deserializes_correctly() {
+    let seed: [u8; 32] = [
+        0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
+        0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+        0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19,
+        0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60,
+    ];
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+    let verifying_key_bytes = *signing_key.verifying_key().as_bytes();
+    let mut expanded_key = [0u8; 64];
+    expanded_key[..32].copy_from_slice(&seed);
+    expanded_key[32..].copy_from_slice(&verifying_key_bytes);
+
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![],
+        packages: vec![
+            Package { name: "alpha".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, ..Default::default() },
+            Package { name: "beta".to_string(), logical_name: None, source_idx: 0, major: 2, minor: 0, patch: 0, ..Default::default() },
+        ],
+    };
+    let serialized = serialize(&mut lockfile).unwrap();
+    let signed = sign_lockfile(&serialized, "bot@github-actions", &expanded_key).unwrap();
+
+    let deserialized = deserialize(&signed).unwrap();
+    assert_eq!(deserialized.packages.len(), 2);
+    assert_eq!(deserialized.packages[0].name, "alpha");
+    assert_eq!(deserialized.packages[1].name, "beta");
+}
+
+#[test]
+fn test_e2e_platform_extraction_with_real_lockfile() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![],
+        packages: vec![
+            Package { name: "app".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, dependencies: vec![
+                Dependency { name: "native".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
+                Dependency { name: "pure".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
+            ], ..Default::default() },
+            Package { name: "native".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+                platform_tags: vec![PlatformTag { os: TargetOS::Linux, arch: TargetArch::X86_64 }],
+                dependencies: vec![], ..Default::default() },
+            Package { name: "pure".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+                platform_tags: vec![],
+                dependencies: vec![], ..Default::default() },
+            Package { name: "mac-native".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+                platform_tags: vec![PlatformTag { os: TargetOS::MacOS, arch: TargetArch::Aarch64 }],
+                dependencies: vec![], ..Default::default() },
+        ],
+    };
+    let app_cid = fnv::calculate("app@1.0.0");
+
+    let linux_res = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64).unwrap();
+    let linux_names: Vec<&str> = linux_res.packages.iter().map(|p| p.name.as_str()).collect();
+    assert!(linux_names.contains(&"app"), "linux missing app, got: {:?}", linux_names);
+    assert!(linux_names.contains(&"native"), "linux missing native, got: {:?}", linux_names);
+    assert!(linux_names.contains(&"pure"), "linux missing pure, got: {:?}", linux_names);
+    assert!(!linux_names.contains(&"mac-native"), "linux should not have mac-native");
+    assert_eq!(linux_res.packages.len(), 3);
+
+    let mac_res = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::MacOS, TargetArch::Aarch64).unwrap();
+    let mac_names: Vec<&str> = mac_res.packages.iter().map(|p| p.name.as_str()).collect();
+    assert!(mac_names.contains(&"app"), "mac missing app, got: {:?}", mac_names);
+    assert!(mac_names.contains(&"pure"), "mac missing pure, got: {:?}", mac_names);
+    assert!(!mac_names.contains(&"native"), "mac should not have native");
+    assert!(!mac_names.contains(&"mac-native"), "mac-native is not reachable from app");
+    assert_eq!(mac_res.packages.len(), 2);
+
+    let win_res = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Windows, TargetArch::X86_64).unwrap();
+    let win_names: Vec<&str> = win_res.packages.iter().map(|p| p.name.as_str()).collect();
+    assert!(win_names.contains(&"app"), "win missing app, got: {:?}", win_names);
+    assert!(win_names.contains(&"pure"), "win missing pure, got: {:?}", win_names);
+    assert!(!win_names.contains(&"native"), "win should not have native");
+    assert!(!win_names.contains(&"mac-native"), "win should not have mac-native");
+    assert_eq!(win_res.packages.len(), 2);
+}
