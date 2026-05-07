@@ -76,4 +76,13 @@ pub enum Error {
 
     #[error("Script '{script}' for package '{package}' has mismatched digest")]
     ScriptDigestMismatch { package: String, script: String },
+
+    #[error("Unrecognized export '{identifier}' requested from package '{package}'")]
+    UnknownExport { package: String, identifier: String },
+
+    #[error("Artifact for '{package}' (os: {os}, arch: {arch}) not found at '{path}'")]
+    ArtifactMissing { package: String, os: u8, arch: u8, path: String },
+
+    #[error("Artifact for '{package}' digest mismatch: expected {expected}, got {actual}")]
+    ArtifactDigestMismatch { package: String, expected: String, actual: String },
 }
