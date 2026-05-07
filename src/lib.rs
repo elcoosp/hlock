@@ -21,4 +21,4 @@ pub use payload::{
     DepPayload, pack_payload, unpack_payload, PeerReqPayload, PlatformTagPayload,
     HookHashPayload, PayloadData,
 };
-pub use signature::{sign_lockfile, verify_signature};
+pub use signature::{sign_lockfile, verify_signature, SignatureAlgorithm, SignatureDirective};

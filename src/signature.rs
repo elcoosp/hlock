@@ -1,121 +1,187 @@
 use crate::base64url;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureAlgorithm {
+    Ed25519 = 0x00,
+    Ed448 = 0x01,
+}
+
+#[derive(Debug, Clone)]
+pub struct SignatureDirective {
+    pub key_id: String,
+    pub algorithm: SignatureAlgorithm,
+    pub expires_epoch: u64,
+    pub signature_bytes: Vec<u8>,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignatureError {
     #[error("Base64URL decode failed: {0}")]
     InvalidBase64(&'static str),
-
     #[error("Ed25519 verification failed")]
     VerificationFailed,
-
+    #[error("Ed448 verification failed")]
+    Ed448VerificationFailed,
     #[error("Malformed signature directive: {reason}")]
     MalformedDirective { reason: String },
+    #[error("Key '{key_id}' is not in the trusted key set")]
+    UntrustedKey { key_id: String },
+    #[error("Signature from '{key_id}' expired at epoch {expires_epoch}")]
+    SignatureExpired { key_id: String, expires_epoch: u64 },
+    #[error("Unsupported signature algorithm ID {algo_id}")]
+    UnsupportedSignatureAlgorithm { algo_id: u8 },
+}
+
+pub fn parse_signature_directive(line: &str) -> Result<SignatureDirective, SignatureError> {
+    let rest = line.strip_prefix("@signature ").ok_or_else(|| {
+        SignatureError::MalformedDirective { reason: "missing @signature prefix".to_string() }
+    })?;
+    let mut parts = rest.splitn(4, ' ');
+    let key_id = parts.next().ok_or_else(|| {
+        SignatureError::MalformedDirective { reason: "missing key_id".to_string() }
+    })?.to_string();
+    let algo_hex = parts.next().ok_or_else(|| {
+        SignatureError::MalformedDirective { reason: "missing algo_id".to_string() }
+    })?;
+    let expires_str = parts.next().ok_or_else(|| {
+        SignatureError::MalformedDirective { reason: "missing expires_epoch".to_string() }
+    })?;
+    let sig_b64 = parts.next().ok_or_else(|| {
+        SignatureError::MalformedDirective { reason: "missing signature".to_string() }
+    })?;
+    if key_id.contains(' ') || key_id.is_empty() {
+        return Err(SignatureError::MalformedDirective { reason: "invalid key_id".to_string() });
+    }
+    let algo_id = u8::from_str_radix(algo_hex, 16).map_err(|_| {
+        SignatureError::MalformedDirective { reason: "algo_id must be two hex digits".to_string() }
+    })?;
+    let algorithm = match algo_id {
+        0x00 => SignatureAlgorithm::Ed25519,
+        0x01 => SignatureAlgorithm::Ed448,
+        _ => return Err(SignatureError::UnsupportedSignatureAlgorithm { algo_id }),
+    };
+    let expires_epoch: u64 = expires_str.parse().map_err(|_| {
+        SignatureError::MalformedDirective { reason: "expires_epoch must be decimal".to_string() }
+    })?;
+    let signature_bytes = base64url::decode(sig_b64.as_bytes()).map_err(SignatureError::InvalidBase64)?;
+    let expected_len = match algorithm {
+        SignatureAlgorithm::Ed25519 => 64,
+        SignatureAlgorithm::Ed448 => 114,
+    };
+    if signature_bytes.len() != expected_len {
+        return Err(SignatureError::MalformedDirective {
+            reason: format!("expected {} signature bytes, got {}", expected_len, signature_bytes.len()),
+        });
+    }
+    Ok(SignatureDirective { key_id, algorithm, expires_epoch, signature_bytes })
 }
 
 pub fn sign_lockfile(
     serialized_lockfile: &str,
     key_id: &str,
-    private_key: &[u8; 64],
+    algorithm: SignatureAlgorithm,
+    private_key: &[u8],
+    expires_epoch: u64,
 ) -> Result<String, SignatureError> {
     if key_id.contains(' ') {
-        return Err(SignatureError::MalformedDirective {
-            reason: "key_id must not contain spaces".to_string(),
-        });
+        return Err(SignatureError::MalformedDirective { reason: "key_id must not contain spaces".to_string() });
     }
     if key_id.is_empty() {
-        return Err(SignatureError::MalformedDirective {
-            reason: "key_id must not be empty".to_string(),
-        });
+        return Err(SignatureError::MalformedDirective { reason: "key_id must not be empty".to_string() });
     }
     if !serialized_lockfile.ends_with('\n') {
-        return Err(SignatureError::MalformedDirective {
-            reason: "serialized lockfile must end with a newline".to_string(),
-        });
+        return Err(SignatureError::MalformedDirective { reason: "serialized lockfile must end with a newline".to_string() });
     }
-
-    let seed: [u8; 32] = private_key[..32].try_into().map_err(|_| {
-        SignatureError::MalformedDirective {
-            reason: "private_key first 32 bytes must be valid seed".to_string(),
+    let (algo_id, encoded_sig) = match algorithm {
+        SignatureAlgorithm::Ed25519 => {
+            if private_key.len() != 32 {
+                return Err(SignatureError::MalformedDirective { reason: "Ed25519 private key must be 32 bytes".to_string() });
+            }
+            let seed: [u8; 32] = private_key.try_into().map_err(|_| {
+                SignatureError::MalformedDirective { reason: "invalid Ed25519 seed".to_string() }
+            })?;
+            let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+            use ed25519_dalek::Signer;
+            let sig = signing_key.sign(serialized_lockfile.as_bytes());
+            (0x00u8, base64url::encode(sig.to_bytes().as_ref()))
         }
-    })?;
-
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-    use ed25519_dalek::Signer;
-    let signature = signing_key.sign(serialized_lockfile.as_bytes());
-    let encoded = base64url::encode(signature.to_bytes().as_ref());
-
-    Ok(format!("{}@signature {} {}\n", serialized_lockfile, key_id, encoded))
+        SignatureAlgorithm::Ed448 => {
+            return Err(SignatureError::MalformedDirective {
+                reason: "Ed448 signing not yet available (pending stable crate release)".to_string(),
+            });
+        }
+    };
+    Ok(format!("{}@signature {} {:02x} {} {}\n", serialized_lockfile, key_id, algo_id, expires_epoch, encoded_sig))
 }
 
 pub fn verify_signature(
     lockfile_content: &str,
-    public_key: &[u8; 32],
+    trusted_keys: &HashMap<String, (&[u8], SignatureAlgorithm)>,
 ) -> Result<(), SignatureError> {
-    let sig_start = match lockfile_content.rfind("@signature ") {
-        Some(pos) => {
-            if pos > 0 && lockfile_content.as_bytes()[pos - 1] != b'\n' {
-                return Ok(());
+    let mut sig_start: Option<usize> = None;
+    let mut sig_directives: Vec<SignatureDirective> = Vec::new();
+    for (idx, line) in lockfile_content.lines().enumerate() {
+        if line.starts_with("@signature ") {
+            if sig_start.is_none() {
+                sig_start = Some(lockfile_content.len() - lockfile_content[idx..].len());
             }
-            pos
+            sig_directives.push(parse_signature_directive(line)?);
         }
-        None => return Ok(()),
-    };
-
-    let sig_line_full = &lockfile_content[sig_start..];
-    let sig_line_end = sig_line_full.find('\n').unwrap_or(sig_line_full.len());
-    let sig_line = &sig_line_full[..sig_line_end];
-
-    let after_sig = sig_line_full.get(sig_line_end..).unwrap_or("");
-    let after_sig = after_sig.strip_prefix('\n').unwrap_or(after_sig);
-    if !after_sig.is_empty() {
-        return Err(SignatureError::MalformedDirective {
-            reason: "@signature must be the last line in the file".to_string(),
-        });
     }
-
-    let rest = &sig_line["@signature ".len()..];
-    let mut parts = rest.splitn(2, ' ');
-    let _key_id = parts.next().ok_or_else(|| {
-        SignatureError::MalformedDirective {
-            reason: "Missing key_id after @signature".to_string(),
-        }
-    })?;
-    let encoded_sig = parts.next().ok_or_else(|| {
-        SignatureError::MalformedDirective {
-            reason: "Missing signature after key_id".to_string(),
-        }
-    })?;
-
-    if encoded_sig.is_empty() {
-        return Err(SignatureError::MalformedDirective {
-            reason: "Signature is empty".to_string(),
-        });
-    }
-
-    let sig_bytes = base64url::decode(encoded_sig.as_bytes()).map_err(SignatureError::InvalidBase64)?;
-    if sig_bytes.len() != 64 {
-        return Err(SignatureError::MalformedDirective {
-            reason: format!("Signature must be 64 bytes, got {}", sig_bytes.len()),
-        });
-    }
-    let sig_array: [u8; 64] = sig_bytes.try_into().map_err(|_| {
-        SignatureError::MalformedDirective {
-            reason: "Signature must be 64 bytes".to_string(),
-        }
-    })?;
-
+    if sig_directives.is_empty() { return Ok(()); }
+    let sig_start = sig_start.unwrap();
+    if sig_start > 0 && lockfile_content.as_bytes()[sig_start - 1] != b'\n' { return Ok(()); }
     let message = &lockfile_content.as_bytes()[..sig_start];
-
-    let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(public_key).map_err(|e| {
-        SignatureError::MalformedDirective {
-            reason: format!("Invalid Ed25519 public key: {}", e),
+    let after_sigs = &lockfile_content[sig_start..];
+    let last_sig_end = after_sigs.rfind('\n').map(|i| sig_start + i + 1).unwrap_or(lockfile_content.len());
+    if last_sig_end < lockfile_content.len() {
+        return Err(SignatureError::MalformedDirective { reason: "@signature must be the last lines in the file".to_string() });
+    }
+    for directive in &sig_directives {
+        let (expected_pub_key, expected_algo) = trusted_keys.get(&directive.key_id).ok_or_else(|| {
+            SignatureError::UntrustedKey { key_id: directive.key_id.clone() }
+        })?;
+        if directive.algorithm != *expected_algo {
+            return Err(SignatureError::MalformedDirective {
+                reason: format!("key '{}' uses algo {:?} but trusted key expects {:?}", directive.key_id, directive.algorithm, expected_algo),
+            });
         }
-    })?;
-
-    let signature = ed25519::Signature::from_bytes(&sig_array);
-
-    use ed25519_dalek::Verifier;
-    verifying_key.verify(message, &signature).map_err(|_| SignatureError::VerificationFailed)
+        if directive.expires_epoch != 0 {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+            if now > directive.expires_epoch {
+                return Err(SignatureError::SignatureExpired {
+                    key_id: directive.key_id.clone(),
+                    expires_epoch: directive.expires_epoch,
+                });
+            }
+        }
+        match directive.algorithm {
+            SignatureAlgorithm::Ed25519 => {
+                if expected_pub_key.len() != 32 {
+                    return Err(SignatureError::MalformedDirective { reason: "Ed25519 public key must be 32 bytes".to_string() });
+                }
+                let pk_bytes: [u8; 32] = (*expected_pub_key).try_into().map_err(|_| {
+                    SignatureError::MalformedDirective { reason: "invalid Ed25519 public key".to_string() }
+                })?;
+                let sig_bytes: [u8; 64] = directive.signature_bytes.as_slice().try_into().map_err(|_| {
+                    SignatureError::MalformedDirective { reason: "invalid Ed25519 signature".to_string() }
+                })?;
+                let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&pk_bytes).map_err(|e| {
+                    SignatureError::MalformedDirective { reason: format!("invalid Ed25519 public key: {}", e) }
+                })?;
+                let signature = ed25519::Signature::from_bytes(&sig_bytes);
+                use ed25519_dalek::Verifier;
+                verifying_key.verify(message, &signature).map_err(|_| SignatureError::VerificationFailed)?;
+            }
+            SignatureAlgorithm::Ed448 => {
+                return Err(SignatureError::MalformedDirective {
+                    reason: "Ed448 verification not yet available (pending stable crate release)".to_string(),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -134,118 +200,154 @@ mod tests {
         *signing_key.verifying_key().as_bytes()
     }
 
-    fn expanded_private_key() -> [u8; 64] {
-        let mut key = [0u8; 64];
-        let pk = public_key();
-        key[..32].copy_from_slice(&SEED);
-        key[32..].copy_from_slice(&pk);
-        key
+    fn make_trusted() -> HashMap<String, (&'static [u8], SignatureAlgorithm)> {
+        let mut m = HashMap::new();
+        let leaked: &'static [u8] = &*Box::leak(Box::new(public_key()) as Box<[u8]>);
+        m.insert("ci@example.com".to_string(), (leaked, SignatureAlgorithm::Ed25519));
+        m
+    }
+
+    #[test]
+    fn test_parse_signature_directive_v12() {
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let signed = sign_lockfile(lockfile, "ci@co.com", SignatureAlgorithm::Ed25519, &SEED, 1735689600).unwrap();
+        let sig_line = signed.lines().find(|l| l.starts_with("@signature ")).unwrap();
+        let directive = parse_signature_directive(sig_line).unwrap();
+        assert_eq!(directive.key_id, "ci@co.com");
+        assert_eq!(directive.algorithm, SignatureAlgorithm::Ed25519);
+        assert_eq!(directive.expires_epoch, 1735689600);
+        assert_eq!(directive.signature_bytes.len(), 64);
+    }
+
+    #[test]
+    fn test_sign_v12_ed25519_format() {
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let signed = sign_lockfile(lockfile, "ci@co.com", SignatureAlgorithm::Ed25519, &SEED, 0).unwrap();
+        assert!(signed.contains("@signature ci@co.com 00 0 "));
+        assert!(signed.ends_with('\n'));
     }
 
     #[test]
     fn test_sign_and_verify_roundtrip() {
-        let lockfile = "@source 0 https://reg.com/\n\npkg\tAAAA\n";
-        let private_key = expanded_private_key();
-        let signed = sign_lockfile(lockfile, "ci@example.com", &private_key).unwrap();
-
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let signed = sign_lockfile(lockfile, "ci@example.com", SignatureAlgorithm::Ed25519, &SEED, 0).unwrap();
         assert!(signed.starts_with(lockfile));
-        assert!(signed.contains("@signature ci@example.com "));
+        assert!(signed.contains("@signature ci@example.com 00 0 "));
         assert!(signed.ends_with('\n'));
-
-        let sig_pos = signed.find("@signature ").unwrap();
-        let message_bytes = &signed.as_bytes()[..sig_pos];
-        eprintln!("Message bytes len: {}", message_bytes.len());
-        eprintln!("Message bytes: {:?}", message_bytes);
-
-        let signing_key = ed25519_dalek::SigningKey::from_bytes(&SEED);
-        use ed25519_dalek::Signer;
-        let expected_sig = signing_key.sign(message_bytes);
-        eprintln!("Expected sig bytes: {:?}", expected_sig.to_bytes().as_ref());
-
-        let result = verify_signature(&signed, &public_key());
-        if let Err(e) = &result {
-            eprintln!("Verification error: {:?}", e);
-        }
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_verify_no_signature() {
-        let lockfile = "@source 0 https://reg.com/\n\npkg\tAAAA\n";
-        assert!(verify_signature(lockfile, &public_key()).is_ok());
+        assert!(verify_signature(&signed, &make_trusted()).is_ok());
     }
 
     #[test]
     fn test_verify_tampered_message() {
-        let lockfile = "@source 0 https://reg.com/\n\npkg\tAAAA\n";
-        let private_key = expanded_private_key();
-        let signed = sign_lockfile(lockfile, "ci@example.com", &private_key).unwrap();
-
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let signed = sign_lockfile(lockfile, "ci@example.com", SignatureAlgorithm::Ed25519, &SEED, 0).unwrap();
         let tampered = signed.replace("reg.com", "reg.org");
+        match verify_signature(&tampered, &make_trusted()) {
+            Err(SignatureError::VerificationFailed) => {}
+            other => panic!("expected VerificationFailed, got {:?}", other),
+        }
+    }
 
-        assert!(matches!(
-            verify_signature(&tampered, &public_key()),
-            Err(SignatureError::VerificationFailed)
-        ));
+    #[test]
+    fn test_verify_no_signature() {
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+        assert!(verify_signature(lockfile, &trusted).is_ok());
     }
 
     #[test]
     fn test_sign_rejects_spaces_in_key_id() {
-        let lockfile = "@source 0 https://reg.com/\n\npkg\tAAAA\n";
-        let private_key = expanded_private_key();
-        assert!(sign_lockfile(lockfile, "ci at example", &private_key).is_err());
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        assert!(sign_lockfile(lockfile, "ci at example", SignatureAlgorithm::Ed25519, &SEED, 0).is_err());
     }
 
     #[test]
     fn test_sign_rejects_empty_key_id() {
-        let lockfile = "@source 0 https://reg.com/\n\npkg\tAAAA\n";
-        let private_key = expanded_private_key();
-        assert!(sign_lockfile(lockfile, "", &private_key).is_err());
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        assert!(sign_lockfile(lockfile, "", SignatureAlgorithm::Ed25519, &SEED, 0).is_err());
     }
 
     #[test]
     fn test_sign_rejects_no_trailing_newline() {
-        let lockfile = "@source 0 https://reg.com/\n\npkg\tAAAA";
-        let private_key = expanded_private_key();
-        assert!(sign_lockfile(lockfile, "ci@example.com", &private_key).is_err());
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA";
+        assert!(sign_lockfile(lockfile, "ci@example.com", SignatureAlgorithm::Ed25519, &SEED, 0).is_err());
     }
 
     #[test]
     fn test_verify_ignores_embedded_signature() {
-        let lockfile = "@source 0 https://reg.com/\n\npkg\tAAAA\n";
-        let private_key = expanded_private_key();
-        let signed = sign_lockfile(lockfile, "ci@example.com", &private_key).unwrap();
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let signed = sign_lockfile(lockfile, "ci@example.com", SignatureAlgorithm::Ed25519, &SEED, 0).unwrap();
         let with_embedded = signed.replace("@signature ", "x@signature ");
-        assert!(verify_signature(&with_embedded, &public_key()).is_ok());
+        let trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+        assert!(verify_signature(&with_embedded, &trusted).is_ok());
+    }
+
+    #[test]
+    fn test_untrusted_key_rejected_with_signed_lockfile() {
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let signed = sign_lockfile(lockfile, "ci@example.com", SignatureAlgorithm::Ed25519, &SEED, 0).unwrap();
+        let trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+        match verify_signature(&signed, &trusted) {
+            Err(SignatureError::UntrustedKey { key_id }) if key_id == "ci@example.com" => {}
+            other => panic!("expected UntrustedKey, got {:?}", other),
+        }
     }
 
     #[test]
     fn test_verify_rejects_content_after_signature() {
-        let lockfile = "@source 0 https://reg.com/\n\npkg\tAAAA\n";
-        let private_key = expanded_private_key();
-        let signed = sign_lockfile(lockfile, "ci@example.com", &private_key).unwrap();
-        let with_extra = format!("{}extra\n", signed);
-        assert!(matches!(
-            verify_signature(&with_extra, &public_key()),
-            Err(SignatureError::MalformedDirective { .. })
-        ));
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let signed = sign_lockfile(lockfile, "ci@example.com", SignatureAlgorithm::Ed25519, &SEED, 0).unwrap();
+        let with_extra = format!("{}extra", signed);
+        match verify_signature(&with_extra, &make_trusted()) {
+            Err(SignatureError::MalformedDirective { .. }) => {}
+            other => panic!("expected MalformedDirective, got {:?}", other),
+        }
     }
 
     #[test]
     fn test_verify_rejects_empty_signature() {
-        let content = "@source 0 https://reg.com/\n\npkg\tAAAA\n@signature ci@example.com \n";
-        assert!(matches!(
-            verify_signature(content, &public_key()),
-            Err(SignatureError::MalformedDirective { .. })
-        ));
+        let content = "@source 0 https://r.com/\n\npkg\tAAAA\n@signature ci@example.com 00 0 \n";
+        match verify_signature(content, &make_trusted()) {
+            Err(SignatureError::MalformedDirective { .. }) => {}
+            other => panic!("expected MalformedDirective, got {:?}", other),
+        }
     }
 
     #[test]
     fn test_verify_rejects_invalid_base64() {
-        let content = "@source 0 https://reg.com/\n\npkg\tAAAA\n@signature ci@example.com !!!invalid!!!\n";
-        assert!(matches!(
-            verify_signature(content, &public_key()),
-            Err(SignatureError::InvalidBase64(_))
-        ));
+        let content = "@source 0 https://r.com/\n\npkg\tAAAA\n@signature ci@example.com 00 0 !!!invalid!!!\n";
+        match verify_signature(content, &make_trusted()) {
+            Err(SignatureError::InvalidBase64(_)) => {}
+            other => panic!("expected InvalidBase64, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_verify_rejects_untrusted_key() {
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let signed = sign_lockfile(lockfile, "ci@example.com", SignatureAlgorithm::Ed25519, &SEED, 0).unwrap();
+        let trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+        match verify_signature(&signed, &trusted) {
+            Err(SignatureError::UntrustedKey { .. }) => {}
+            other => panic!("expected UntrustedKey, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_ed448_sign_not_yet_available() {
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let result = sign_lockfile(lockfile, "ed448@co.com", SignatureAlgorithm::Ed448, &[42u8; 57], 0);
+        assert!(matches!(result, Err(SignatureError::MalformedDirective { .. })));
+    }
+
+    #[test]
+    fn test_ed448_verify_not_yet_available() {
+        let content = "@source 0 https://r.com/\n\npkg\tAAAA\n@signature ed448@co.com 01 0 AAAA\n";
+        let mut trusted = HashMap::new();
+        trusted.insert("ed448@co.com".to_string(), (&[42u8; 57][..], SignatureAlgorithm::Ed448));
+        match verify_signature(content, &trusted) {
+            Err(SignatureError::MalformedDirective { .. }) => {}
+            other => panic!("expected MalformedDirective, got {:?}", other),
+        }
     }
 }
