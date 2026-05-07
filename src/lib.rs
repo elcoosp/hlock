@@ -9,7 +9,7 @@ pub mod graph;
 pub mod signature;
 
 pub use error::Error;
-pub use graph::{diff_lockfiles, extract_subgraph};
+pub use graph::{diff_lockfiles, extract_subgraph, extract_subgraph_platform};
 pub use lockfile::{
     Lockfile, Package, Source, DepType, Dependency, Override,
     HashAlgorithm, IntegrityHash, TargetOS, TargetArch,

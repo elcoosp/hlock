@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::payload::{PayloadData, DepPayload, PeerReqPayload, PlatformTagPayload, pack_payload, unpack_payload};
+use crate::payload::{PayloadData, DepPayload, PeerReqPayload, PlatformTagPayload, pack_payload, pack_payload_v8, unpack_payload};
 use crate::base64url::{encode, decode};
 use crate::fnv;
 use std::collections::hash_map::HashMap;
@@ -280,31 +280,22 @@ pub fn serialize_compat(lockfile: &mut Lockfile, mode: CompatMode) -> Result<Str
             });
         }
 
-        let has_v9_fields = !pkg.peer_requirements.is_empty() || !pkg.platform_tags.is_empty();
-        let peer_reqs: Vec<PeerReqPayload> = if matches!(mode, CompatMode::V9) || has_v9_fields {
-            pkg.peer_requirements.iter().map(|r| {
-                PeerReqPayload { peer_name: r.peer_name.clone(), version_range: r.version_range.clone(), is_optional: r.is_optional }
-            }).collect()
-        } else {
-            vec![]
-        };
-        let tags: Vec<PlatformTagPayload> = if matches!(mode, CompatMode::V9) || has_v9_fields {
-            pkg.platform_tags.iter().map(|t| {
-                let os_id = match t.os {
-                    TargetOS::Any => 0x00, TargetOS::Linux => 0x01, TargetOS::MacOS => 0x02,
-                    TargetOS::Windows => 0x03, TargetOS::FreeBSD => 0x04, TargetOS::Android => 0x05,
-                    TargetOS::IOS => 0x06, TargetOS::Unknown => 0xFF,
-                };
-                let arch_id = match t.arch {
-                    TargetArch::Any => 0x00, TargetArch::X86_64 => 0x01, TargetArch::Aarch64 => 0x02,
-                    TargetArch::Wasm32 => 0x03, TargetArch::Arm => 0x04, TargetArch::S390x => 0x05,
-                    TargetArch::Ppc64le => 0x06, TargetArch::Unknown => 0xFF,
-                };
-                PlatformTagPayload { os_id, arch_id }
-            }).collect()
-        } else {
-            vec![]
-        };
+        let peer_reqs: Vec<PeerReqPayload> = pkg.peer_requirements.iter().map(|r| {
+            PeerReqPayload { peer_name: r.peer_name.clone(), version_range: r.version_range.clone(), is_optional: r.is_optional }
+        }).collect();
+        let tags: Vec<PlatformTagPayload> = pkg.platform_tags.iter().map(|t| {
+            let os_id = match t.os {
+                TargetOS::Any => 0x00, TargetOS::Linux => 0x01, TargetOS::MacOS => 0x02,
+                TargetOS::Windows => 0x03, TargetOS::FreeBSD => 0x04, TargetOS::Android => 0x05,
+                TargetOS::IOS => 0x06, TargetOS::Unknown => 0xFF,
+            };
+            let arch_id = match t.arch {
+                TargetArch::Any => 0x00, TargetArch::X86_64 => 0x01, TargetArch::Aarch64 => 0x02,
+                TargetArch::Wasm32 => 0x03, TargetArch::Arm => 0x04, TargetArch::S390x => 0x05,
+                TargetArch::Ppc64le => 0x06, TargetArch::Unknown => 0xFF,
+            };
+            PlatformTagPayload { os_id, arch_id }
+        }).collect();
         let payload_data = PayloadData {
             logical_name: pkg.logical_name.clone(),
             source_idx: pkg.source_idx,
@@ -318,7 +309,10 @@ pub fn serialize_compat(lockfile: &mut Lockfile, mode: CompatMode) -> Result<Str
             peer_requirements: peer_reqs,
             platform_tags: tags,
         };
-        let encoded = encode(&pack_payload(&payload_data));
+        let encoded = encode(&match mode {
+            CompatMode::V8 => pack_payload_v8(&payload_data),
+            CompatMode::V9 => pack_payload(&payload_data),
+        });
         out.push_str(&format!("{}\t{}\n", pkg.name, encoded));
     }
     Ok(out)
@@ -332,6 +326,7 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
 
     for (idx, line) in pkg_content.lines().enumerate() {
         if line.trim().is_empty() { continue; }
+        if line.starts_with("@signature ") { continue; }
         let line_num = header_line_count + idx;
         let (name, encoded) = line.split_once('\t')
             .ok_or(Error::MissingDelimiter { line_number: line_num })?;
