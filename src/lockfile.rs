@@ -95,6 +95,21 @@ pub struct HookHash {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Export {
+    pub identifier: String,
+    pub hash_algo: HashAlgorithm,
+    pub digest: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Artifact {
+    pub os_id: u8,
+    pub arch_id: u8,
+    pub hash_algo: HashAlgorithm,
+    pub digest: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspacePkg {
     pub name: String,
     pub manifest_path: String,

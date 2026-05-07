@@ -413,6 +413,8 @@ mod tests {
             hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![],
             platform_tags: vec![],
+            exports: vec![],
+            artifacts: vec![],
             hook_hashes: vec![HookHashPayload {
                 hook_type: "postinstall".to_string(),
                 hash_algo: 0x03,
@@ -435,6 +437,8 @@ mod tests {
             logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
             hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![],
+            artifacts: vec![],
             hook_hashes: vec![],
             patch_hash: Some((0x03, vec![0xBB; 32])),
         };
@@ -450,6 +454,8 @@ mod tests {
             logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
             hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![],
+            artifacts: vec![],
             hook_hashes: vec![],
             patch_hash: None,
         };
@@ -465,6 +471,8 @@ mod tests {
             hashes: vec![HashPayload { algo_id: 0x01, digest: vec![0xAA; 32], attestation: Attestation::None }],
             features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![],
+            artifacts: vec![],
             hook_hashes: vec![], patch_hash: None,
         };
         let packed = pack_payload(&data);
@@ -480,6 +488,8 @@ mod tests {
             hashes: vec![], features: vec![], resolved_peers: vec![],
             deps: vec![DepPayload { content_id: 12345678, dep_type: 0x00, target_os: None, target_arch: None, req_feat_indices: vec![] }],
             peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![],
+            artifacts: vec![],
             hook_hashes: vec![], patch_hash: None,
         };
         let packed = pack_payload(&data);
@@ -498,6 +508,8 @@ mod tests {
             resolved_peers: vec![],
             deps: vec![DepPayload { content_id: 99, dep_type: 0x01, target_os: None, target_arch: None, req_feat_indices: vec![0] }],
             peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![],
+            artifacts: vec![],
             hook_hashes: vec![], patch_hash: None,
         };
         let packed = pack_payload(&data);
@@ -517,6 +529,8 @@ mod tests {
             }],
             features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![],
+            artifacts: vec![],
             hook_hashes: vec![], patch_hash: None,
         };
         let packed = pack_payload(&data);
@@ -535,6 +549,8 @@ mod tests {
                 peer_name: "react".to_string(), satisfied_by_content_id: 99, is_hoisted_to_root: true,
             }], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![],
+            artifacts: vec![],
             hook_hashes: vec![], patch_hash: None,
         };
         let packed = pack_payload(&data);
@@ -550,6 +566,8 @@ mod tests {
             hashes: vec![HashPayload { algo_id: 0x01, digest: vec![], attestation: Attestation::None }],
             features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
+            exports: vec![],
+            artifacts: vec![],
             hook_hashes: vec![], patch_hash: None,
         };
         let mut bad_payload = pack_payload(&data);
@@ -568,6 +586,8 @@ mod tests {
                 is_optional: false,
             }],
             platform_tags: vec![],
+            exports: vec![],
+            artifacts: vec![],
             hook_hashes: vec![],
             patch_hash: None,
         };
@@ -589,6 +609,8 @@ mod tests {
                 PeerReqPayload { peer_name: "react-dom".to_string(), version_range: "".to_string(), is_optional: true },
             ],
             platform_tags: vec![PlatformTagPayload { os_id: 0x01, arch_id: 0x01 }, PlatformTagPayload { os_id: 0x02, arch_id: 0x02 }],
+            exports: vec![],
+            artifacts: vec![],
             hook_hashes: vec![], patch_hash: None,
         };
         let packed = pack_payload(&data);
