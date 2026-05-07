@@ -1,20 +1,25 @@
-pub mod varint;
 pub mod base64url;
-pub mod payload;
-pub mod lockfile;
-pub mod error;
 pub mod crc32;
+pub mod error;
 pub mod fnv;
 pub mod graph;
+pub mod lockfile;
+pub mod payload;
 pub mod signature;
+pub mod varint;
 
 pub use error::Error;
-pub use graph::{diff_lockfiles, extract_subgraph, extract_subgraph_platform};
 pub use lockfile::{
-    Lockfile, Package, Source, DepType, Dependency, Override,
-    HashAlgorithm, IntegrityHash, TargetOS, TargetArch,
-    PackageChange, LockfileDiff, Attestation, SlsaPredicate, PeerResolution,
-    PlatformTag, PeerRequirement, CompatMode,
-    serialize, serialize_compat, deserialize, write_lockfile, read_lockfile,
+    Attestation, DepType, Dependency, HashAlgorithm, HoistBoundary,
+    IntegrityHash, Lockfile, LockfileDiff, Override, Package, PackageChange,
+    PatchDirective, PeerResolution, PeerRequirement, PlatformTag,
+    ScriptHash, ScriptType, Source, SlsaPredicate, TargetArch, TargetOS, WorkspacePkg,
+    deserialize, read_lockfile, serialize, validate_hoist_boundary, validate_patches,
+    validate_scripts, write_lockfile,
 };
-pub use signature::{SignatureError, sign_lockfile, verify_signature};
+pub use graph::{diff_lockfiles, extract_subgraph, extract_subgraph_platform};
+pub use payload::{
+    DepPayload, pack_payload, unpack_payload, PeerReqPayload, PlatformTagPayload,
+    ScriptHashPayload, PayloadData,
+};
+pub use signature::{sign_lockfile, verify_signature};

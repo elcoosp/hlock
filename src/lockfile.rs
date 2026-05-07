@@ -1,13 +1,10 @@
-use crate::base64url::{decode, encode};
 use crate::error::Error;
+use crate::payload::{PayloadData, DepPayload, PeerReqPayload, PlatformTagPayload, ScriptHashPayload, pack_payload, unpack_payload};
+use crate::base64url::{encode, decode};
 use crate::fnv;
-use crate::payload::{
-    DepPayload, PayloadData, PeerReqPayload, PlatformTagPayload, ScriptHashPayload, pack_payload,
-    pack_payload_v8, pack_payload_v9, unpack_payload,
-};
 use std::collections::hash_map::HashMap;
-use std::fs;
 use std::path::Path;
+use std::fs;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
@@ -20,12 +17,7 @@ pub enum Source {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum HashAlgorithm {
-    Sha1,
-    Sha256,
-    Sha512,
-    Blake3,
-}
+pub enum HashAlgorithm { Sha1, Sha256, Sha512, Blake3 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlsaPredicate {
@@ -48,27 +40,9 @@ pub struct IntegrityHash {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TargetOS {
-    Any,
-    Linux,
-    MacOS,
-    Windows,
-    FreeBSD,
-    Android,
-    IOS,
-    Unknown,
-}
+pub enum TargetOS { Any, Linux, MacOS, Windows, FreeBSD, Android, IOS, Unknown }
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TargetArch {
-    Any,
-    X86_64,
-    Aarch64,
-    Wasm32,
-    Arm,
-    S390x,
-    Ppc64le,
-    Unknown,
-}
+pub enum TargetArch { Any, X86_64, Aarch64, Wasm32, Arm, S390x, Ppc64le, Unknown }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DepType {
@@ -152,13 +126,6 @@ pub struct PatchDirective {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CompatMode {
-    V8,
-    V9,
-    V10,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerResolution {
     pub peer_name: String,
     pub satisfied_by_content_id: u64,
@@ -216,34 +183,20 @@ fn format_header(lockfile: &Lockfile) -> Result<String, Error> {
         out.push_str(&format!("@source {} {}\n", idx, val));
     }
     for ovr in &lockfile.overrides {
-        out.push_str(&format!(
-            "@override {} {} -> {}\n",
-            ovr.name, ovr.from_version, ovr.to_version
-        ));
+        out.push_str(&format!("@override {} {} -> {}\n", ovr.name, ovr.from_version, ovr.to_version));
     }
     for (name, flags) in &lockfile.features {
-        let flags_str = if flags.is_empty() {
-            ""
-        } else {
-            &flags.join(",")
-        };
+        let flags_str = if flags.is_empty() { "" } else { &flags.join(",") };
         out.push_str(&format!("@feature {} {}\n", name, flags_str));
     }
     if let Some(root) = &lockfile.workspace_root {
         out.push_str(&format!("@workspace-root {}\n", root));
     }
     for wp in &lockfile.workspace_pkgs {
-        out.push_str(&format!(
-            "@workspace-pkg {} {}\n",
-            wp.name, wp.manifest_path
-        ));
+        out.push_str(&format!("@workspace-pkg {} {}\n", wp.name, wp.manifest_path));
     }
     for hb in &lockfile.hoist_boundaries {
-        let deps = if hb.allowed_deps.is_empty() {
-            String::new()
-        } else {
-            format!("[{}]", hb.allowed_deps.join(","))
-        };
+        let deps = if hb.allowed_deps.is_empty() { String::new() } else { format!("[{}]", hb.allowed_deps.join(",")) };
         out.push_str(&format!("@hoist-boundary {} -> {}\n", hb.cosine, deps));
     }
     out.push('\n');
@@ -263,42 +216,19 @@ fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
         if line.is_empty() {
             let header_end = content.find("\n\n").map(|i| i + 2).unwrap_or(content.len());
             let remaining = &content[header_end..];
-            return Ok((
-                Lockfile {
-                    sources,
-                    overrides,
-                    features,
-                    workspace_root,
-                    workspace_pkgs,
-                    hoist_boundaries,
-                    packages: vec![],
-                    patches: vec![],
-                },
-                remaining,
-            ));
+            return Ok((Lockfile { sources, overrides, features, workspace_root, workspace_pkgs, hoist_boundaries, packages: vec![], patches: vec![] }, remaining));
         }
 
         if let Some(rest) = line.strip_prefix("@source ") {
             let mut parts = rest.splitn(2, ' ');
-            let idx_str = parts.next().ok_or_else(|| Error::InvalidHeader {
-                line_number: line_num,
-                reason: "Missing source index".to_string(),
-            })?;
-            let idx: usize = idx_str.parse().map_err(|_| Error::InvalidHeader {
-                line_number: line_num,
-                reason: "Invalid source index".to_string(),
-            })?;
-            let val = parts.next().ok_or_else(|| Error::InvalidHeader {
-                line_number: line_num,
-                reason: "Missing source value".to_string(),
-            })?;
+            let idx_str = parts.next().ok_or_else(|| Error::InvalidHeader { line_number: line_num, reason: "Missing source index".to_string() })?;
+            let idx: usize = idx_str.parse().map_err(|_| Error::InvalidHeader { line_number: line_num, reason: "Invalid source index".to_string() })?;
+            let val = parts.next().ok_or_else(|| Error::InvalidHeader { line_number: line_num, reason: "Missing source value".to_string() })?;
             let source = if val == "workspace" {
                 Source::Workspace
             } else if val.starts_with("file://") || val.starts_with('/') {
                 Source::Local(val.to_string())
-            } else if val.starts_with("git://")
-                || (val.starts_with("https://") && val.contains(".git"))
-            {
+            } else if val.starts_with("git://") || (val.starts_with("https://") && val.contains(".git")) {
                 Source::Git(val.to_string())
             } else if val.starts_with("cas+http://") || val.starts_with("cas+https://") {
                 Source::CasHttp(val.strip_prefix("cas+").unwrap_or(val).to_string())
@@ -308,127 +238,71 @@ fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
                 Source::Registry(val.to_string())
             };
             if idx != sources.len() {
-                return Err(Error::InvalidHeader {
-                    line_number: line_num,
-                    reason: format!("Source index {} is out of order", idx),
-                });
+                return Err(Error::InvalidHeader { line_number: line_num, reason: format!("Source index {} is out of order", idx) });
             }
             sources.push(source);
         } else if let Some(rest) = line.strip_prefix("@override ") {
             let mut parts = rest.split(" -> ");
             let left = parts.next().unwrap_or("");
-            let to_ver = parts.next().ok_or_else(|| Error::InvalidHeader {
-                line_number: line_num,
-                reason: "Missing '->' in override".to_string(),
-            })?;
+            let to_ver = parts.next().ok_or_else(|| Error::InvalidHeader { line_number: line_num, reason: "Missing '->' in override".to_string() })?;
             let mut left_parts = left.splitn(2, ' ');
             let name = left_parts.next().unwrap_or("").to_string();
             let from_ver = left_parts.next().unwrap_or("").to_string();
-            overrides.push(Override {
-                name,
-                from_version: from_ver,
-                ty: DepType::Runtime,
-                to_version: to_ver.to_string(),
-            });
+            overrides.push(Override { name, from_version: from_ver, ty: DepType::Runtime, to_version: to_ver.to_string() });
         } else if let Some(rest) = line.strip_prefix("@feature ") {
             let mut parts = rest.splitn(2, ' ');
             let name = parts.next().unwrap_or("").to_string();
             let flags_str = parts.next().unwrap_or("").to_string();
-            let flags = if flags_str.is_empty() {
-                vec![]
-            } else {
-                flags_str.split(',').map(|s| s.trim().to_string()).collect()
-            };
+            let flags = if flags_str.is_empty() { vec![] } else { flags_str.split(',').map(|s| s.trim().to_string()).collect() };
             features.push((name, flags));
         } else if let Some(rest) = line.strip_prefix("@workspace-root ") {
             workspace_root = Some(rest.trim().to_string());
         } else if let Some(rest) = line.strip_prefix("@workspace-pkg ") {
             let (name, manifest_path) = rest.split_once(' ').unwrap_or((rest, ""));
-            workspace_pkgs.push(WorkspacePkg {
-                name: name.to_string(),
-                manifest_path: manifest_path.to_string(),
-            });
+            workspace_pkgs.push(WorkspacePkg { name: name.to_string(), manifest_path: manifest_path.to_string() });
         } else if let Some(rest) = line.strip_prefix("@hoist-boundary ") {
             let mut parts = rest.splitn(2, "->");
             let cosine = parts.next().unwrap_or("").trim().to_string();
             let deps_str = parts.next().unwrap_or("").trim();
             let deps_str = deps_str.strip_prefix("[").unwrap_or(deps_str);
             let deps_str = deps_str.strip_suffix("]").unwrap_or(deps_str);
-            let allowed_deps = if deps_str.is_empty() {
-                vec![]
-            } else {
-                deps_str.split(',').map(|s| s.trim().to_string()).collect()
-            };
-            hoist_boundaries.push(HoistBoundary {
-                cosine,
-                allowed_deps,
-            });
+            let allowed_deps = if deps_str.is_empty() { vec![] } else { deps_str.split(',').map(|s| s.trim().to_string()).collect() };
+            hoist_boundaries.push(HoistBoundary { cosine, allowed_deps });
         } else {
-            return Err(Error::InvalidHeader {
-                line_number: line_num,
-                reason: format!("Unknown directive: {}", line),
-            });
+            return Err(Error::InvalidHeader { line_number: line_num, reason: format!("Unknown directive: {}", line) });
         }
     }
 
-    Err(Error::InvalidHeader {
-        line_number: 0,
-        reason: "Missing empty line separator after header".to_string(),
-    })
+    Err(Error::InvalidHeader { line_number: 0, reason: "Missing empty line separator after header".to_string() })
 }
 
 pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
-    serialize_compat(lockfile, CompatMode::V10)
-}
-
-pub fn serialize_compat(lockfile: &mut Lockfile, mode: CompatMode) -> Result<String, Error> {
     let mut out = format_header(lockfile)?;
     lockfile.packages.sort_by(|a, b| a.name.cmp(&b.name));
 
     for pkg in lockfile.packages.iter() {
         if pkg.source_idx >= lockfile.sources.len() {
-            return Err(Error::MissingSource {
-                line_number: 0,
-                index: pkg.source_idx,
-            });
+            return Err(Error::MissingSource { line_number: 0, index: pkg.source_idx });
         }
         if matches!(lockfile.sources[pkg.source_idx], Source::Workspace) && !pkg.hashes.is_empty() {
             return Err(Error::InvalidWorkspaceHash { line_number: 0 });
         }
 
-        let hashes: Vec<crate::payload::HashPayload> = pkg
-            .hashes
-            .iter()
-            .map(|h| {
-                let algo_id = match h.algo {
-                    HashAlgorithm::Sha1 => 0,
-                    HashAlgorithm::Sha256 => 1,
-                    HashAlgorithm::Sha512 => 2,
-                    HashAlgorithm::Blake3 => 3,
-                };
-                crate::payload::HashPayload {
-                    algo_id,
-                    digest: h.digest.clone(),
-                    attestation: h.attestation.clone(),
-                }
-            })
-            .collect();
+        let hashes: Vec<crate::payload::HashPayload> = pkg.hashes.iter().map(|h| {
+            let algo_id = match h.algo { HashAlgorithm::Sha1 => 0, HashAlgorithm::Sha256 => 1, HashAlgorithm::Sha512 => 2, HashAlgorithm::Blake3 => 3 };
+            crate::payload::HashPayload { algo_id, digest: h.digest.clone(), attestation: h.attestation.clone() }
+        }).collect();
 
         let mut deps = Vec::new();
         for dep in &pkg.dependencies {
-            let dep_pkg = lockfile
-                .packages
-                .iter()
+            let dep_pkg = lockfile.packages.iter()
                 .find(|p| p.name == dep.name)
                 .ok_or_else(|| Error::MissingContentId {
                     package: pkg.name.clone(),
                     content_id: fnv::calculate(&format!("{}@0.0.0", dep.name)),
                 })?;
 
-            let dep_ver_str = format!(
-                "{}@{}.{}.{}",
-                dep_pkg.name, dep_pkg.major, dep_pkg.minor, dep_pkg.patch
-            );
+            let dep_ver_str = format!("{}@{}.{}.{}", dep_pkg.name, dep_pkg.major, dep_pkg.minor, dep_pkg.patch);
             let cid = fnv::calculate(&dep_ver_str);
 
             let mut req_indices = Vec::new();
@@ -445,24 +319,14 @@ pub fn serialize_compat(lockfile: &mut Lockfile, mode: CompatMode) -> Result<Str
                 DepType::Optional => (0x03, None, None),
                 DepType::OptionalTarget(target_os, target_arch) => {
                     let os_id = match target_os {
-                        TargetOS::Any => 0x00,
-                        TargetOS::Linux => 0x01,
-                        TargetOS::MacOS => 0x02,
-                        TargetOS::Windows => 0x03,
-                        TargetOS::FreeBSD => 0x04,
-                        TargetOS::Android => 0x05,
-                        TargetOS::IOS => 0x06,
-                        TargetOS::Unknown => 0xFF,
+                        TargetOS::Any => 0x00, TargetOS::Linux => 0x01, TargetOS::MacOS => 0x02,
+                        TargetOS::Windows => 0x03, TargetOS::FreeBSD => 0x04, TargetOS::Android => 0x05,
+                        TargetOS::IOS => 0x06, TargetOS::Unknown => 0xFF,
                     };
                     let arch_id = match target_arch {
-                        TargetArch::Any => 0x00,
-                        TargetArch::X86_64 => 0x01,
-                        TargetArch::Aarch64 => 0x02,
-                        TargetArch::Wasm32 => 0x03,
-                        TargetArch::Arm => 0x04,
-                        TargetArch::S390x => 0x05,
-                        TargetArch::Ppc64le => 0x06,
-                        TargetArch::Unknown => 0xFF,
+                        TargetArch::Any => 0x00, TargetArch::X86_64 => 0x01, TargetArch::Aarch64 => 0x02,
+                        TargetArch::Wasm32 => 0x03, TargetArch::Arm => 0x04, TargetArch::S390x => 0x05,
+                        TargetArch::Ppc64le => 0x06, TargetArch::Unknown => 0xFF,
                     };
                     (0x04, Some(os_id), Some(arch_id))
                 }
@@ -476,98 +340,47 @@ pub fn serialize_compat(lockfile: &mut Lockfile, mode: CompatMode) -> Result<Str
             });
         }
 
-        let include_v9 = matches!(mode, CompatMode::V9) || matches!(mode, CompatMode::V10);
-        let include_v10 = matches!(mode, CompatMode::V10);
+        let peer_reqs: Vec<PeerReqPayload> = pkg.peer_requirements.iter().map(|r| {
+            PeerReqPayload { peer_name: r.peer_name.clone(), version_range: r.version_range.clone(), is_optional: r.is_optional }
+        }).collect();
 
-        let peer_reqs: Vec<PeerReqPayload> = if include_v9 {
-            pkg.peer_requirements
-                .iter()
-                .map(|r| PeerReqPayload {
-                    peer_name: r.peer_name.clone(),
-                    version_range: r.version_range.clone(),
-                    is_optional: r.is_optional,
-                })
-                .collect()
-        } else {
-            vec![]
-        };
-        let tags: Vec<PlatformTagPayload> = if include_v9 {
-            pkg.platform_tags
-                .iter()
-                .map(|t| {
-                    let os_id = match t.os {
-                        TargetOS::Any => 0x00,
-                        TargetOS::Linux => 0x01,
-                        TargetOS::MacOS => 0x02,
-                        TargetOS::Windows => 0x03,
-                        TargetOS::FreeBSD => 0x04,
-                        TargetOS::Android => 0x05,
-                        TargetOS::IOS => 0x06,
-                        TargetOS::Unknown => 0xFF,
-                    };
-                    let arch_id = match t.arch {
-                        TargetArch::Any => 0x00,
-                        TargetArch::X86_64 => 0x01,
-                        TargetArch::Aarch64 => 0x02,
-                        TargetArch::Wasm32 => 0x03,
-                        TargetArch::Arm => 0x04,
-                        TargetArch::S390x => 0x05,
-                        TargetArch::Ppc64le => 0x06,
-                        TargetArch::Unknown => 0xFF,
-                    };
-                    PlatformTagPayload { os_id, arch_id }
-                })
-                .collect()
-        } else {
-            vec![]
-        };
+        let tags: Vec<PlatformTagPayload> = pkg.platform_tags.iter().map(|t| {
+            let os_id = match t.os {
+                TargetOS::Any => 0x00, TargetOS::Linux => 0x01, TargetOS::MacOS => 0x02,
+                TargetOS::Windows => 0x03, TargetOS::FreeBSD => 0x04, TargetOS::Android => 0x05,
+                TargetOS::IOS => 0x06, TargetOS::Unknown => 0xFF,
+            };
+            let arch_id = match t.arch {
+                TargetArch::Any => 0x00, TargetArch::X86_64 => 0x01, TargetArch::Aarch64 => 0x02,
+                TargetArch::Wasm32 => 0x03, TargetArch::Arm => 0x04, TargetArch::S390x => 0x05,
+                TargetArch::Ppc64le => 0x06, TargetArch::Unknown => 0xFF,
+            };
+            PlatformTagPayload { os_id, arch_id }
+        }).collect();
 
-        let script_hashes: Vec<ScriptHashPayload> = if include_v10 {
-            pkg.script_hashes
-                .iter()
-                .map(|sh| {
-                    let st_id: u8 = match sh.script_type {
-                        ScriptType::Prepare => 0x00,
-                        ScriptType::PreInstall => 0x01,
-                        ScriptType::Install => 0x02,
-                        ScriptType::PostInstall => 0x03,
-                        ScriptType::PreBuild => 0x04,
-                        ScriptType::Build => 0x05,
-                        ScriptType::PostBuild => 0x06,
-                        ScriptType::Other => 0xFF,
-                    };
-                    let algo_id: u8 = match sh.hash_algo {
-                        HashAlgorithm::Sha1 => 0x00,
-                        HashAlgorithm::Sha256 => 0x01,
-                        HashAlgorithm::Sha512 => 0x02,
-                        HashAlgorithm::Blake3 => 0x03,
-                    };
-                    ScriptHashPayload {
-                        script_type: st_id,
-                        hash_algo: algo_id,
-                        digest: sh.digest.clone(),
-                    }
-                })
-                .collect()
-        } else {
-            vec![]
-        };
+        let script_hashes: Vec<ScriptHashPayload> = pkg.script_hashes.iter().map(|sh| {
+            let st_id: u8 = match sh.script_type {
+                ScriptType::Prepare => 0x00,
+                ScriptType::PreInstall => 0x01,
+                ScriptType::Install => 0x02,
+                ScriptType::PostInstall => 0x03,
+                ScriptType::PreBuild => 0x04,
+                ScriptType::Build => 0x05,
+                ScriptType::PostBuild => 0x06,
+                ScriptType::Other => 0xFF,
+            };
+            let algo_id: u8 = match sh.hash_algo {
+                HashAlgorithm::Sha1 => 0x00, HashAlgorithm::Sha256 => 0x01, HashAlgorithm::Sha512 => 0x02, HashAlgorithm::Blake3 => 0x03,
+            };
+            ScriptHashPayload { script_type: st_id, hash_algo: algo_id, digest: sh.digest.clone() }
+        }).collect();
 
-        let patch_hash: Option<(u8, Vec<u8>)> = if include_v10 {
-            pkg.patch_hash
-                .as_ref()
-                .map(|(algo, digest): &(HashAlgorithm, Vec<u8>)| {
-                    let algo_id: u8 = match algo {
-                        HashAlgorithm::Sha1 => 0x00,
-                        HashAlgorithm::Sha256 => 0x01,
-                        HashAlgorithm::Sha512 => 0x02,
-                        HashAlgorithm::Blake3 => 0x03,
-                    };
-                    (algo_id, digest.clone())
-                })
-        } else {
-            None
-        };
+        let patch_hash: Option<(u8, Vec<u8>)> = pkg.patch_hash.as_ref().map(|(algo, digest): &(HashAlgorithm, Vec<u8>)| {
+            let algo_id: u8 = match algo {
+                HashAlgorithm::Sha1 => 0x00, HashAlgorithm::Sha256 => 0x01, HashAlgorithm::Sha512 => 0x02, HashAlgorithm::Blake3 => 0x03,
+            };
+            (algo_id, digest.clone())
+        });
 
         let payload_data = PayloadData {
             logical_name: pkg.logical_name.clone(),
@@ -584,19 +397,12 @@ pub fn serialize_compat(lockfile: &mut Lockfile, mode: CompatMode) -> Result<Str
             script_hashes,
             patch_hash,
         };
-        let encoded = encode(&match mode {
-            CompatMode::V8 => pack_payload_v8(&payload_data),
-            CompatMode::V9 => pack_payload_v9(&payload_data),
-            CompatMode::V10 => pack_payload(&payload_data),
-        });
+        let encoded = encode(&pack_payload(&payload_data));
         out.push_str(&format!("{}\t{}\n", pkg.name, encoded));
     }
 
     for p in &lockfile.patches {
-        out.push_str(&format!(
-            "@patch {:016x} {:02x} {}\n",
-            p.content_id, p.patch_type, p.relative_path
-        ));
+        out.push_str(&format!("@patch {:016x} {:02x} {}\n", p.content_id, p.patch_type, p.relative_path));
     }
     Ok(out)
 }
@@ -609,29 +415,18 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
     let patches = Vec::new();
 
     for (idx, line) in pkg_content.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        if line.starts_with("@signature ") {
-            continue;
-        }
-        if line.starts_with("@patch ") {
-            continue;
-        }
+        if line.trim().is_empty() { continue; }
+        if line.starts_with("@signature ") { continue; }
+        if line.starts_with("@patch ") { continue; }
         let line_num = header_line_count + idx;
-        let (name, encoded) = line.split_once('\t').ok_or(Error::MissingDelimiter {
-            line_number: line_num,
-        })?;
-        let binary = decode(encoded.as_bytes()).map_err(|_| Error::InvalidBase64 {
-            line_number: line_num,
-        })?;
+        let (name, encoded) = line.split_once('\t')
+            .ok_or(Error::MissingDelimiter { line_number: line_num })?;
+        let binary = decode(encoded.as_bytes())
+            .map_err(|_| Error::InvalidBase64 { line_number: line_num })?;
         let payload = unpack_payload(&binary, line_num)?;
 
         if payload.source_idx >= lockfile.sources.len() {
-            return Err(Error::MissingSource {
-                line_number: line_num,
-                index: payload.source_idx,
-            });
+            return Err(Error::MissingSource { line_number: line_num, index: payload.source_idx });
         }
 
         parsed_payloads.push((name.to_string(), payload, line_num));
@@ -639,46 +434,26 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
 
     let mut id_map: HashMap<u64, (String, Vec<String>)> = HashMap::new();
     for (name, payload, _) in &parsed_payloads {
-        let cid = fnv::calculate(&format!(
-            "{}@{}.{}.{}",
-            name, payload.major, payload.minor, payload.patch
-        ));
+        let cid = fnv::calculate(&format!("{}@{}.{}.{}", name, payload.major, payload.minor, payload.patch));
         id_map.insert(cid, (name.clone(), payload.features.clone()));
     }
 
     let mut packages = Vec::new();
     for (name, payload, _line_num) in parsed_payloads {
-        let hashes: Vec<IntegrityHash> = payload
-            .hashes
-            .iter()
-            .map(|h| {
-                let algo = match h.algo_id {
-                    0 => HashAlgorithm::Sha1,
-                    1 => HashAlgorithm::Sha256,
-                    2 => HashAlgorithm::Sha512,
-                    _ => HashAlgorithm::Blake3,
-                };
-                IntegrityHash {
-                    algo,
-                    digest: h.digest.clone(),
-                    attestation: h.attestation.clone(),
-                }
-            })
-            .collect();
+        let hashes: Vec<IntegrityHash> = payload.hashes.iter().map(|h| {
+            let algo = match h.algo_id { 0 => HashAlgorithm::Sha1, 1 => HashAlgorithm::Sha256, 2 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 };
+            IntegrityHash { algo, digest: h.digest.clone(), attestation: h.attestation.clone() }
+        }).collect();
 
         let mut dependencies = Vec::new();
         for dep in &payload.deps {
-            let (dep_name, dep_features) =
-                id_map
-                    .get(&dep.content_id)
-                    .ok_or_else(|| Error::MissingContentId {
-                        package: name.clone(),
-                        content_id: dep.content_id,
-                    })?;
+            let (dep_name, dep_features) = id_map.get(&dep.content_id)
+                .ok_or_else(|| Error::MissingContentId {
+                    package: name.clone(),
+                    content_id: dep.content_id,
+                })?;
 
-            let req_feats: Vec<String> = dep
-                .req_feat_indices
-                .iter()
+            let req_feats: Vec<String> = dep.req_feat_indices.iter()
                 .map(|i| dep_features.get(*i).cloned().unwrap_or_default())
                 .collect();
 
@@ -688,32 +463,16 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
                 2 => DepType::Peer,
                 3 => DepType::Optional,
                 4 => {
-                    let os = dep
-                        .target_os
-                        .map(|o| match o {
-                            0x00 => TargetOS::Any,
-                            0x01 => TargetOS::Linux,
-                            0x02 => TargetOS::MacOS,
-                            0x03 => TargetOS::Windows,
-                            0x04 => TargetOS::FreeBSD,
-                            0x05 => TargetOS::Android,
-                            0x06 => TargetOS::IOS,
-                            _ => TargetOS::Unknown,
-                        })
-                        .unwrap_or(TargetOS::Any);
-                    let arch = dep
-                        .target_arch
-                        .map(|a| match a {
-                            0x00 => TargetArch::Any,
-                            0x01 => TargetArch::X86_64,
-                            0x02 => TargetArch::Aarch64,
-                            0x03 => TargetArch::Wasm32,
-                            0x04 => TargetArch::Arm,
-                            0x05 => TargetArch::S390x,
-                            0x06 => TargetArch::Ppc64le,
-                            _ => TargetArch::Unknown,
-                        })
-                        .unwrap_or(TargetArch::Any);
+                    let os = dep.target_os.map(|o| match o {
+                        0x00 => TargetOS::Any, 0x01 => TargetOS::Linux, 0x02 => TargetOS::MacOS,
+                        0x03 => TargetOS::Windows, 0x04 => TargetOS::FreeBSD, 0x05 => TargetOS::Android,
+                        0x06 => TargetOS::IOS, _ => TargetOS::Unknown,
+                    }).unwrap_or(TargetOS::Any);
+                    let arch = dep.target_arch.map(|a| match a {
+                        0x00 => TargetArch::Any, 0x01 => TargetArch::X86_64, 0x02 => TargetArch::Aarch64,
+                        0x03 => TargetArch::Wasm32, 0x04 => TargetArch::Arm, 0x05 => TargetArch::S390x,
+                        0x06 => TargetArch::Ppc64le, _ => TargetArch::Unknown,
+                    }).unwrap_or(TargetArch::Any);
                     DepType::OptionalTarget(os, arch)
                 }
                 _ => DepType::Runtime,
@@ -735,69 +494,41 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
             features: payload.features,
             resolved_peers: payload.resolved_peers,
             dependencies,
-            peer_requirements: payload
-                .peer_requirements
-                .iter()
-                .map(|r| PeerRequirement {
-                    peer_name: r.peer_name.clone(),
-                    version_range: r.version_range.clone(),
-                    is_optional: r.is_optional,
-                })
-                .collect(),
-            platform_tags: payload
-                .platform_tags
-                .iter()
-                .map(|t| {
-                    let os = match t.os_id {
-                        0x00 => TargetOS::Any,
-                        0x01 => TargetOS::Linux,
-                        0x02 => TargetOS::MacOS,
-                        0x03 => TargetOS::Windows,
-                        0x04 => TargetOS::FreeBSD,
-                        0x05 => TargetOS::Android,
-                        0x06 => TargetOS::IOS,
-                        _ => TargetOS::Unknown,
-                    };
-                    let arch = match t.arch_id {
-                        0x00 => TargetArch::Any,
-                        0x01 => TargetArch::X86_64,
-                        0x02 => TargetArch::Aarch64,
-                        0x03 => TargetArch::Wasm32,
-                        0x04 => TargetArch::Arm,
-                        0x05 => TargetArch::S390x,
-                        0x06 => TargetArch::Ppc64le,
-                        _ => TargetArch::Unknown,
-                    };
-                    PlatformTag { os, arch }
-                })
-                .collect(),
-            script_hashes: payload
-                .script_hashes
-                .iter()
-                .map(|sh| {
-                    let st = match sh.script_type {
-                        0x00 => ScriptType::Prepare,
-                        0x01 => ScriptType::PreInstall,
-                        0x02 => ScriptType::Install,
-                        0x03 => ScriptType::PostInstall,
-                        0x04 => ScriptType::PreBuild,
-                        0x05 => ScriptType::Build,
-                        0x06 => ScriptType::PostBuild,
-                        _ => ScriptType::Other,
-                    };
-                    let algo = match sh.hash_algo {
-                        0x00 => HashAlgorithm::Sha1,
-                        0x01 => HashAlgorithm::Sha256,
-                        0x02 => HashAlgorithm::Sha512,
-                        _ => HashAlgorithm::Blake3,
-                    };
-                    ScriptHash {
-                        script_type: st,
-                        hash_algo: algo,
-                        digest: sh.digest.clone(),
-                    }
-                })
-                .collect(),
+            peer_requirements: payload.peer_requirements.iter().map(|r| {
+                PeerRequirement { peer_name: r.peer_name.clone(), version_range: r.version_range.clone(), is_optional: r.is_optional }
+            }).collect(),
+            platform_tags: payload.platform_tags.iter().map(|t| {
+                let os = match t.os_id {
+                    0x00 => TargetOS::Any, 0x01 => TargetOS::Linux, 0x02 => TargetOS::MacOS,
+                    0x03 => TargetOS::Windows, 0x04 => TargetOS::FreeBSD, 0x05 => TargetOS::Android,
+                    0x06 => TargetOS::IOS, _ => TargetOS::Unknown,
+                };
+                let arch = match t.arch_id {
+                    0x00 => TargetArch::Any, 0x01 => TargetArch::X86_64, 0x02 => TargetArch::Aarch64,
+                    0x03 => TargetArch::Wasm32, 0x04 => TargetArch::Arm, 0x05 => TargetArch::S390x,
+                    0x06 => TargetArch::Ppc64le, _ => TargetArch::Unknown,
+                };
+                PlatformTag { os, arch }
+            }).collect(),
+            script_hashes: payload.script_hashes.iter().map(|sh| {
+                let st = match sh.script_type {
+                    0x00 => ScriptType::Prepare,
+                    0x01 => ScriptType::PreInstall,
+                    0x02 => ScriptType::Install,
+                    0x03 => ScriptType::PostInstall,
+                    0x04 => ScriptType::PreBuild,
+                    0x05 => ScriptType::Build,
+                    0x06 => ScriptType::PostBuild,
+                    _ => ScriptType::Other,
+                };
+                let algo = match sh.hash_algo {
+                    0x00 => HashAlgorithm::Sha1,
+                    0x01 => HashAlgorithm::Sha256,
+                    0x02 => HashAlgorithm::Sha512,
+                    _ => HashAlgorithm::Blake3,
+                };
+                ScriptHash { script_type: st, hash_algo: algo, digest: sh.digest.clone() }
+            }).collect(),
             patch_hash: payload.patch_hash.as_ref().map(|(algo, digest)| {
                 let a = match algo {
                     0x00 => HashAlgorithm::Sha1,
@@ -827,11 +558,7 @@ pub fn read_lockfile(path: &Path) -> Result<Lockfile, Error> {
 }
 
 pub fn validate_hoist_boundary(lockfile: &Lockfile, cosine_name: &str) -> Result<(), Error> {
-    let boundary = match lockfile
-        .hoist_boundaries
-        .iter()
-        .find(|b| b.cosine == cosine_name)
-    {
+    let boundary = match lockfile.hoist_boundaries.iter().find(|b| b.cosine == cosine_name) {
         Some(b) => b,
         None => return Ok(()),
     };
@@ -860,9 +587,7 @@ pub fn validate_patches(lockfile: &Lockfile, lockfile_dir: &std::path::Path) -> 
             None => continue,
         };
         let Some((_algo, expected_digest)) = &pkg.patch_hash else {
-            return Err(Error::OrphanPatchHash {
-                package: pkg.name.clone(),
-            });
+            return Err(Error::OrphanPatchHash { package: pkg.name.clone() });
         };
         let patch_path = lockfile_dir.join(&pd.relative_path);
         let content = match std::fs::read(&patch_path) {
@@ -887,10 +612,7 @@ pub fn validate_patches(lockfile: &Lockfile, lockfile_dir: &std::path::Path) -> 
     Ok(())
 }
 
-pub fn validate_scripts(
-    lockfile: &Lockfile,
-    lockfile_dir: &std::path::Path,
-) -> Result<Vec<String>, Error> {
+pub fn validate_scripts(lockfile: &Lockfile, lockfile_dir: &std::path::Path) -> Result<Vec<String>, Error> {
     let warnings = Vec::new();
     for pkg in &lockfile.packages {
         let source_path = match &lockfile.sources.get(pkg.source_idx) {
@@ -921,9 +643,7 @@ pub fn validate_scripts(
             } else {
                 continue;
             };
-            let actual = crate::crc32::calculate(script_text.as_bytes())
-                .to_le_bytes()
-                .to_vec();
+            let actual = crate::crc32::calculate(script_text.as_bytes()).to_le_bytes().to_vec();
             if actual != sh.digest {
                 return Err(Error::ScriptDigestMismatch {
                     package: pkg.name.clone(),
