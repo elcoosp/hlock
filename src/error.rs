@@ -85,4 +85,10 @@ pub enum Error {
 
     #[error("Artifact for '{package}' digest mismatch: expected {expected}, got {actual}")]
     ArtifactDigestMismatch { package: String, expected: String, actual: String },
+
+    #[error("@digest value does not match computed BLAKE3: expected {expected}, got {actual}")]
+    DigestMismatch { expected: String, actual: String },
+
+    #[error("Multiple @digest directives found")]
+    DuplicateDigestDirective,
 }

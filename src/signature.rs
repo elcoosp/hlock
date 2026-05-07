@@ -5,6 +5,7 @@ use std::collections::HashMap;
 pub enum SignatureAlgorithm {
     Ed25519 = 0x00,
     Ed448 = 0x01,
+    MlDsa65 = 0x02,
 }
 
 #[derive(Debug, Clone)]
@@ -23,6 +24,8 @@ pub enum SignatureError {
     VerificationFailed,
     #[error("Ed448 verification failed")]
     Ed448VerificationFailed,
+    #[error("ML-DSA-65 verification failed")]
+    MlDsaVerificationFailed,
     #[error("Malformed signature directive: {reason}")]
     MalformedDirective { reason: String },
     #[error("Key '{key_id}' is not in the trusted key set")]
@@ -59,6 +62,7 @@ pub fn parse_signature_directive(line: &str) -> Result<SignatureDirective, Signa
     let algorithm = match algo_id {
         0x00 => SignatureAlgorithm::Ed25519,
         0x01 => SignatureAlgorithm::Ed448,
+        0x02 => SignatureAlgorithm::MlDsa65,
         _ => return Err(SignatureError::UnsupportedSignatureAlgorithm { algo_id }),
     };
     let expires_epoch: u64 = expires_str.parse().map_err(|_| {
@@ -68,8 +72,9 @@ pub fn parse_signature_directive(line: &str) -> Result<SignatureDirective, Signa
     let expected_len = match algorithm {
         SignatureAlgorithm::Ed25519 => 64,
         SignatureAlgorithm::Ed448 => 114,
+        SignatureAlgorithm::MlDsa65 => 0,
     };
-    if signature_bytes.len() != expected_len {
+    if expected_len > 0 && signature_bytes.len() != expected_len {
         return Err(SignatureError::MalformedDirective {
             reason: format!("expected {} signature bytes, got {}", expected_len, signature_bytes.len()),
         });
@@ -109,6 +114,11 @@ pub fn sign_lockfile(
         SignatureAlgorithm::Ed448 => {
             return Err(SignatureError::MalformedDirective {
                 reason: "Ed448 signing not yet available (pending stable crate release)".to_string(),
+            });
+        }
+        SignatureAlgorithm::MlDsa65 => {
+            return Err(SignatureError::MalformedDirective {
+                reason: "ML-DSA-65 signing not yet available (pending stable crate release)".to_string(),
             });
         }
     };
@@ -177,6 +187,11 @@ pub fn verify_signature(
             SignatureAlgorithm::Ed448 => {
                 return Err(SignatureError::MalformedDirective {
                     reason: "Ed448 verification not yet available (pending stable crate release)".to_string(),
+                });
+            }
+            SignatureAlgorithm::MlDsa65 => {
+                return Err(SignatureError::MalformedDirective {
+                    reason: "ML-DSA-65 verification not yet available (pending stable crate release)".to_string(),
                 });
             }
         }
@@ -349,5 +364,31 @@ mod tests {
             Err(SignatureError::MalformedDirective { .. }) => {}
             other => panic!("expected MalformedDirective, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_ml_dsa65_sign_not_yet_available() {
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let result = sign_lockfile(lockfile, "pq@co.com", SignatureAlgorithm::MlDsa65, &[42u8; 2560], 0);
+        assert!(matches!(result, Err(SignatureError::MalformedDirective { .. })));
+    }
+
+    #[test]
+    fn test_ml_dsa65_verify_not_yet_available() {
+        let content = "@source 0 https://r.com/\n\npkg\tAAAA\n@signature pq@co.com 02 0 AAAA\n";
+        let mut trusted = HashMap::new();
+        trusted.insert("pq@co.com".to_string(), (&[42u8; 1952][..], SignatureAlgorithm::MlDsa65));
+        match verify_signature(content, &trusted) {
+            Err(SignatureError::MalformedDirective { .. }) => {}
+            other => panic!("expected MalformedDirective, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_signature_directive_accepts_ml_dsa65_algo_id() {
+        let line = "@signature pq@co.com 02 0 AAAA";
+        let directive = parse_signature_directive(line).unwrap();
+        assert_eq!(directive.algorithm, SignatureAlgorithm::MlDsa65);
+        assert_eq!(directive.key_id, "pq@co.com");
     }
 }
