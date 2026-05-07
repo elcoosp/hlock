@@ -129,6 +129,14 @@ pub struct PatchDirective {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactDirective {
+    pub content_id: u64,
+    pub os_id: u8,
+    pub arch_id: u8,
+    pub relative_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerResolution {
     pub peer_name: String,
     pub satisfied_by_content_id: u64,
@@ -167,10 +175,12 @@ pub struct Lockfile {
     pub sources: Vec<Source>,
     pub overrides: Vec<Override>,
     pub features: Vec<(String, Vec<String>)>,
+    pub metadata: Vec<(String, String)>,
     pub workspace_root: Option<String>,
     pub workspace_pkgs: Vec<WorkspacePkg>,
     pub hoist_boundaries: Vec<HoistBoundary>,
     pub packages: Vec<Package>,
+    pub artifacts: Vec<ArtifactDirective>,
     pub patches: Vec<PatchDirective>,
 }
 
@@ -204,6 +214,9 @@ fn format_header(lockfile: &Lockfile) -> Result<String, Error> {
         let deps = if hb.allowed_deps.is_empty() { String::new() } else { format!("[{}]", hb.allowed_deps.join(",")) };
         out.push_str(&format!("@hoist-boundary {} -> {}\n", hb.cosine, deps));
     }
+    for (key, value) in &lockfile.metadata {
+        out.push_str(&format!("@metadata {} {}\n", key, value));
+    }
     out.push('\n');
     Ok(out)
 }
@@ -212,6 +225,7 @@ fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
     let mut sources = Vec::new();
     let mut overrides = Vec::new();
     let mut features = vec![];
+    let mut metadata = vec![];
     let mut workspace_root = None;
     let mut workspace_pkgs = Vec::new();
     let mut hoist_boundaries = Vec::new();
@@ -221,7 +235,7 @@ fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
         if line.is_empty() {
             let header_end = content.find("\n\n").map(|i| i + 2).unwrap_or(content.len());
             let remaining = &content[header_end..];
-            return Ok((Lockfile { sources, overrides, features, workspace_root, workspace_pkgs, hoist_boundaries, packages: vec![], patches: vec![] }, remaining));
+            return Ok((Lockfile { sources, overrides, features, metadata, workspace_root, workspace_pkgs, hoist_boundaries, packages: vec![], artifacts: vec![], patches: vec![] }, remaining));
         }
 
         if let Some(rest) = line.strip_prefix("@source ") {
@@ -273,6 +287,9 @@ fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
             let deps_str = deps_str.strip_suffix("]").unwrap_or(deps_str);
             let allowed_deps = if deps_str.is_empty() { vec![] } else { deps_str.split(',').map(|s| s.trim().to_string()).collect() };
             hoist_boundaries.push(HoistBoundary { cosine, allowed_deps });
+        } else if let Some(rest) = line.strip_prefix("@metadata ") {
+            let (key, value) = rest.split_once(' ').unwrap_or((rest, ""));
+            metadata.push((key.to_string(), value.to_string()));
         } else {
             return Err(Error::InvalidHeader { line_number: line_num, reason: format!("Unknown directive: {}", line) });
         }
@@ -412,6 +429,9 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
         out.push_str(&format!("{}\t{}\n", pkg.name, encoded));
     }
 
+    for a in &lockfile.artifacts {
+        out.push_str(&format!("@artifact {:016x} {:02x} {:02x} {}\n", a.content_id, a.os_id, a.arch_id, a.relative_path));
+    }
     for p in &lockfile.patches {
         out.push_str(&format!("@patch {:016x} {:02x} {}\n", p.content_id, p.patch_type, p.relative_path));
     }
@@ -423,12 +443,36 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
 
     let header_line_count = content.lines().count() - pkg_content.lines().count();
     let mut parsed_payloads = Vec::new();
-    let patches = Vec::new();
+    let mut patches = Vec::new();
+    let mut artifacts = Vec::new();
 
     for (idx, line) in pkg_content.lines().enumerate() {
         if line.trim().is_empty() { continue; }
         if line.starts_with("@signature ") { continue; }
-        if line.starts_with("@patch ") { continue; }
+        if line.starts_with("@artifact ") {
+            let rest = &line["@artifact ".len()..];
+            let mut parts = rest.splitn(4, ' ');
+            let cid_hex = parts.next().unwrap_or("");
+            let os_id_str = parts.next().unwrap_or("");
+            let arch_id_str = parts.next().unwrap_or("");
+            let rel_path = parts.next().unwrap_or("");
+            let content_id = u64::from_str_radix(cid_hex, 16).unwrap_or(0);
+            let os_id = u8::from_str_radix(os_id_str, 16).unwrap_or(0);
+            let arch_id = u8::from_str_radix(arch_id_str, 16).unwrap_or(0);
+            artifacts.push(ArtifactDirective { content_id, os_id, arch_id, relative_path: rel_path.to_string() });
+            continue;
+        }
+        if line.starts_with("@patch ") {
+            let rest = &line["@patch ".len()..];
+            let mut parts = rest.splitn(3, ' ');
+            let cid_hex = parts.next().unwrap_or("");
+            let patch_type_str = parts.next().unwrap_or("");
+            let rel_path = parts.next().unwrap_or("");
+            let content_id = u64::from_str_radix(cid_hex, 16).unwrap_or(0);
+            let patch_type = u8::from_str_radix(patch_type_str, 16).unwrap_or(0);
+            patches.push(PatchDirective { content_id, patch_type, relative_path: rel_path.to_string() });
+            continue;
+        }
         let line_num = header_line_count + idx;
         let (name, encoded) = line.split_once('\t')
             .ok_or(Error::MissingDelimiter { line_number: line_num })?;
@@ -561,6 +605,7 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
         });
     }
     lockfile.packages = packages;
+    lockfile.artifacts = artifacts;
     lockfile.patches = patches;
     Ok(lockfile)
 }
@@ -664,4 +709,84 @@ pub fn validate_scripts(lockfile: &Lockfile, lockfile_dir: &std::path::Path) -> 
         }
     }
     Ok(warnings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_metadata_directive_roundtrip() {
+        let mut lockfile = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            overrides: vec![], features: vec![],
+            metadata: vec![
+                ("license".to_string(), "MIT".to_string()),
+                ("repository".to_string(), "https://github.com/example".to_string()),
+            ],
+            workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+            artifacts: vec![], patches: vec![],
+            packages: vec![Package {
+                name: "pkg".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0, ..Default::default()
+            }],
+        };
+        let serialized = serialize(&mut lockfile).unwrap();
+        let deserialized = deserialize(&serialized).unwrap();
+        assert_eq!(deserialized.metadata.len(), 2);
+        assert_eq!(deserialized.metadata[0].0, "license");
+        assert_eq!(deserialized.metadata[0].1, "MIT");
+        assert_eq!(deserialized.metadata[1].0, "repository");
+    }
+
+    #[test]
+    fn test_artifact_directive_roundtrip() {
+        let mut lockfile = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            overrides: vec![], features: vec![], metadata: vec![],
+            workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+            artifacts: vec![ArtifactDirective {
+                content_id: 0xdeadbeef,
+                os_id: 0x01,
+                arch_id: 0x01,
+                relative_path: "./bin/app".to_string(),
+            }],
+            patches: vec![],
+            packages: vec![Package {
+                name: "pkg".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0, ..Default::default()
+            }],
+        };
+        let serialized = serialize(&mut lockfile).unwrap();
+        let deserialized = deserialize(&serialized).unwrap();
+        assert_eq!(deserialized.artifacts.len(), 1);
+        assert_eq!(deserialized.artifacts[0].content_id, 0xdeadbeef);
+        assert_eq!(deserialized.artifacts[0].os_id, 0x01);
+        assert_eq!(deserialized.artifacts[0].relative_path, "./bin/app");
+    }
+
+    #[test]
+    fn test_patch_directive_roundtrip() {
+        let mut lockfile = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            overrides: vec![], features: vec![], metadata: vec![],
+            workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+            artifacts: vec![],
+            patches: vec![PatchDirective {
+                content_id: 0xcafebabe,
+                patch_type: 0x01,
+                relative_path: "./fix.patch".to_string(),
+            }],
+            packages: vec![Package {
+                name: "pkg".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0, ..Default::default()
+            }],
+        };
+        let serialized = serialize(&mut lockfile).unwrap();
+        let deserialized = deserialize(&serialized).unwrap();
+        assert_eq!(deserialized.patches.len(), 1);
+        assert_eq!(deserialized.patches[0].content_id, 0xcafebabe);
+        assert_eq!(deserialized.patches[0].patch_type, 0x01);
+        assert_eq!(deserialized.patches[0].relative_path, "./fix.patch");
+    }
 }

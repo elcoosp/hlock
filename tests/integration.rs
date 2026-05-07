@@ -9,9 +9,11 @@ fn test_e2e_write_and_read_v5() {
         sources: vec![Source::Registry("https://npmjs.org/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![
             Package {
@@ -54,9 +56,11 @@ fn test_e2e_workspace_roundtrip() {
         sources: vec![Source::Workspace],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![
             Package {
@@ -84,9 +88,11 @@ fn test_string_api_crc_corruption() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![Package {
             name: "z".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
@@ -111,9 +117,11 @@ fn test_e2e_features_roundtrip() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![("serde".to_string(), vec!["derive".to_string(), "rc".to_string()])],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![
             Package {
@@ -156,9 +164,11 @@ fn test_e2e_optional_target_roundtrip() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![
             Package {
@@ -198,9 +208,11 @@ fn test_e2e_diff_after_adding_package() {
     let mut v1 = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![
             Package { name: "core".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![], ..Default::default() },
@@ -211,9 +223,11 @@ fn test_e2e_diff_after_adding_package() {
     let v2 = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![
             Package { name: "core".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![], ..Default::default() },
@@ -238,9 +252,11 @@ fn test_e2e_extract_and_serialize_is_valid() {
         ],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![
             Package { name: "app".to_string(), logical_name: None, source_idx: 1, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![
@@ -271,9 +287,11 @@ fn test_e2e_v7_provenance_roundtrip() {
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![Package {
             name: "crypto-lib".to_string(),
@@ -299,9 +317,11 @@ fn test_e2e_v7_provenance_roundtrip() {
 fn test_e2e_graph_manipulation_ignores_provenance() {
     let lockfile = Lockfile {
         sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![Package {
             name: "a".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
@@ -323,9 +343,11 @@ fn test_e2e_v8_peer_resolution_topology() {
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![
             Package { name: "app".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![
@@ -344,9 +366,11 @@ fn test_e2e_v8_peer_resolution_topology() {
 fn test_e2e_graph_extract_preserves_peers() {
     let lockfile = Lockfile {
         sources: vec![Source::Registry("r".to_string())], overrides: vec![], features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![Package {
             name: "a".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
@@ -365,9 +389,11 @@ fn test_e2e_v8_alias_and_cas_roundtrip() {
     let mut lockfile = Lockfile {
         sources: vec![Source::CasHttp("https://cas.example.com/".to_string())],
         overrides: vec![], features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![
             Package { name: "react".to_string(), logical_name: Some("react-v18".to_string()), source_idx: 0, major: 18, minor: 2, patch: 0, hashes: vec![], features: vec![], resolved_peers: vec![], dependencies: vec![], ..Default::default() },
@@ -387,9 +413,11 @@ fn test_e2e_ipfs_source_roundtrip() {
     let mut lockfile = Lockfile {
         sources: vec![Source::Ipfs("ipfs://QmXyZ1abcDEF".to_string())],
         overrides: vec![], features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![Package {
             name: "some-pkg".to_string(),
@@ -412,9 +440,11 @@ fn test_e2e_v9_peer_requirements_roundtrip() {
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![
             Package {
@@ -452,9 +482,11 @@ fn test_e2e_v9_platform_tags_roundtrip() {
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![
             Package {
@@ -508,9 +540,11 @@ fn test_e2e_sign_lockfile_and_verify() {
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![Package {
             name: "app".to_string(), logical_name: None, source_idx: 0,
@@ -543,9 +577,11 @@ fn test_e2e_signed_lockfile_deserializes_correctly() {
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![
             Package { name: "alpha".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, ..Default::default() },
@@ -566,9 +602,11 @@ fn test_e2e_platform_extraction_with_real_lockfile() {
     let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
+        artifacts: vec![],
         patches: vec![],
         packages: vec![
             Package { name: "app".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,

@@ -136,10 +136,12 @@ pub fn extract_subgraph(lockfile: &Lockfile, root_content_ids: &[u64]) -> Result
         sources: new_sources,
         overrides: lockfile.overrides.clone(),
         features: lockfile.features.clone(),
+        metadata: vec![],
         workspace_root: lockfile.workspace_root.clone(),
         workspace_pkgs: lockfile.workspace_pkgs.clone(),
         hoist_boundaries: lockfile.hoist_boundaries.clone(),
         packages: extracted_packages,
+        artifacts: vec![],
         patches: lockfile.patches.clone(),
     })
 }
@@ -266,10 +268,12 @@ pub fn extract_subgraph_platform(
         sources: new_sources,
         overrides: lockfile.overrides.clone(),
         features: lockfile.features.clone(),
+        metadata: vec![],
         workspace_root: lockfile.workspace_root.clone(),
         workspace_pkgs: lockfile.workspace_pkgs.clone(),
         hoist_boundaries: lockfile.hoist_boundaries.clone(),
         packages: extracted_packages,
+        artifacts: vec![],
         patches: lockfile.patches.clone(),
     })
 }
@@ -320,9 +324,11 @@ mod tests {
             sources: vec![crate::lockfile::Source::Registry("r".to_string())],
             overrides: vec![],
             features: vec![],
+            metadata: vec![],
             workspace_root: None,
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
+            artifacts: vec![],
             patches: vec![],
             packages: vec![
                 mock_pkg(
@@ -374,9 +380,11 @@ mod tests {
             sources: vec![crate::lockfile::Source::Registry("r".to_string())],
             overrides: vec![],
             features: vec![],
+            metadata: vec![],
             workspace_root: None,
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
+            artifacts: vec![],
             patches: vec![],
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("pure-lib", DepType::Runtime)], vec![]),
@@ -396,9 +404,11 @@ mod tests {
             sources: vec![crate::lockfile::Source::Registry("r".to_string())],
             overrides: vec![],
             features: vec![],
+            metadata: vec![],
             workspace_root: None,
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
+            artifacts: vec![],
             patches: vec![],
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("napi", DepType::Runtime)], vec![]),
@@ -428,9 +438,11 @@ mod tests {
             sources: vec![crate::lockfile::Source::Registry("r".to_string())],
             overrides: vec![],
             features: vec![],
+            metadata: vec![],
             workspace_root: None,
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
+            artifacts: vec![],
             patches: vec![],
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("multi", DepType::Runtime)], vec![]),
@@ -474,9 +486,11 @@ mod tests {
             sources: vec![crate::lockfile::Source::Registry("r".to_string())],
             overrides: vec![],
             features: vec![],
+            metadata: vec![],
             workspace_root: None,
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
+            artifacts: vec![],
             patches: vec![],
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("mid", DepType::Runtime)], vec![]),
@@ -511,9 +525,11 @@ mod tests {
             sources: vec![crate::lockfile::Source::Registry("r".to_string())],
             overrides: vec![],
             features: vec![],
+            metadata: vec![],
             workspace_root: None,
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
+            artifacts: vec![],
             patches: vec![],
             packages: vec![mock_pkg(
                 "app",
