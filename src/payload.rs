@@ -27,8 +27,8 @@ pub struct PlatformTagPayload {
     pub arch_id: u8,
 }
 
-pub struct ScriptHashPayload {
-    pub script_type: u8,
+pub struct HookHashPayload {
+    pub hook_type: String,
     pub hash_algo: u8,
     pub digest: Vec<u8>,
 }
@@ -45,7 +45,7 @@ pub struct PayloadData {
     pub deps: Vec<DepPayload>,
     pub peer_requirements: Vec<PeerReqPayload>,
     pub platform_tags: Vec<PlatformTagPayload>,
-    pub script_hashes: Vec<ScriptHashPayload>,
+    pub hook_hashes: Vec<HookHashPayload>,
     pub patch_hash: Option<(u8, Vec<u8>)>,
 }
 
@@ -139,9 +139,11 @@ pub fn pack_payload(data: &PayloadData) -> Vec<u8> {
         buf.push(tag.arch_id);
     }
 
-    buf.extend(crate::varint::encode_varint(data.script_hashes.len() as u64));
-    for sh in &data.script_hashes {
-        buf.push(sh.script_type);
+    buf.extend(crate::varint::encode_varint(data.hook_hashes.len() as u64));
+    for sh in &data.hook_hashes {
+        let hook_bytes = sh.hook_type.as_bytes();
+        buf.extend(crate::varint::encode_varint(hook_bytes.len() as u64));
+        buf.extend_from_slice(hook_bytes);
         buf.push(sh.hash_algo);
         buf.push(sh.digest.len() as u8);
         buf.extend_from_slice(&sh.digest);
@@ -303,16 +305,19 @@ pub fn unpack_payload(bytes: &[u8], line_number: usize) -> Result<PayloadData, E
     }
 
     let sh_count = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
-    let mut script_hashes = Vec::new();
+    let mut hook_hashes = Vec::new();
     for _ in 0..sh_count {
-        if cursor + 2 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-        let script_type = bytes[cursor]; cursor += 1;
+        let hook_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+        if cursor + hook_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+        let hook_type = String::from_utf8(bytes[cursor..cursor + hook_len].to_vec()).unwrap_or_default();
+        cursor += hook_len;
+        if cursor + 1 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
         let hash_algo = bytes[cursor]; cursor += 1;
         let digest_len = bytes[cursor] as usize; cursor += 1;
         if cursor + digest_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
         let digest = bytes[cursor..cursor + digest_len].to_vec();
         cursor += digest_len;
-        script_hashes.push(ScriptHashPayload { script_type, hash_algo, digest });
+        hook_hashes.push(HookHashPayload { hook_type, hash_algo, digest });
     }
 
     let mut patch_hash = None;
@@ -330,7 +335,7 @@ pub fn unpack_payload(bytes: &[u8], line_number: usize) -> Result<PayloadData, E
     let expected_crc = u32::from_le_bytes(bytes[cursor..cursor+4].try_into().unwrap());
     if expected_crc != crate::crc32::calculate(&bytes[..cursor]) { return Err(Error::IntegrityCheckFailed { line_number }); }
 
-    Ok(PayloadData { logical_name, source_idx, major, minor, patch, hashes, features, resolved_peers, deps, peer_requirements, platform_tags, script_hashes, patch_hash })
+    Ok(PayloadData { logical_name, source_idx, major, minor, patch, hashes, features, resolved_peers, deps, peer_requirements, platform_tags, hook_hashes, patch_hash })
 }
 
 #[cfg(test)]
@@ -344,8 +349,8 @@ mod tests {
             hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![],
             platform_tags: vec![],
-            script_hashes: vec![ScriptHashPayload {
-                script_type: 0x03,
+            hook_hashes: vec![HookHashPayload {
+                hook_type: "postinstall".to_string(),
                 hash_algo: 0x03,
                 digest: vec![0xAA; 32],
             }],
@@ -353,10 +358,10 @@ mod tests {
         };
         let packed = pack_payload(&data);
         let unpacked = unpack_payload(&packed, 0).unwrap();
-        assert_eq!(unpacked.script_hashes.len(), 1);
-        assert_eq!(unpacked.script_hashes[0].script_type, 0x03);
-        assert_eq!(unpacked.script_hashes[0].hash_algo, 0x03);
-        assert_eq!(unpacked.script_hashes[0].digest, vec![0xAA; 32]);
+        assert_eq!(unpacked.hook_hashes.len(), 1);
+        assert_eq!(unpacked.hook_hashes[0].hook_type, "postinstall");
+        assert_eq!(unpacked.hook_hashes[0].hash_algo, 0x03);
+        assert_eq!(unpacked.hook_hashes[0].digest, vec![0xAA; 32]);
         assert!(unpacked.patch_hash.is_none());
     }
 
@@ -366,7 +371,7 @@ mod tests {
             logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
             hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
-            script_hashes: vec![],
+            hook_hashes: vec![],
             patch_hash: Some((0x03, vec![0xBB; 32])),
         };
         let packed = pack_payload(&data);
@@ -381,7 +386,7 @@ mod tests {
             logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
             hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
-            script_hashes: vec![],
+            hook_hashes: vec![],
             patch_hash: None,
         };
         let packed = pack_payload(&data);
@@ -396,7 +401,7 @@ mod tests {
             hashes: vec![HashPayload { algo_id: 0x01, digest: vec![0xAA; 32], attestation: Attestation::None }],
             features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
-            script_hashes: vec![], patch_hash: None,
+            hook_hashes: vec![], patch_hash: None,
         };
         let packed = pack_payload(&data);
         assert_eq!(packed[0], 0x07);
@@ -411,7 +416,7 @@ mod tests {
             hashes: vec![], features: vec![], resolved_peers: vec![],
             deps: vec![DepPayload { content_id: 12345678, dep_type: 0x00, target_os: None, target_arch: None, req_feat_indices: vec![] }],
             peer_requirements: vec![], platform_tags: vec![],
-            script_hashes: vec![], patch_hash: None,
+            hook_hashes: vec![], patch_hash: None,
         };
         let packed = pack_payload(&data);
 
@@ -429,7 +434,7 @@ mod tests {
             resolved_peers: vec![],
             deps: vec![DepPayload { content_id: 99, dep_type: 0x01, target_os: None, target_arch: None, req_feat_indices: vec![0] }],
             peer_requirements: vec![], platform_tags: vec![],
-            script_hashes: vec![], patch_hash: None,
+            hook_hashes: vec![], patch_hash: None,
         };
         let packed = pack_payload(&data);
         let unpacked = unpack_payload(&packed, 0).unwrap();
@@ -448,7 +453,7 @@ mod tests {
             }],
             features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
-            script_hashes: vec![], patch_hash: None,
+            hook_hashes: vec![], patch_hash: None,
         };
         let packed = pack_payload(&data);
         assert_eq!(packed[0], 0x07);
@@ -466,7 +471,7 @@ mod tests {
                 peer_name: "react".to_string(), satisfied_by_content_id: 99, is_hoisted_to_root: true,
             }], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
-            script_hashes: vec![], patch_hash: None,
+            hook_hashes: vec![], patch_hash: None,
         };
         let packed = pack_payload(&data);
         assert_eq!(packed[0], 0x07);
@@ -481,7 +486,7 @@ mod tests {
             hashes: vec![HashPayload { algo_id: 0x01, digest: vec![], attestation: Attestation::None }],
             features: vec![], resolved_peers: vec![], deps: vec![],
             peer_requirements: vec![], platform_tags: vec![],
-            script_hashes: vec![], patch_hash: None,
+            hook_hashes: vec![], patch_hash: None,
         };
         let mut bad_payload = pack_payload(&data);
         bad_payload[0] = 0x06; // Old version byte
@@ -499,14 +504,14 @@ mod tests {
                 is_optional: false,
             }],
             platform_tags: vec![],
-            script_hashes: vec![],
+            hook_hashes: vec![],
             patch_hash: None,
         };
         let packed = pack_payload(&data);
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert_eq!(unpacked.peer_requirements.len(), 1);
         assert_eq!(unpacked.peer_requirements[0].peer_name, "react");
-        assert_eq!(unpacked.script_hashes.len(), 0);
+        assert_eq!(unpacked.hook_hashes.len(), 0);
         assert!(unpacked.patch_hash.is_none());
     }
 
@@ -520,7 +525,7 @@ mod tests {
                 PeerReqPayload { peer_name: "react-dom".to_string(), version_range: "".to_string(), is_optional: true },
             ],
             platform_tags: vec![PlatformTagPayload { os_id: 0x01, arch_id: 0x01 }, PlatformTagPayload { os_id: 0x02, arch_id: 0x02 }],
-            script_hashes: vec![], patch_hash: None,
+            hook_hashes: vec![], patch_hash: None,
         };
         let packed = pack_payload(&data);
         let unpacked = unpack_payload(&packed, 0).unwrap();

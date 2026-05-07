@@ -307,7 +307,7 @@ mod tests {
                 .collect(),
             peer_requirements: vec![],
             platform_tags: tags,
-            script_hashes: vec![],
+            hook_hashes: vec![],
             patch_hash: None,
         }
     }

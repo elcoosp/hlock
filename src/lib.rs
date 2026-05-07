@@ -13,13 +13,13 @@ pub use lockfile::{
     Attestation, DepType, Dependency, HashAlgorithm, HoistBoundary,
     IntegrityHash, Lockfile, LockfileDiff, Override, Package, PackageChange,
     PatchDirective, PeerResolution, PeerRequirement, PlatformTag,
-    ScriptHash, ScriptType, Source, SlsaPredicate, TargetArch, TargetOS, WorkspacePkg,
+    HookHash, Source, SlsaPredicate, TargetArch, TargetOS, WorkspacePkg,
     deserialize, read_lockfile, serialize, validate_hoist_boundary, validate_patches,
     validate_scripts, write_lockfile,
 };
 pub use graph::{diff_lockfiles, extract_subgraph, extract_subgraph_platform};
 pub use payload::{
     DepPayload, pack_payload, unpack_payload, PeerReqPayload, PlatformTagPayload,
-    ScriptHashPayload, PayloadData,
+    HookHashPayload, PayloadData,
 };
 pub use signature::{sign_lockfile, verify_signature};

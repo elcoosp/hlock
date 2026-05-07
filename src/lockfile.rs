@@ -1,5 +1,5 @@
 use crate::error::Error;
-use crate::payload::{PayloadData, DepPayload, PeerReqPayload, PlatformTagPayload, ScriptHashPayload, pack_payload, unpack_payload};
+use crate::payload::{PayloadData, DepPayload, PeerReqPayload, PlatformTagPayload, HookHashPayload, pack_payload, unpack_payload};
 use crate::base64url::{encode, decode};
 use crate::fnv;
 use std::collections::hash_map::HashMap;
@@ -88,20 +88,8 @@ pub struct PlatformTag {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScriptType {
-    Prepare,
-    PreInstall,
-    Install,
-    PostInstall,
-    PreBuild,
-    Build,
-    PostBuild,
-    Other,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScriptHash {
-    pub script_type: ScriptType,
+pub struct HookHash {
+    pub hook_type: String,
     pub hash_algo: HashAlgorithm,
     pub digest: Vec<u8>,
 }
@@ -153,7 +141,7 @@ pub struct Package {
     pub dependencies: Vec<Dependency>,
     pub peer_requirements: Vec<PeerRequirement>,
     pub platform_tags: Vec<PlatformTag>,
-    pub script_hashes: Vec<ScriptHash>,
+    pub hook_hashes: Vec<HookHash>,
     pub patch_hash: Option<(HashAlgorithm, Vec<u8>)>,
 }
 
@@ -358,21 +346,11 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
             PlatformTagPayload { os_id, arch_id }
         }).collect();
 
-        let script_hashes: Vec<ScriptHashPayload> = pkg.script_hashes.iter().map(|sh| {
-            let st_id: u8 = match sh.script_type {
-                ScriptType::Prepare => 0x00,
-                ScriptType::PreInstall => 0x01,
-                ScriptType::Install => 0x02,
-                ScriptType::PostInstall => 0x03,
-                ScriptType::PreBuild => 0x04,
-                ScriptType::Build => 0x05,
-                ScriptType::PostBuild => 0x06,
-                ScriptType::Other => 0xFF,
-            };
+        let hook_hashes: Vec<HookHashPayload> = pkg.hook_hashes.iter().map(|sh| {
             let algo_id: u8 = match sh.hash_algo {
                 HashAlgorithm::Sha1 => 0x00, HashAlgorithm::Sha256 => 0x01, HashAlgorithm::Sha512 => 0x02, HashAlgorithm::Blake3 => 0x03,
             };
-            ScriptHashPayload { script_type: st_id, hash_algo: algo_id, digest: sh.digest.clone() }
+            HookHashPayload { hook_type: sh.hook_type.clone(), hash_algo: algo_id, digest: sh.digest.clone() }
         }).collect();
 
         let patch_hash: Option<(u8, Vec<u8>)> = pkg.patch_hash.as_ref().map(|(algo, digest): &(HashAlgorithm, Vec<u8>)| {
@@ -394,7 +372,7 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
             deps,
             peer_requirements: peer_reqs,
             platform_tags: tags,
-            script_hashes,
+            hook_hashes,
             patch_hash,
         };
         let encoded = encode(&pack_payload(&payload_data));
@@ -510,24 +488,14 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
                 };
                 PlatformTag { os, arch }
             }).collect(),
-            script_hashes: payload.script_hashes.iter().map(|sh| {
-                let st = match sh.script_type {
-                    0x00 => ScriptType::Prepare,
-                    0x01 => ScriptType::PreInstall,
-                    0x02 => ScriptType::Install,
-                    0x03 => ScriptType::PostInstall,
-                    0x04 => ScriptType::PreBuild,
-                    0x05 => ScriptType::Build,
-                    0x06 => ScriptType::PostBuild,
-                    _ => ScriptType::Other,
-                };
+            hook_hashes: payload.hook_hashes.iter().map(|sh| {
                 let algo = match sh.hash_algo {
                     0x00 => HashAlgorithm::Sha1,
                     0x01 => HashAlgorithm::Sha256,
                     0x02 => HashAlgorithm::Sha512,
                     _ => HashAlgorithm::Blake3,
                 };
-                ScriptHash { script_type: st, hash_algo: algo, digest: sh.digest.clone() }
+                HookHash { hook_type: sh.hook_type.clone(), hash_algo: algo, digest: sh.digest.clone() }
             }).collect(),
             patch_hash: payload.patch_hash.as_ref().map(|(algo, digest)| {
                 let a = match algo {
@@ -624,17 +592,9 @@ pub fn validate_scripts(lockfile: &Lockfile, lockfile_dir: &std::path::Path) -> 
             Ok(c) => c,
             Err(_) => continue,
         };
-        for sh in &pkg.script_hashes {
-            let script_name = match sh.script_type {
-                ScriptType::Prepare => "prepare",
-                ScriptType::PreInstall => "preinstall",
-                ScriptType::Install => "install",
-                ScriptType::PostInstall => "postinstall",
-                ScriptType::PreBuild => "prebuild",
-                ScriptType::Build => "build",
-                ScriptType::PostBuild => "postbuild",
-                ScriptType::Other => continue,
-            };
+        for sh in &pkg.hook_hashes {
+            let script_name = sh.hook_type.as_str();
+            if script_name.is_empty() { continue; }
             let pattern = format!("\"{}\"", script_name);
             let script_text = if let Some(idx) = manifest_content.find(&pattern) {
                 let rest = &manifest_content[idx + pattern.len()..];
