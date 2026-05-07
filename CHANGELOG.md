@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0] — The Platform and Provenance Release
+
+### Added
+- **Platform filter tags** — Packages can declare target OS/arch via `PlatformTag`. `extract_subgraph_platform()` produces a pruned lockfile for a specific platform.
+- **Peer requirements** — `PeerRequirement` struct declares *what* a peer dependency requires (name, version range, optional flag), complementing the existing `PeerResolution` which records *how* it was satisfied.
+- **Ed25519 lockfile signing** — `sign_lockfile()` appends an `@signature` directive. `verify_signature()` validates it. No hashing, no framing — raw Ed25519 over the file bytes.
+- **`SignatureError` enum** — `VerificationFailed`, `MalformedDirective`, `InvalidBase64`.
+- **`CompatMode` enum** — `V8` omits v0.9 sections entirely; `V9` includes them on every package. `serialize_compat()` accepts the mode.
+- **`pack_payload_v8()`** — Public function to produce a v0.8-compatible binary payload.
+- **New error variants** — `Error::NoPackagesForPlatform`, `Error::PeerRangeMismatch`, `Error::PeerRequirementUnsatisfied`, `Error::InvalidSignature`.
+- **Expanded `TargetOS` and `TargetArch`** — Added `FreeBSD`, `Android`, `IOS`, `Wasm32`, `Arm`, `S390x`, `Ppc64le`, `Unknown`.
+- **`deserialize` skips `@signature` lines** — v0.8-compatible parsers ignore the signature directive without error.
+
+### Changed
+- **`serialize()` defaults to `CompatMode::V9`** — New lockfiles include peer requirements and platform tag sections.
+- **`deserialize` auto-detects v0.8 vs v0.9 payloads** — After reading the dependencies array, checks whether remaining bytes are exactly 4 (CRC32) to determine format.
+
+### Backward Compatibility
+- v0.9 deserializers read v0.8 lockfiles transparently.
+- `serialize_compat(&mut lockfile, CompatMode::V8)` produces output readable by v0.8 parsers.
+- Lockfiles without `@signature` are valid and verify as `Ok(())`.
+- The payload version byte remains `0x06` for both formats.
+
 ## [0.8.0] — The Monorepo Topology Release
 
 ### Breaking Changes

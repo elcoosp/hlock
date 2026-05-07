@@ -146,28 +146,21 @@ pub fn extract_subgraph_platform(
         }
     }
 
-    let mut reachable: HashSet<u64> = HashSet::new();
+    let mut candidate_ids: HashSet<u64> = HashSet::new();
     let mut changed = true;
 
     while changed {
         changed = false;
-        let mut new_reachable: HashSet<u64> = HashSet::new();
-        let mut queue: Vec<u64> = root_content_ids.to_vec();
 
+        let mut reachable: HashSet<u64> = HashSet::new();
+        let mut queue: Vec<u64> = root_content_ids.to_vec();
         while let Some(cid) = queue.pop() {
-            if new_reachable.contains(&cid) {
-                continue;
-            }
-            if let Some((_, pkg)) = cid_map.get(&cid) {
-                if !package_matches_platform(pkg, &target_os, &target_arch) {
-                    continue;
-                }
-                new_reachable.insert(cid);
-                for dep in &pkg.dependencies {
-                    if let Some((dep_idx, _)) = cid_map.values().find(|(_, p)| p.name == dep.name) {
-                        let dep_ver_str = format!("{}@{}.{}.{}", dep.name, lockfile.packages[*dep_idx].major, lockfile.packages[*dep_idx].minor, lockfile.packages[*dep_idx].patch);
-                        let dep_cid = fnv::calculate(&dep_ver_str);
-                        if !new_reachable.contains(&dep_cid) {
+            if reachable.insert(cid) {
+                if let Some((_, pkg)) = cid_map.get(&cid) {
+                    for dep in &pkg.dependencies {
+                        if let Some((dep_idx, _)) = cid_map.values().find(|(_, p)| p.name == dep.name) {
+                            let dep_ver_str = format!("{}@{}.{}.{}", dep.name, lockfile.packages[*dep_idx].major, lockfile.packages[*dep_idx].minor, lockfile.packages[*dep_idx].patch);
+                            let dep_cid = fnv::calculate(&dep_ver_str);
                             queue.push(dep_cid);
                         }
                     }
@@ -175,13 +168,21 @@ pub fn extract_subgraph_platform(
             }
         }
 
-        if new_reachable != reachable {
-            reachable = new_reachable;
+        let filtered: HashSet<u64> = reachable.into_iter().filter(|cid| {
+            if let Some((_, pkg)) = cid_map.get(cid) {
+                package_matches_platform(pkg, &target_os, &target_arch)
+            } else {
+                false
+            }
+        }).collect();
+
+        if filtered != candidate_ids {
+            candidate_ids = filtered;
             changed = true;
         }
     }
 
-    if reachable.is_empty() && !root_content_ids.is_empty() {
+    if candidate_ids.is_empty() && !root_content_ids.is_empty() {
         return Err(Error::NoPackagesForPlatform {
             os: format!("{:?}", target_os),
             arch: format!("{:?}", target_arch),
@@ -192,7 +193,7 @@ pub fn extract_subgraph_platform(
     for (idx, pkg) in lockfile.packages.iter().enumerate() {
         let ver_str = format!("{}@{}.{}.{}", pkg.name, pkg.major, pkg.minor, pkg.patch);
         let cid = fnv::calculate(&ver_str);
-        if reachable.contains(&cid) {
+        if candidate_ids.contains(&cid) {
             output_indices.insert(idx);
         }
     }
@@ -331,6 +332,7 @@ mod tests {
         let names: Vec<&str> = res.packages.iter().map(|p| p.name.as_str()).collect();
         assert!(names.contains(&"app"));
         assert!(names.contains(&"mid"));
+        assert!(!names.contains(&"leaf"));
     }
 
     #[test]

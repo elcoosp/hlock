@@ -537,44 +537,55 @@ fn test_e2e_platform_extraction_with_real_lockfile() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![],
         packages: vec![
-            Package { name: "app".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0, dependencies: vec![
-                Dependency { name: "native".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
-                Dependency { name: "pure".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
-            ], ..Default::default() },
-            Package { name: "native".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+            Package { name: "app".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+                dependencies: vec![
+                    Dependency { name: "esbuild".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
+                    Dependency { name: "lodash".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
+                ],
+                ..Default::default() },
+            Package { name: "esbuild".to_string(), logical_name: None, source_idx: 0, major: 0, minor: 17, patch: 0,
+                dependencies: vec![
+                    Dependency { name: "esbuild-darwin-arm64".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
+                    Dependency { name: "esbuild-linux-x64".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
+                ],
+                ..Default::default() },
+            Package { name: "esbuild-darwin-arm64".to_string(), logical_name: None, source_idx: 0, major: 0, minor: 17, patch: 0,
+                platform_tags: vec![PlatformTag { os: TargetOS::MacOS, arch: TargetArch::Aarch64 }],
+                dependencies: vec![], ..Default::default() },
+            Package { name: "esbuild-linux-x64".to_string(), logical_name: None, source_idx: 0, major: 0, minor: 17, patch: 0,
                 platform_tags: vec![PlatformTag { os: TargetOS::Linux, arch: TargetArch::X86_64 }],
                 dependencies: vec![], ..Default::default() },
-            Package { name: "pure".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+            Package { name: "lodash".to_string(), logical_name: None, source_idx: 0, major: 4, minor: 17, patch: 21,
                 platform_tags: vec![],
-                dependencies: vec![], ..Default::default() },
-            Package { name: "mac-native".to_string(), logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
-                platform_tags: vec![PlatformTag { os: TargetOS::MacOS, arch: TargetArch::Aarch64 }],
                 dependencies: vec![], ..Default::default() },
         ],
     };
     let app_cid = fnv::calculate("app@1.0.0");
 
-    let linux_res = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64).unwrap();
-    let linux_names: Vec<&str> = linux_res.packages.iter().map(|p| p.name.as_str()).collect();
-    assert!(linux_names.contains(&"app"), "linux missing app, got: {:?}", linux_names);
-    assert!(linux_names.contains(&"native"), "linux missing native, got: {:?}", linux_names);
-    assert!(linux_names.contains(&"pure"), "linux missing pure, got: {:?}", linux_names);
-    assert!(!linux_names.contains(&"mac-native"), "linux should not have mac-native");
-    assert_eq!(linux_res.packages.len(), 3);
-
     let mac_res = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::MacOS, TargetArch::Aarch64).unwrap();
-    let mac_names: Vec<&str> = mac_res.packages.iter().map(|p| p.name.as_str()).collect();
-    assert!(mac_names.contains(&"app"), "mac missing app, got: {:?}", mac_names);
-    assert!(mac_names.contains(&"pure"), "mac missing pure, got: {:?}", mac_names);
-    assert!(!mac_names.contains(&"native"), "mac should not have native");
-    assert!(!mac_names.contains(&"mac-native"), "mac-native is not reachable from app");
-    assert_eq!(mac_res.packages.len(), 2);
+    let mac_names: HashSet<&str> = mac_res.packages.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(mac_res.packages.len(), 4, "mac should have 4 packages: {:?}", mac_names);
+    assert!(mac_names.contains("app"));
+    assert!(mac_names.contains("esbuild"));
+    assert!(mac_names.contains("esbuild-darwin-arm64"));
+    assert!(mac_names.contains("lodash"));
+    assert!(!mac_names.contains("esbuild-linux-x64"));
+
+    let linux_res = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64).unwrap();
+    let linux_names: HashSet<&str> = linux_res.packages.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(linux_res.packages.len(), 4, "linux should have 4 packages: {:?}", linux_names);
+    assert!(linux_names.contains("app"));
+    assert!(linux_names.contains("esbuild"));
+    assert!(linux_names.contains("esbuild-linux-x64"));
+    assert!(linux_names.contains("lodash"));
+    assert!(!linux_names.contains("esbuild-darwin-arm64"));
 
     let win_res = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Windows, TargetArch::X86_64).unwrap();
-    let win_names: Vec<&str> = win_res.packages.iter().map(|p| p.name.as_str()).collect();
-    assert!(win_names.contains(&"app"), "win missing app, got: {:?}", win_names);
-    assert!(win_names.contains(&"pure"), "win missing pure, got: {:?}", win_names);
-    assert!(!win_names.contains(&"native"), "win should not have native");
-    assert!(!win_names.contains(&"mac-native"), "win should not have mac-native");
-    assert_eq!(win_res.packages.len(), 2);
+    let win_names: HashSet<&str> = win_res.packages.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(win_res.packages.len(), 3, "windows should have 3 packages (no native esbuild): {:?}", win_names);
+    assert!(win_names.contains("app"));
+    assert!(win_names.contains("esbuild"));
+    assert!(win_names.contains("lodash"));
+    assert!(!win_names.contains("esbuild-darwin-arm64"));
+    assert!(!win_names.contains("esbuild-linux-x64"));
 }
