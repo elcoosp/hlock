@@ -1,6 +1,8 @@
 use crate::error::Error;
 use crate::fnv;
-use crate::lockfile::{Lockfile, Package, PackageChange, LockfileDiff, TargetOS, TargetArch, PlatformTag};
+use crate::lockfile::{
+    Lockfile, LockfileDiff, Package, PackageChange, PlatformTag, TargetArch, TargetOS,
+};
 use std::collections::{HashMap, HashSet};
 
 fn build_cid_map(lockfile: &Lockfile) -> HashMap<u64, (usize, &Package)> {
@@ -33,7 +35,11 @@ pub fn diff_lockfiles(old: &Lockfile, new: &Lockfile) -> LockfileDiff {
                 j += 1;
             }
             std::cmp::Ordering::Equal => {
-                if old_pkg.major == new_pkg.major && old_pkg.minor == new_pkg.minor && old_pkg.patch == new_pkg.patch && old_pkg.hashes == new_pkg.hashes {
+                if old_pkg.major == new_pkg.major
+                    && old_pkg.minor == new_pkg.minor
+                    && old_pkg.patch == new_pkg.patch
+                    && old_pkg.hashes == new_pkg.hashes
+                {
                     unchanged_count += 1;
                 } else {
                     changes.push(PackageChange::Altered(old_pkg.clone(), new_pkg.clone()));
@@ -54,7 +60,10 @@ pub fn diff_lockfiles(old: &Lockfile, new: &Lockfile) -> LockfileDiff {
         j += 1;
     }
 
-    LockfileDiff { changes, unchanged_count }
+    LockfileDiff {
+        changes,
+        unchanged_count,
+    }
 }
 
 pub fn extract_subgraph(lockfile: &Lockfile, root_content_ids: &[u64]) -> Result<Lockfile, Error> {
@@ -62,7 +71,9 @@ pub fn extract_subgraph(lockfile: &Lockfile, root_content_ids: &[u64]) -> Result
 
     for root_id in root_content_ids {
         if !cid_map.contains_key(root_id) {
-            return Err(Error::RootContentIdMissing { content_id: *root_id });
+            return Err(Error::RootContentIdMissing {
+                content_id: *root_id,
+            });
         }
     }
 
@@ -80,7 +91,13 @@ pub fn extract_subgraph(lockfile: &Lockfile, root_content_ids: &[u64]) -> Result
                 output_indices.insert(idx);
                 for dep in &pkg.dependencies {
                     if let Some((dep_idx, _)) = cid_map.values().find(|(_, p)| p.name == dep.name) {
-                        let dep_ver_str = format!("{}@{}.{}.{}", dep.name, lockfile.packages[*dep_idx].major, lockfile.packages[*dep_idx].minor, lockfile.packages[*dep_idx].patch);
+                        let dep_ver_str = format!(
+                            "{}@{}.{}.{}",
+                            dep.name,
+                            lockfile.packages[*dep_idx].major,
+                            lockfile.packages[*dep_idx].minor,
+                            lockfile.packages[*dep_idx].patch
+                        );
                         let dep_cid = fnv::calculate(&dep_ver_str);
                         if allowed_ids.insert(dep_cid) {
                             changed = true;
@@ -91,10 +108,14 @@ pub fn extract_subgraph(lockfile: &Lockfile, root_content_ids: &[u64]) -> Result
         }
     }
 
-    let mut extracted_packages: Vec<Package> = output_indices.into_iter().map(|i| lockfile.packages[i].clone()).collect();
+    let mut extracted_packages: Vec<Package> = output_indices
+        .into_iter()
+        .map(|i| lockfile.packages[i].clone())
+        .collect();
     extracted_packages.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let used_source_indices: HashSet<usize> = extracted_packages.iter().map(|p| p.source_idx).collect();
+    let used_source_indices: HashSet<usize> =
+        extracted_packages.iter().map(|p| p.source_idx).collect();
     let mut source_mapping: HashMap<usize, usize> = HashMap::new();
     let mut new_sources = Vec::new();
 
@@ -115,7 +136,11 @@ pub fn extract_subgraph(lockfile: &Lockfile, root_content_ids: &[u64]) -> Result
         sources: new_sources,
         overrides: lockfile.overrides.clone(),
         features: lockfile.features.clone(),
+        workspace_root: lockfile.workspace_root.clone(),
+        workspace_pkgs: lockfile.workspace_pkgs.clone(),
+        hoist_boundaries: lockfile.hoist_boundaries.clone(),
         packages: extracted_packages,
+        patches: lockfile.patches.clone(),
     })
 }
 
@@ -129,7 +154,9 @@ fn package_matches_platform(pkg: &Package, target_os: &TargetOS, target_arch: &T
     if pkg.platform_tags.is_empty() {
         return true;
     }
-    pkg.platform_tags.iter().any(|t| platform_matches(t, target_os, target_arch))
+    pkg.platform_tags
+        .iter()
+        .any(|t| platform_matches(t, target_os, target_arch))
 }
 
 pub fn extract_subgraph_platform(
@@ -142,7 +169,9 @@ pub fn extract_subgraph_platform(
 
     for root_id in root_content_ids {
         if !cid_map.contains_key(root_id) {
-            return Err(Error::RootContentIdMissing { content_id: *root_id });
+            return Err(Error::RootContentIdMissing {
+                content_id: *root_id,
+            });
         }
     }
 
@@ -158,8 +187,16 @@ pub fn extract_subgraph_platform(
             if reachable.insert(cid) {
                 if let Some((_, pkg)) = cid_map.get(&cid) {
                     for dep in &pkg.dependencies {
-                        if let Some((dep_idx, _)) = cid_map.values().find(|(_, p)| p.name == dep.name) {
-                            let dep_ver_str = format!("{}@{}.{}.{}", dep.name, lockfile.packages[*dep_idx].major, lockfile.packages[*dep_idx].minor, lockfile.packages[*dep_idx].patch);
+                        if let Some((dep_idx, _)) =
+                            cid_map.values().find(|(_, p)| p.name == dep.name)
+                        {
+                            let dep_ver_str = format!(
+                                "{}@{}.{}.{}",
+                                dep.name,
+                                lockfile.packages[*dep_idx].major,
+                                lockfile.packages[*dep_idx].minor,
+                                lockfile.packages[*dep_idx].patch
+                            );
                             let dep_cid = fnv::calculate(&dep_ver_str);
                             queue.push(dep_cid);
                         }
@@ -168,13 +205,16 @@ pub fn extract_subgraph_platform(
             }
         }
 
-        let filtered: HashSet<u64> = reachable.into_iter().filter(|cid| {
-            if let Some((_, pkg)) = cid_map.get(cid) {
-                package_matches_platform(pkg, &target_os, &target_arch)
-            } else {
-                false
-            }
-        }).collect();
+        let filtered: HashSet<u64> = reachable
+            .into_iter()
+            .filter(|cid| {
+                if let Some((_, pkg)) = cid_map.get(cid) {
+                    package_matches_platform(pkg, &target_os, &target_arch)
+                } else {
+                    false
+                }
+            })
+            .collect();
 
         if filtered != candidate_ids {
             candidate_ids = filtered;
@@ -198,10 +238,14 @@ pub fn extract_subgraph_platform(
         }
     }
 
-    let mut extracted_packages: Vec<Package> = output_indices.into_iter().map(|i| lockfile.packages[i].clone()).collect();
+    let mut extracted_packages: Vec<Package> = output_indices
+        .into_iter()
+        .map(|i| lockfile.packages[i].clone())
+        .collect();
     extracted_packages.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let used_source_indices: HashSet<usize> = extracted_packages.iter().map(|p| p.source_idx).collect();
+    let used_source_indices: HashSet<usize> =
+        extracted_packages.iter().map(|p| p.source_idx).collect();
     let mut source_mapping: HashMap<usize, usize> = HashMap::new();
     let mut new_sources = Vec::new();
 
@@ -222,24 +266,49 @@ pub fn extract_subgraph_platform(
         sources: new_sources,
         overrides: lockfile.overrides.clone(),
         features: lockfile.features.clone(),
+        workspace_root: lockfile.workspace_root.clone(),
+        workspace_pkgs: lockfile.workspace_pkgs.clone(),
+        hoist_boundaries: lockfile.hoist_boundaries.clone(),
         packages: extracted_packages,
+        patches: lockfile.patches.clone(),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lockfile::{Dependency, DepType};
+    use crate::lockfile::{DepType, Dependency};
 
-    fn mock_pkg(name: &str, maj: u64, min: u64, pat: u64, deps: Vec<(&str, DepType)>, tags: Vec<PlatformTag>) -> Package {
+    fn mock_pkg(
+        name: &str,
+        maj: u64,
+        min: u64,
+        pat: u64,
+        deps: Vec<(&str, DepType)>,
+        tags: Vec<PlatformTag>,
+    ) -> Package {
         Package {
             name: name.to_string(),
             logical_name: None,
             source_idx: 0,
-            major: maj, minor: min, patch: pat,
-            hashes: vec![], features: vec![], resolved_peers: vec![],
-            dependencies: deps.iter().map(|(n, ty)| Dependency { name: n.to_string(), dep_type: ty.clone(), requested_features: vec![] }).collect(),
-            peer_requirements: vec![], platform_tags: tags,
+            major: maj,
+            minor: min,
+            patch: pat,
+            hashes: vec![],
+            features: vec![],
+            resolved_peers: vec![],
+            dependencies: deps
+                .iter()
+                .map(|(n, ty)| Dependency {
+                    name: n.to_string(),
+                    dep_type: ty.clone(),
+                    requested_features: vec![],
+                })
+                .collect(),
+            peer_requirements: vec![],
+            platform_tags: tags,
+            script_hashes: vec![],
+            patch_hash: None,
         }
     }
 
@@ -247,15 +316,49 @@ mod tests {
     fn test_platform_filter_excludes_non_matching() {
         let lockfile = Lockfile {
             sources: vec![crate::lockfile::Source::Registry("r".to_string())],
-            overrides: vec![], features: vec![],
+            overrides: vec![],
+            features: vec![],
+            workspace_root: None,
+            workspace_pkgs: vec![],
+            hoist_boundaries: vec![],
+            patches: vec![],
             packages: vec![
-                mock_pkg("app", 1, 0, 0, vec![("native-lib", DepType::Runtime)], vec![]),
-                mock_pkg("native-lib", 1, 0, 0, vec![], vec![PlatformTag { os: TargetOS::Linux, arch: TargetArch::X86_64 }]),
-                mock_pkg("other-lib", 1, 0, 0, vec![], vec![PlatformTag { os: TargetOS::MacOS, arch: TargetArch::Aarch64 }]),
+                mock_pkg(
+                    "app",
+                    1,
+                    0,
+                    0,
+                    vec![("native-lib", DepType::Runtime)],
+                    vec![],
+                ),
+                mock_pkg(
+                    "native-lib",
+                    1,
+                    0,
+                    0,
+                    vec![],
+                    vec![PlatformTag {
+                        os: TargetOS::Linux,
+                        arch: TargetArch::X86_64,
+                    }],
+                ),
+                mock_pkg(
+                    "other-lib",
+                    1,
+                    0,
+                    0,
+                    vec![],
+                    vec![PlatformTag {
+                        os: TargetOS::MacOS,
+                        arch: TargetArch::Aarch64,
+                    }],
+                ),
             ],
         };
         let app_cid = fnv::calculate("app@1.0.0");
-        let res = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64).unwrap();
+        let res =
+            extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64)
+                .unwrap();
         assert_eq!(res.packages.len(), 2);
         let names: Vec<&str> = res.packages.iter().map(|p| p.name.as_str()).collect();
         assert!(names.contains(&"app"));
@@ -267,14 +370,21 @@ mod tests {
     fn test_platform_filter_agnostic_included() {
         let lockfile = Lockfile {
             sources: vec![crate::lockfile::Source::Registry("r".to_string())],
-            overrides: vec![], features: vec![],
+            overrides: vec![],
+            features: vec![],
+            workspace_root: None,
+            workspace_pkgs: vec![],
+            hoist_boundaries: vec![],
+            patches: vec![],
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("pure-lib", DepType::Runtime)], vec![]),
                 mock_pkg("pure-lib", 1, 0, 0, vec![], vec![]),
             ],
         };
         let app_cid = fnv::calculate("app@1.0.0");
-        let res = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Windows, TargetArch::X86_64).unwrap();
+        let res =
+            extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Windows, TargetArch::X86_64)
+                .unwrap();
         assert_eq!(res.packages.len(), 2);
     }
 
@@ -282,14 +392,31 @@ mod tests {
     fn test_platform_filter_any_arch() {
         let lockfile = Lockfile {
             sources: vec![crate::lockfile::Source::Registry("r".to_string())],
-            overrides: vec![], features: vec![],
+            overrides: vec![],
+            features: vec![],
+            workspace_root: None,
+            workspace_pkgs: vec![],
+            hoist_boundaries: vec![],
+            patches: vec![],
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("napi", DepType::Runtime)], vec![]),
-                mock_pkg("napi", 1, 0, 0, vec![], vec![PlatformTag { os: TargetOS::Linux, arch: TargetArch::Any }]),
+                mock_pkg(
+                    "napi",
+                    1,
+                    0,
+                    0,
+                    vec![],
+                    vec![PlatformTag {
+                        os: TargetOS::Linux,
+                        arch: TargetArch::Any,
+                    }],
+                ),
             ],
         };
         let app_cid = fnv::calculate("app@1.0.0");
-        let res = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::Aarch64).unwrap();
+        let res =
+            extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::Aarch64)
+                .unwrap();
         assert_eq!(res.packages.len(), 2);
     }
 
@@ -297,21 +424,45 @@ mod tests {
     fn test_platform_filter_multiple_tags() {
         let lockfile = Lockfile {
             sources: vec![crate::lockfile::Source::Registry("r".to_string())],
-            overrides: vec![], features: vec![],
+            overrides: vec![],
+            features: vec![],
+            workspace_root: None,
+            workspace_pkgs: vec![],
+            hoist_boundaries: vec![],
+            patches: vec![],
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("multi", DepType::Runtime)], vec![]),
-                mock_pkg("multi", 1, 0, 0, vec![], vec![
-                    PlatformTag { os: TargetOS::Linux, arch: TargetArch::X86_64 },
-                    PlatformTag { os: TargetOS::MacOS, arch: TargetArch::Aarch64 },
-                ]),
+                mock_pkg(
+                    "multi",
+                    1,
+                    0,
+                    0,
+                    vec![],
+                    vec![
+                        PlatformTag {
+                            os: TargetOS::Linux,
+                            arch: TargetArch::X86_64,
+                        },
+                        PlatformTag {
+                            os: TargetOS::MacOS,
+                            arch: TargetArch::Aarch64,
+                        },
+                    ],
+                ),
             ],
         };
         let app_cid = fnv::calculate("app@1.0.0");
-        let res_linux = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64).unwrap();
+        let res_linux =
+            extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64)
+                .unwrap();
         assert_eq!(res_linux.packages.len(), 2);
-        let res_mac = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::MacOS, TargetArch::Aarch64).unwrap();
+        let res_mac =
+            extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::MacOS, TargetArch::Aarch64)
+                .unwrap();
         assert_eq!(res_mac.packages.len(), 2);
-        let res_win = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Windows, TargetArch::X86_64).unwrap();
+        let res_win =
+            extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Windows, TargetArch::X86_64)
+                .unwrap();
         assert_eq!(res_win.packages.len(), 1);
     }
 
@@ -319,15 +470,32 @@ mod tests {
     fn test_platform_filter_excludes_transitive_non_matching() {
         let lockfile = Lockfile {
             sources: vec![crate::lockfile::Source::Registry("r".to_string())],
-            overrides: vec![], features: vec![],
+            overrides: vec![],
+            features: vec![],
+            workspace_root: None,
+            workspace_pkgs: vec![],
+            hoist_boundaries: vec![],
+            patches: vec![],
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("mid", DepType::Runtime)], vec![]),
                 mock_pkg("mid", 1, 0, 0, vec![("leaf", DepType::Runtime)], vec![]),
-                mock_pkg("leaf", 1, 0, 0, vec![], vec![PlatformTag { os: TargetOS::MacOS, arch: TargetArch::Aarch64 }]),
+                mock_pkg(
+                    "leaf",
+                    1,
+                    0,
+                    0,
+                    vec![],
+                    vec![PlatformTag {
+                        os: TargetOS::MacOS,
+                        arch: TargetArch::Aarch64,
+                    }],
+                ),
             ],
         };
         let app_cid = fnv::calculate("app@1.0.0");
-        let res = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64).unwrap();
+        let res =
+            extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64)
+                .unwrap();
         assert_eq!(res.packages.len(), 2);
         let names: Vec<&str> = res.packages.iter().map(|p| p.name.as_str()).collect();
         assert!(names.contains(&"app"));
@@ -339,13 +507,27 @@ mod tests {
     fn test_platform_filter_no_packages_error() {
         let lockfile = Lockfile {
             sources: vec![crate::lockfile::Source::Registry("r".to_string())],
-            overrides: vec![], features: vec![],
-            packages: vec![
-                mock_pkg("app", 1, 0, 0, vec![], vec![PlatformTag { os: TargetOS::MacOS, arch: TargetArch::Aarch64 }]),
-            ],
+            overrides: vec![],
+            features: vec![],
+            workspace_root: None,
+            workspace_pkgs: vec![],
+            hoist_boundaries: vec![],
+            patches: vec![],
+            packages: vec![mock_pkg(
+                "app",
+                1,
+                0,
+                0,
+                vec![],
+                vec![PlatformTag {
+                    os: TargetOS::MacOS,
+                    arch: TargetArch::Aarch64,
+                }],
+            )],
         };
         let app_cid = fnv::calculate("app@1.0.0");
-        let res = extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64);
+        let res =
+            extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64);
         assert!(matches!(res, Err(Error::NoPackagesForPlatform { .. })));
     }
 }

@@ -61,4 +61,19 @@ pub enum Error {
 
     #[error("No packages match the target platform ({os}, {arch})")]
     NoPackagesForPlatform { os: String, arch: String },
+
+    #[error("Phantom dependency: '{dep}' is used by '{consumer}' but not in its hoist boundary")]
+    PhantomDependency { consumer: String, dep: String },
+
+    #[error("Patch file for '{package}' (content ID {content_id:016x}) not found at '{path}'")]
+    PatchFileMissing { package: String, content_id: u64, path: String },
+
+    #[error("Patch file for '{package}' has mismatched digest: expected {expected}, got {actual}")]
+    PatchDigestMismatch { package: String, expected: String, actual: String },
+
+    #[error("Package '{package}' has a patch hash but no @patch directive in the lockfile header")]
+    OrphanPatchHash { package: String },
+
+    #[error("Script '{script}' for package '{package}' has mismatched digest")]
+    ScriptDigestMismatch { package: String, script: String },
 }

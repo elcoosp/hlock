@@ -27,6 +27,12 @@ pub struct PlatformTagPayload {
     pub arch_id: u8,
 }
 
+pub struct ScriptHashPayload {
+    pub script_type: u8,
+    pub hash_algo: u8,
+    pub digest: Vec<u8>,
+}
+
 pub struct PayloadData {
     pub logical_name: Option<String>,
     pub source_idx: usize,
@@ -39,17 +45,23 @@ pub struct PayloadData {
     pub deps: Vec<DepPayload>,
     pub peer_requirements: Vec<PeerReqPayload>,
     pub platform_tags: Vec<PlatformTagPayload>,
+    pub script_hashes: Vec<ScriptHashPayload>,
+    pub patch_hash: Option<(u8, Vec<u8>)>,
 }
 
 pub fn pack_payload(data: &PayloadData) -> Vec<u8> {
-    pack_payload_v9(data, true)
+    pack_payload_internal(data, true, true)
 }
 
 pub fn pack_payload_v8(data: &PayloadData) -> Vec<u8> {
-    pack_payload_v9(data, false)
+    pack_payload_internal(data, false, false)
 }
 
-fn pack_payload_v9(data: &PayloadData, include_v9: bool) -> Vec<u8> {
+pub(crate) fn pack_payload_v9(data: &PayloadData) -> Vec<u8> {
+    pack_payload_internal(data, true, false)
+}
+
+fn pack_payload_internal(data: &PayloadData, include_v9: bool, include_v10: bool) -> Vec<u8> {
     let mut buf = Vec::with_capacity(128);
 
     buf.push(0x06);
@@ -99,7 +111,9 @@ fn pack_payload_v9(data: &PayloadData, include_v9: bool) -> Vec<u8> {
         buf.extend_from_slice(bytes);
     }
 
-    buf.extend(crate::varint::encode_varint(data.resolved_peers.len() as u64));
+    buf.extend(crate::varint::encode_varint(
+        data.resolved_peers.len() as u64
+    ));
     for peer in &data.resolved_peers {
         let name_bytes = peer.peer_name.as_bytes();
         buf.extend(crate::varint::encode_varint(name_bytes.len() as u64));
@@ -116,14 +130,18 @@ fn pack_payload_v9(data: &PayloadData, include_v9: bool) -> Vec<u8> {
             buf.push(dep.target_os.unwrap_or(0x00));
             buf.push(dep.target_arch.unwrap_or(0x00));
         }
-        buf.extend(crate::varint::encode_varint(dep.req_feat_indices.len() as u64));
+        buf.extend(crate::varint::encode_varint(
+            dep.req_feat_indices.len() as u64
+        ));
         for idx in &dep.req_feat_indices {
             buf.extend(crate::varint::encode_varint(*idx as u64));
         }
     }
 
     if include_v9 {
-        buf.extend(crate::varint::encode_varint(data.peer_requirements.len() as u64));
+        buf.extend(crate::varint::encode_varint(
+            data.peer_requirements.len() as u64
+        ));
         for req in &data.peer_requirements {
             let name_bytes = req.peer_name.as_bytes();
             buf.extend(crate::varint::encode_varint(name_bytes.len() as u64));
@@ -141,123 +159,237 @@ fn pack_payload_v9(data: &PayloadData, include_v9: bool) -> Vec<u8> {
         }
     }
 
+    if include_v10 {
+        buf.extend(crate::varint::encode_varint(data.script_hashes.len() as u64));
+        for sh in &data.script_hashes {
+            buf.push(sh.script_type);
+            buf.push(sh.hash_algo);
+            buf.push(sh.digest.len() as u8);
+            buf.extend_from_slice(&sh.digest);
+        }
+
+        match &data.patch_hash {
+            Some((algo, digest)) => {
+                buf.push(0x01);
+                buf.push(*algo);
+                buf.extend_from_slice(digest);
+            }
+            None => {
+                buf.push(0x00);
+            }
+        }
+    }
+
     let crc = crate::crc32::calculate(&buf);
     buf.extend_from_slice(&crc.to_le_bytes());
     buf
 }
 
 pub fn unpack_payload(bytes: &[u8], line_number: usize) -> Result<PayloadData, Error> {
-    if bytes.len() < 8 { return Err(Error::InvalidBase64 { line_number }); }
+    if bytes.len() < 8 {
+        return Err(Error::InvalidBase64 { line_number });
+    }
     let mut cursor = 0;
 
-    let version = bytes[cursor]; cursor += 1;
-    if version != 0x06 { return Err(Error::UnknownPayloadVersion { line_number, version }); }
+    let version = bytes[cursor];
+    cursor += 1;
+    if version != 0x06 {
+        return Err(Error::UnknownPayloadVersion {
+            line_number,
+            version,
+        });
+    }
 
-    let logical_name_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+    let logical_name_len = crate::varint::decode_varint(bytes, &mut cursor)
+        .map_err(|_| Error::InvalidBase64 { line_number })? as usize;
     let logical_name = if logical_name_len > 0 {
-        if cursor + logical_name_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-        Some(String::from_utf8(bytes[cursor..cursor + logical_name_len].to_vec()).unwrap_or_default())
+        if cursor + logical_name_len > bytes.len() {
+            return Err(Error::InvalidBase64 { line_number });
+        }
+        Some(
+            String::from_utf8(bytes[cursor..cursor + logical_name_len].to_vec())
+                .unwrap_or_default(),
+        )
     } else {
         None
     };
     cursor += logical_name_len;
 
-    let source_idx = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
-    let major = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })?;
-    let minor = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })?;
-    let patch = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })?;
+    let source_idx = crate::varint::decode_varint(bytes, &mut cursor)
+        .map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+    let major = crate::varint::decode_varint(bytes, &mut cursor)
+        .map_err(|_| Error::InvalidBase64 { line_number })?;
+    let minor = crate::varint::decode_varint(bytes, &mut cursor)
+        .map_err(|_| Error::InvalidBase64 { line_number })?;
+    let patch = crate::varint::decode_varint(bytes, &mut cursor)
+        .map_err(|_| Error::InvalidBase64 { line_number })?;
 
-    let hash_count = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+    let hash_count = crate::varint::decode_varint(bytes, &mut cursor)
+        .map_err(|_| Error::InvalidBase64 { line_number })? as usize;
     let mut hashes = Vec::new();
     for _ in 0..hash_count {
-        if cursor + 2 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-        let algo_id = bytes[cursor]; cursor += 1;
-        if algo_id > 0x03 { return Err(Error::UnknownHashAlgorithm { line_number, algo_id }); }
-        let hash_len = bytes[cursor] as usize; cursor += 1;
-        if cursor + hash_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+        if cursor + 2 > bytes.len() {
+            return Err(Error::InvalidBase64 { line_number });
+        }
+        let algo_id = bytes[cursor];
+        cursor += 1;
+        if algo_id > 0x03 {
+            return Err(Error::UnknownHashAlgorithm {
+                line_number,
+                algo_id,
+            });
+        }
+        let hash_len = bytes[cursor] as usize;
+        cursor += 1;
+        if cursor + hash_len > bytes.len() {
+            return Err(Error::InvalidBase64 { line_number });
+        }
         let digest = bytes[cursor..cursor + hash_len].to_vec();
         cursor += hash_len;
 
-        if cursor + 1 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-        let attest_type = bytes[cursor]; cursor += 1;
+        if cursor + 1 > bytes.len() {
+            return Err(Error::InvalidBase64 { line_number });
+        }
+        let attest_type = bytes[cursor];
+        cursor += 1;
         let attestation = match attest_type {
             0x00 => Attestation::None,
             0x01 => {
-                if cursor + 32 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+                if cursor + 32 > bytes.len() {
+                    return Err(Error::InvalidBase64 { line_number });
+                }
                 let mut bundle = [0u8; 32];
-                bundle.copy_from_slice(&bytes[cursor..cursor+32]);
+                bundle.copy_from_slice(&bytes[cursor..cursor + 32]);
                 cursor += 32;
                 Attestation::ExternalBundleSha256(bundle)
             }
             0x02 => {
-                let builder_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
-                if cursor + builder_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-                let builder = String::from_utf8(bytes[cursor..cursor + builder_len].to_vec()).unwrap_or_default();
+                let builder_len = crate::varint::decode_varint(bytes, &mut cursor)
+                    .map_err(|_| Error::InvalidBase64 { line_number })?
+                    as usize;
+                if cursor + builder_len > bytes.len() {
+                    return Err(Error::InvalidBase64 { line_number });
+                }
+                let builder = String::from_utf8(bytes[cursor..cursor + builder_len].to_vec())
+                    .unwrap_or_default();
                 cursor += builder_len;
 
-                let source_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
-                if cursor + source_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-                let source = String::from_utf8(bytes[cursor..cursor + source_len].to_vec()).unwrap_or_default();
+                let source_len = crate::varint::decode_varint(bytes, &mut cursor)
+                    .map_err(|_| Error::InvalidBase64 { line_number })?
+                    as usize;
+                if cursor + source_len > bytes.len() {
+                    return Err(Error::InvalidBase64 { line_number });
+                }
+                let source = String::from_utf8(bytes[cursor..cursor + source_len].to_vec())
+                    .unwrap_or_default();
                 cursor += source_len;
 
                 Attestation::InlineSlsa(SlsaPredicate { builder, source })
             }
-            _ => return Err(Error::UnknownAttestationType { line_number, type_id: attest_type }),
+            _ => {
+                return Err(Error::UnknownAttestationType {
+                    line_number,
+                    type_id: attest_type,
+                });
+            }
         };
 
-        hashes.push(HashPayload { algo_id, digest, attestation });
+        hashes.push(HashPayload {
+            algo_id,
+            digest,
+            attestation,
+        });
     }
 
-    let feat_count = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+    let feat_count = crate::varint::decode_varint(bytes, &mut cursor)
+        .map_err(|_| Error::InvalidBase64 { line_number })? as usize;
     let mut features = Vec::with_capacity(feat_count);
     for _ in 0..feat_count {
-        let str_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
-        if cursor + str_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-        features.push(String::from_utf8(bytes[cursor..cursor + str_len].to_vec()).unwrap_or_default());
+        let str_len = crate::varint::decode_varint(bytes, &mut cursor)
+            .map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+        if cursor + str_len > bytes.len() {
+            return Err(Error::InvalidBase64 { line_number });
+        }
+        features
+            .push(String::from_utf8(bytes[cursor..cursor + str_len].to_vec()).unwrap_or_default());
         cursor += str_len;
     }
 
-    let peer_count = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+    let peer_count = crate::varint::decode_varint(bytes, &mut cursor)
+        .map_err(|_| Error::InvalidBase64 { line_number })? as usize;
     let mut resolved_peers = Vec::new();
     for _ in 0..peer_count {
-        let p_name_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
-        if cursor + p_name_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-        let p_name = String::from_utf8(bytes[cursor..cursor + p_name_len].to_vec()).unwrap_or_default();
+        let p_name_len = crate::varint::decode_varint(bytes, &mut cursor)
+            .map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+        if cursor + p_name_len > bytes.len() {
+            return Err(Error::InvalidBase64 { line_number });
+        }
+        let p_name =
+            String::from_utf8(bytes[cursor..cursor + p_name_len].to_vec()).unwrap_or_default();
         cursor += p_name_len;
 
-        if cursor + 9 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-        let sat_cid = u64::from_le_bytes(bytes[cursor..cursor+8].try_into().unwrap());
+        if cursor + 9 > bytes.len() {
+            return Err(Error::InvalidBase64 { line_number });
+        }
+        let sat_cid = u64::from_le_bytes(bytes[cursor..cursor + 8].try_into().unwrap());
         cursor += 8;
         let is_hoisted = bytes[cursor] == 0x01;
         cursor += 1;
 
-        resolved_peers.push(PeerResolution { peer_name: p_name, satisfied_by_content_id: sat_cid, is_hoisted_to_root: is_hoisted });
+        resolved_peers.push(PeerResolution {
+            peer_name: p_name,
+            satisfied_by_content_id: sat_cid,
+            is_hoisted_to_root: is_hoisted,
+        });
     }
 
-    let dep_count = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+    let dep_count = crate::varint::decode_varint(bytes, &mut cursor)
+        .map_err(|_| Error::InvalidBase64 { line_number })? as usize;
     let mut deps = Vec::new();
     for _ in 0..dep_count {
-        if cursor + 9 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-        let content_id = u64::from_le_bytes(bytes[cursor..cursor+8].try_into().unwrap());
+        if cursor + 9 > bytes.len() {
+            return Err(Error::InvalidBase64 { line_number });
+        }
+        let content_id = u64::from_le_bytes(bytes[cursor..cursor + 8].try_into().unwrap());
         cursor += 8;
 
-        let dep_type = bytes[cursor]; cursor += 1;
-        if dep_type > 0x04 { return Err(Error::UnknownDepType { line_number, type_id: dep_type }); }
+        let dep_type = bytes[cursor];
+        cursor += 1;
+        if dep_type > 0x04 {
+            return Err(Error::UnknownDepType {
+                line_number,
+                type_id: dep_type,
+            });
+        }
 
         let mut target_os = None;
         let mut target_arch = None;
         if dep_type == 0x04 {
-            if cursor + 2 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-            target_os = Some(bytes[cursor]); cursor += 1;
-            target_arch = Some(bytes[cursor]); cursor += 1;
+            if cursor + 2 > bytes.len() {
+                return Err(Error::InvalidBase64 { line_number });
+            }
+            target_os = Some(bytes[cursor]);
+            cursor += 1;
+            target_arch = Some(bytes[cursor]);
+            cursor += 1;
         }
 
-        let req_count = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+        let req_count = crate::varint::decode_varint(bytes, &mut cursor)
+            .map_err(|_| Error::InvalidBase64 { line_number })? as usize;
         let mut req_indices = Vec::with_capacity(req_count);
         for _ in 0..req_count {
-            req_indices.push(crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize);
+            req_indices.push(
+                crate::varint::decode_varint(bytes, &mut cursor)
+                    .map_err(|_| Error::InvalidBase64 { line_number })? as usize,
+            );
         }
-        deps.push(DepPayload { content_id, dep_type, target_os, target_arch, req_feat_indices: req_indices });
+        deps.push(DepPayload {
+            content_id,
+            dep_type,
+            target_os,
+            target_arch,
+            req_feat_indices: req_indices,
+        });
     }
 
     let is_v9 = cursor + 4 < bytes.len();
@@ -265,35 +397,123 @@ pub fn unpack_payload(bytes: &[u8], line_number: usize) -> Result<PayloadData, E
     let mut platform_tags = Vec::new();
 
     if is_v9 {
-        let peer_req_count = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+        let peer_req_count = crate::varint::decode_varint(bytes, &mut cursor)
+            .map_err(|_| Error::InvalidBase64 { line_number })?
+            as usize;
         for _ in 0..peer_req_count {
-            let name_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
-            if cursor + name_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-            let name = String::from_utf8(bytes[cursor..cursor + name_len].to_vec()).unwrap_or_default();
+            let name_len = crate::varint::decode_varint(bytes, &mut cursor)
+                .map_err(|_| Error::InvalidBase64 { line_number })?
+                as usize;
+            if cursor + name_len > bytes.len() {
+                return Err(Error::InvalidBase64 { line_number });
+            }
+            let name =
+                String::from_utf8(bytes[cursor..cursor + name_len].to_vec()).unwrap_or_default();
             cursor += name_len;
-            let range_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
-            if cursor + range_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-            let range = String::from_utf8(bytes[cursor..cursor + range_len].to_vec()).unwrap_or_default();
+            let range_len = crate::varint::decode_varint(bytes, &mut cursor)
+                .map_err(|_| Error::InvalidBase64 { line_number })?
+                as usize;
+            if cursor + range_len > bytes.len() {
+                return Err(Error::InvalidBase64 { line_number });
+            }
+            let range =
+                String::from_utf8(bytes[cursor..cursor + range_len].to_vec()).unwrap_or_default();
             cursor += range_len;
-            if cursor + 1 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+            if cursor + 1 > bytes.len() {
+                return Err(Error::InvalidBase64 { line_number });
+            }
             let is_optional = bytes[cursor] == 0x01;
             cursor += 1;
-            peer_requirements.push(PeerReqPayload { peer_name: name, version_range: range, is_optional });
+            peer_requirements.push(PeerReqPayload {
+                peer_name: name,
+                version_range: range,
+                is_optional,
+            });
         }
 
-        let tag_count = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+        let tag_count = crate::varint::decode_varint(bytes, &mut cursor)
+            .map_err(|_| Error::InvalidBase64 { line_number })? as usize;
         for _ in 0..tag_count {
-            if cursor + 2 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-            platform_tags.push(PlatformTagPayload { os_id: bytes[cursor], arch_id: bytes[cursor + 1] });
+            if cursor + 2 > bytes.len() {
+                return Err(Error::InvalidBase64 { line_number });
+            }
+            platform_tags.push(PlatformTagPayload {
+                os_id: bytes[cursor],
+                arch_id: bytes[cursor + 1],
+            });
             cursor += 2;
         }
     }
 
-    if cursor + 4 != bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
-    let expected_crc = u32::from_le_bytes(bytes[cursor..cursor+4].try_into().unwrap());
-    if expected_crc != crate::crc32::calculate(&bytes[..cursor]) { return Err(Error::IntegrityCheckFailed { line_number }); }
+    let mut script_hashes = Vec::new();
+    let mut patch_hash = None;
 
-    Ok(PayloadData { logical_name, source_idx, major, minor, patch, hashes, features, resolved_peers, deps, peer_requirements, platform_tags })
+    let is_v10 = cursor + 4 < bytes.len();
+    if is_v10 {
+        let sh_count = crate::varint::decode_varint(bytes, &mut cursor)
+            .map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+        for _ in 0..sh_count {
+            if cursor + 2 > bytes.len() {
+                return Err(Error::InvalidBase64 { line_number });
+            }
+            let script_type = bytes[cursor];
+            cursor += 1;
+            let hash_algo = bytes[cursor];
+            cursor += 1;
+            let digest_len = bytes[cursor] as usize;
+            cursor += 1;
+            if cursor + digest_len > bytes.len() {
+                return Err(Error::InvalidBase64 { line_number });
+            }
+            let digest = bytes[cursor..cursor + digest_len].to_vec();
+            cursor += digest_len;
+            script_hashes.push(ScriptHashPayload {
+                script_type,
+                hash_algo,
+                digest,
+            });
+        }
+
+        if cursor + 1 > bytes.len() {
+            return Err(Error::InvalidBase64 { line_number });
+        }
+        let patch_present = bytes[cursor];
+        cursor += 1;
+        if patch_present == 0x01 {
+            if cursor + 33 > bytes.len() {
+                return Err(Error::InvalidBase64 { line_number });
+            }
+            let ph_algo = bytes[cursor];
+            cursor += 1;
+            let ph_digest = bytes[cursor..cursor + 32].to_vec();
+            cursor += 32;
+            patch_hash = Some((ph_algo, ph_digest));
+        }
+    }
+
+    if cursor + 4 != bytes.len() {
+        return Err(Error::InvalidBase64 { line_number });
+    }
+    let expected_crc = u32::from_le_bytes(bytes[cursor..cursor + 4].try_into().unwrap());
+    if expected_crc != crate::crc32::calculate(&bytes[..cursor]) {
+        return Err(Error::IntegrityCheckFailed { line_number });
+    }
+
+    Ok(PayloadData {
+        logical_name,
+        source_idx,
+        major,
+        minor,
+        patch,
+        hashes,
+        features,
+        resolved_peers,
+        deps,
+        peer_requirements,
+        platform_tags,
+        script_hashes,
+        patch_hash,
+    })
 }
 
 #[cfg(test)]
@@ -303,60 +523,135 @@ mod tests {
     #[test]
     fn test_pack_v9_platform_tags() {
         let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            resolved_peers: vec![],
+            deps: vec![],
             peer_requirements: vec![],
-            platform_tags: vec![PlatformTagPayload { os_id: 0x01, arch_id: 0x01 }],
+            platform_tags: vec![PlatformTagPayload {
+                os_id: 0x01,
+                arch_id: 0x01,
+            }],
+            script_hashes: vec![],
+            patch_hash: None,
         };
         let packed = pack_payload(&data);
         let len = packed.len();
-        assert_eq!(packed[len - 8], 0x00);
-        assert_eq!(packed[len - 7], 0x01);
-        assert_eq!(packed[len - 6], 0x01);
-        assert_eq!(packed[len - 5], 0x01);
+        // With v10 fields included, the bytes before CRC are:
+        // 0x00 (peer req count), 0x01 (tag count), 0x01 (os_id), 0x01 (arch_id), 0x00 (script hash count), 0x00 (patch present)
+        assert_eq!(packed[len - 9], 0x01); // tag_count
+        assert_eq!(packed[len - 8], 0x01); // os_id
+        assert_eq!(packed[len - 7], 0x01); // arch_id
+        assert_eq!(packed[len - 6], 0x00); // sh_count
+        assert_eq!(packed[len - 5], 0x00); // patch_present
     }
-
     #[test]
     fn test_pack_v9_peer_requirements() {
         let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            resolved_peers: vec![],
+            deps: vec![],
             peer_requirements: vec![PeerReqPayload {
                 peer_name: "react".to_string(),
                 version_range: "^17.0.0".to_string(),
                 is_optional: false,
             }],
             platform_tags: vec![],
+            script_hashes: vec![],
+            patch_hash: None,
         };
         let packed = pack_payload(&data);
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert_eq!(unpacked.peer_requirements.len(), 1);
         assert_eq!(unpacked.peer_requirements[0].peer_name, "react");
-        assert_eq!(unpacked.peer_requirements[0].version_range, "^17.0.0");
-        assert!(!unpacked.peer_requirements[0].is_optional);
-        assert_eq!(unpacked.platform_tags.len(), 0);
+        assert_eq!(unpacked.script_hashes.len(), 0);
+        assert!(unpacked.patch_hash.is_none());
     }
 
     #[test]
-    fn test_unpack_v9_roundtrip_peer_reqs_and_tags() {
+    fn test_pack_v10_script_hashes() {
         let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
-            peer_requirements: vec![
-                PeerReqPayload { peer_name: "react".to_string(), version_range: "^17.0.0".to_string(), is_optional: false },
-                PeerReqPayload { peer_name: "react-dom".to_string(), version_range: "".to_string(), is_optional: true },
-            ],
-            platform_tags: vec![PlatformTagPayload { os_id: 0x01, arch_id: 0x01 }, PlatformTagPayload { os_id: 0x02, arch_id: 0x02 }],
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            resolved_peers: vec![],
+            deps: vec![],
+            peer_requirements: vec![],
+            platform_tags: vec![],
+            script_hashes: vec![ScriptHashPayload {
+                script_type: 0x03,
+                hash_algo: 0x03,
+                digest: vec![0xAA; 32],
+            }],
+            patch_hash: None,
         };
         let packed = pack_payload(&data);
         let unpacked = unpack_payload(&packed, 0).unwrap();
-        assert_eq!(unpacked.peer_requirements.len(), 2);
-        assert_eq!(unpacked.peer_requirements[0].peer_name, "react");
-        assert_eq!(unpacked.peer_requirements[0].version_range, "^17.0.0");
-        assert!(!unpacked.peer_requirements[0].is_optional);
-        assert_eq!(unpacked.platform_tags.len(), 2);
-        assert_eq!(unpacked.platform_tags[0].os_id, 0x01);
-        assert_eq!(unpacked.platform_tags[1].arch_id, 0x02);
+        assert_eq!(unpacked.script_hashes.len(), 1);
+        assert_eq!(unpacked.script_hashes[0].script_type, 0x03);
+        assert_eq!(unpacked.script_hashes[0].hash_algo, 0x03);
+        assert_eq!(unpacked.script_hashes[0].digest, vec![0xAA; 32]);
+        assert!(unpacked.patch_hash.is_none());
+    }
+
+    #[test]
+    fn test_pack_v10_patch_hash_present() {
+        let data = PayloadData {
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            resolved_peers: vec![],
+            deps: vec![],
+            peer_requirements: vec![],
+            platform_tags: vec![],
+            script_hashes: vec![],
+            patch_hash: Some((0x03, vec![0xBB; 32])),
+        };
+        let packed = pack_payload(&data);
+        let unpacked = unpack_payload(&packed, 0).unwrap();
+        assert_eq!(unpacked.patch_hash.as_ref().map(|(a, _)| *a), Some(0x03));
+        assert_eq!(unpacked.patch_hash.as_ref().map(|(_, d)| d.len()), Some(32));
+    }
+
+    #[test]
+    fn test_pack_v10_patch_hash_absent() {
+        let data = PayloadData {
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            resolved_peers: vec![],
+            deps: vec![],
+            peer_requirements: vec![],
+            platform_tags: vec![],
+            script_hashes: vec![],
+            patch_hash: None,
+        };
+        let packed = pack_payload(&data);
+        let unpacked = unpack_payload(&packed, 0).unwrap();
+        assert!(unpacked.patch_hash.is_none());
     }
 
     #[test]
@@ -368,15 +663,86 @@ mod tests {
         assert_eq!(unpacked.major, 1);
         assert_eq!(unpacked.peer_requirements.len(), 0);
         assert_eq!(unpacked.platform_tags.len(), 0);
+        assert_eq!(unpacked.script_hashes.len(), 0);
+        assert!(unpacked.patch_hash.is_none());
+    }
+
+    #[test]
+    fn test_pack_v9_payload_omits_v10() {
+        let data = PayloadData {
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            resolved_peers: vec![],
+            deps: vec![],
+            peer_requirements: vec![],
+            platform_tags: vec![],
+            script_hashes: vec![ScriptHashPayload {
+                script_type: 0x00,
+                hash_algo: 0x03,
+                digest: vec![0; 32],
+            }],
+            patch_hash: Some((0x03, vec![0; 32])),
+        };
+        let v9_packed = pack_payload_v9(&data);
+        let unpacked = unpack_payload(&v9_packed, 0).unwrap();
+        assert_eq!(unpacked.script_hashes.len(), 0);
+        assert!(unpacked.patch_hash.is_none());
+    }
+
+    #[test]
+    fn test_pack_v8_payload_omits_v9_and_v10() {
+        let data = PayloadData {
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            resolved_peers: vec![],
+            deps: vec![],
+            peer_requirements: vec![],
+            platform_tags: vec![],
+            script_hashes: vec![ScriptHashPayload {
+                script_type: 0x00,
+                hash_algo: 0x03,
+                digest: vec![0; 32],
+            }],
+            patch_hash: Some((0x03, vec![0; 32])),
+        };
+        let v8_packed = pack_payload_v8(&data);
+        let unpacked = unpack_payload(&v8_packed, 0).unwrap();
+        assert_eq!(unpacked.peer_requirements.len(), 0);
+        assert_eq!(unpacked.platform_tags.len(), 0);
+        assert_eq!(unpacked.script_hashes.len(), 0);
+        assert!(unpacked.patch_hash.is_none());
     }
 
     #[test]
     fn test_pack_v5_base_structure() {
         let data = PayloadData {
-            logical_name: None, source_idx: 1, major: 1, minor: 0, patch: 0,
-            hashes: vec![HashPayload { algo_id: 0x01, digest: vec![0xAA; 32], attestation: Attestation::None }],
-            features: vec![], resolved_peers: vec![], deps: vec![],
-            peer_requirements: vec![], platform_tags: vec![],
+            logical_name: None,
+            source_idx: 1,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![HashPayload {
+                algo_id: 0x01,
+                digest: vec![0xAA; 32],
+                attestation: Attestation::None,
+            }],
+            features: vec![],
+            resolved_peers: vec![],
+            deps: vec![],
+            peer_requirements: vec![],
+            platform_tags: vec![],
+            script_hashes: vec![],
+            patch_hash: None,
         };
         let packed = pack_payload(&data);
         assert_eq!(packed[0], 0x06);
@@ -387,10 +753,25 @@ mod tests {
     #[test]
     fn test_pack_v5_dep_content_id() {
         let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![], features: vec![], resolved_peers: vec![],
-            deps: vec![DepPayload { content_id: 12345678, dep_type: 0x00, target_os: None, target_arch: None, req_feat_indices: vec![] }],
-            peer_requirements: vec![], platform_tags: vec![],
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            resolved_peers: vec![],
+            deps: vec![DepPayload {
+                content_id: 12345678,
+                dep_type: 0x00,
+                target_os: None,
+                target_arch: None,
+                req_feat_indices: vec![],
+            }],
+            peer_requirements: vec![],
+            platform_tags: vec![],
+            script_hashes: vec![],
+            patch_hash: None,
         };
         let packed = pack_payload(&data);
 
@@ -402,12 +783,29 @@ mod tests {
     #[test]
     fn test_unpack_roundtrip_v5() {
         let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 2, minor: 0, patch: 0,
-            hashes: vec![HashPayload { algo_id: 0x01, digest: vec![0; 32], attestation: Attestation::None }],
+            logical_name: None,
+            source_idx: 0,
+            major: 2,
+            minor: 0,
+            patch: 0,
+            hashes: vec![HashPayload {
+                algo_id: 0x01,
+                digest: vec![0; 32],
+                attestation: Attestation::None,
+            }],
             features: vec!["sync".to_string()],
             resolved_peers: vec![],
-            deps: vec![DepPayload { content_id: 99, dep_type: 0x01, target_os: None, target_arch: None, req_feat_indices: vec![0] }],
-            peer_requirements: vec![], platform_tags: vec![],
+            deps: vec![DepPayload {
+                content_id: 99,
+                dep_type: 0x01,
+                target_os: None,
+                target_arch: None,
+                req_feat_indices: vec![0],
+            }],
+            peer_requirements: vec![],
+            platform_tags: vec![],
+            script_hashes: vec![],
+            patch_hash: None,
         };
         let packed = pack_payload(&data);
         let unpacked = unpack_payload(&packed, 0).unwrap();
@@ -419,13 +817,26 @@ mod tests {
     #[test]
     fn test_pack_v7_hash_with_inline_slsa() {
         let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
             hashes: vec![HashPayload {
-                algo_id: 0x01, digest: vec![0xAA; 32],
-                attestation: Attestation::InlineSlsa(SlsaPredicate { builder: "github.com/actions".to_string(), source: "git+https://github.com/pkg".to_string() }),
+                algo_id: 0x01,
+                digest: vec![0xAA; 32],
+                attestation: Attestation::InlineSlsa(SlsaPredicate {
+                    builder: "github.com/actions".to_string(),
+                    source: "git+https://github.com/pkg".to_string(),
+                }),
             }],
-            features: vec![], resolved_peers: vec![], deps: vec![],
-            peer_requirements: vec![], platform_tags: vec![],
+            features: vec![],
+            resolved_peers: vec![],
+            deps: vec![],
+            peer_requirements: vec![],
+            platform_tags: vec![],
+            script_hashes: vec![],
+            patch_hash: None,
         };
         let packed = pack_payload(&data);
         assert_eq!(packed[0], 0x06);
@@ -438,11 +849,23 @@ mod tests {
     #[test]
     fn test_pack_v8_logical_name_and_peers() {
         let data = PayloadData {
-            logical_name: Some("react-v18".to_string()), source_idx: 0, major: 18, minor: 0, patch: 0,
-            hashes: vec![], features: vec![], resolved_peers: vec![PeerResolution {
-                peer_name: "react".to_string(), satisfied_by_content_id: 99, is_hoisted_to_root: true,
-            }], deps: vec![],
-            peer_requirements: vec![], platform_tags: vec![],
+            logical_name: Some("react-v18".to_string()),
+            source_idx: 0,
+            major: 18,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            resolved_peers: vec![PeerResolution {
+                peer_name: "react".to_string(),
+                satisfied_by_content_id: 99,
+                is_hoisted_to_root: true,
+            }],
+            deps: vec![],
+            peer_requirements: vec![],
+            platform_tags: vec![],
+            script_hashes: vec![],
+            patch_hash: None,
         };
         let packed = pack_payload(&data);
         assert_eq!(packed[0], 0x06);
@@ -453,29 +876,102 @@ mod tests {
     #[test]
     fn test_unpack_invalid_version_v5() {
         let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 0, minor: 0, patch: 0,
-            hashes: vec![HashPayload { algo_id: 0x01, digest: vec![], attestation: Attestation::None }],
-            features: vec![], resolved_peers: vec![], deps: vec![],
-            peer_requirements: vec![], platform_tags: vec![],
+            logical_name: None,
+            source_idx: 0,
+            major: 0,
+            minor: 0,
+            patch: 0,
+            hashes: vec![HashPayload {
+                algo_id: 0x01,
+                digest: vec![],
+                attestation: Attestation::None,
+            }],
+            features: vec![],
+            resolved_peers: vec![],
+            deps: vec![],
+            peer_requirements: vec![],
+            platform_tags: vec![],
+            script_hashes: vec![],
+            patch_hash: None,
         };
         let mut bad_payload = pack_payload(&data);
         bad_payload[0] = 0x05;
-        assert!(matches!(unpack_payload(&bad_payload, 1), Err(Error::UnknownPayloadVersion { .. })));
+        assert!(matches!(
+            unpack_payload(&bad_payload, 1),
+            Err(Error::UnknownPayloadVersion { .. })
+        ));
     }
 
     #[test]
     fn test_pack_payload_v8_omits_new_sections() {
         let data = PayloadData {
-            logical_name: None, source_idx: 0, major: 1, minor: 0, patch: 0,
-            hashes: vec![], features: vec![], resolved_peers: vec![], deps: vec![],
-            peer_requirements: vec![PeerReqPayload { peer_name: "react".to_string(), version_range: "^17".to_string(), is_optional: false }],
-            platform_tags: vec![PlatformTagPayload { os_id: 0x01, arch_id: 0x01 }],
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            resolved_peers: vec![],
+            deps: vec![],
+            peer_requirements: vec![],
+            platform_tags: vec![],
+            script_hashes: vec![],
+            patch_hash: None,
         };
         let v8_packed = pack_payload_v8(&data);
-        let v9_packed = pack_payload(&data);
-        assert!(v8_packed.len() < v9_packed.len());
         let unpacked = unpack_payload(&v8_packed, 0).unwrap();
         assert_eq!(unpacked.peer_requirements.len(), 0);
         assert_eq!(unpacked.platform_tags.len(), 0);
+        assert_eq!(unpacked.script_hashes.len(), 0);
+        assert!(unpacked.patch_hash.is_none());
+    }
+
+    #[test]
+    fn test_unpack_v9_roundtrip_peer_reqs_and_tags() {
+        let data = PayloadData {
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![],
+            features: vec![],
+            resolved_peers: vec![],
+            deps: vec![],
+            peer_requirements: vec![
+                PeerReqPayload {
+                    peer_name: "react".to_string(),
+                    version_range: "^17.0.0".to_string(),
+                    is_optional: false,
+                },
+                PeerReqPayload {
+                    peer_name: "react-dom".to_string(),
+                    version_range: "".to_string(),
+                    is_optional: true,
+                },
+            ],
+            platform_tags: vec![
+                PlatformTagPayload {
+                    os_id: 0x01,
+                    arch_id: 0x01,
+                },
+                PlatformTagPayload {
+                    os_id: 0x02,
+                    arch_id: 0x02,
+                },
+            ],
+            script_hashes: vec![],
+            patch_hash: None,
+        };
+        let packed = pack_payload(&data);
+        let unpacked = unpack_payload(&packed, 0).unwrap();
+        assert_eq!(unpacked.peer_requirements.len(), 2);
+        assert_eq!(unpacked.peer_requirements[0].peer_name, "react");
+        assert_eq!(unpacked.peer_requirements[0].version_range, "^17.0.0");
+        assert!(!unpacked.peer_requirements[0].is_optional);
+        assert_eq!(unpacked.platform_tags.len(), 2);
+        assert_eq!(unpacked.platform_tags[0].os_id, 0x01);
+        assert_eq!(unpacked.platform_tags[1].arch_id, 0x02);
     }
 }
