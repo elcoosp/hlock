@@ -141,6 +141,8 @@ pub struct Package {
     pub dependencies: Vec<Dependency>,
     pub peer_requirements: Vec<PeerRequirement>,
     pub platform_tags: Vec<PlatformTag>,
+    pub exports: Vec<Export>,
+    pub artifacts: Vec<Artifact>,
     pub hook_hashes: Vec<HookHash>,
     pub patch_hash: Option<(HashAlgorithm, Vec<u8>)>,
 }
@@ -346,6 +348,20 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
             PlatformTagPayload { os_id, arch_id }
         }).collect();
 
+        let exports: Vec<crate::payload::ExportPayload> = pkg.exports.iter().map(|ex| {
+            let algo_id: u8 = match ex.hash_algo {
+                HashAlgorithm::Sha1 => 0x00, HashAlgorithm::Sha256 => 0x01, HashAlgorithm::Sha512 => 0x02, HashAlgorithm::Blake3 => 0x03,
+            };
+            crate::payload::ExportPayload { identifier: ex.identifier.clone(), hash_algo: algo_id, digest: ex.digest.clone() }
+        }).collect();
+
+        let artifacts: Vec<crate::payload::ArtifactPayload> = pkg.artifacts.iter().map(|art| {
+            let algo_id: u8 = match art.hash_algo {
+                HashAlgorithm::Sha1 => 0x00, HashAlgorithm::Sha256 => 0x01, HashAlgorithm::Sha512 => 0x02, HashAlgorithm::Blake3 => 0x03,
+            };
+            crate::payload::ArtifactPayload { os_id: art.os_id, arch_id: art.arch_id, hash_algo: algo_id, digest: art.digest.clone() }
+        }).collect();
+
         let hook_hashes: Vec<HookHashPayload> = pkg.hook_hashes.iter().map(|sh| {
             let algo_id: u8 = match sh.hash_algo {
                 HashAlgorithm::Sha1 => 0x00, HashAlgorithm::Sha256 => 0x01, HashAlgorithm::Sha512 => 0x02, HashAlgorithm::Blake3 => 0x03,
@@ -372,6 +388,8 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
             deps,
             peer_requirements: peer_reqs,
             platform_tags: tags,
+            exports,
+            artifacts,
             hook_hashes,
             patch_hash,
         };
@@ -487,6 +505,24 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
                     0x06 => TargetArch::Ppc64le, _ => TargetArch::Unknown,
                 };
                 PlatformTag { os, arch }
+            }).collect(),
+            exports: payload.exports.iter().map(|ex| {
+                let algo = match ex.hash_algo {
+                    0x00 => HashAlgorithm::Sha1,
+                    0x01 => HashAlgorithm::Sha256,
+                    0x02 => HashAlgorithm::Sha512,
+                    _ => HashAlgorithm::Blake3,
+                };
+                Export { identifier: ex.identifier.clone(), hash_algo: algo, digest: ex.digest.clone() }
+            }).collect(),
+            artifacts: payload.artifacts.iter().map(|art| {
+                let algo = match art.hash_algo {
+                    0x00 => HashAlgorithm::Sha1,
+                    0x01 => HashAlgorithm::Sha256,
+                    0x02 => HashAlgorithm::Sha512,
+                    _ => HashAlgorithm::Blake3,
+                };
+                Artifact { os_id: art.os_id, arch_id: art.arch_id, hash_algo: algo, digest: art.digest.clone() }
             }).collect(),
             hook_hashes: payload.hook_hashes.iter().map(|sh| {
                 let algo = match sh.hash_algo {

@@ -13,7 +13,7 @@ pub use lockfile::{
     Attestation, DepType, Dependency, HashAlgorithm, HoistBoundary,
     IntegrityHash, Lockfile, LockfileDiff, Override, Package, PackageChange,
     PatchDirective, PeerResolution, PeerRequirement, PlatformTag,
-    HookHash, Source, SlsaPredicate, TargetArch, TargetOS, WorkspacePkg,
+    Artifact, Export, HookHash, Source, SlsaPredicate, TargetArch, TargetOS, WorkspacePkg,
     deserialize, read_lockfile, serialize, validate_hoist_boundary, validate_patches,
     validate_scripts, write_lockfile,
 };

@@ -33,6 +33,19 @@ pub struct HookHashPayload {
     pub digest: Vec<u8>,
 }
 
+pub struct ExportPayload {
+    pub identifier: String,
+    pub hash_algo: u8,
+    pub digest: Vec<u8>,
+}
+
+pub struct ArtifactPayload {
+    pub os_id: u8,
+    pub arch_id: u8,
+    pub hash_algo: u8,
+    pub digest: Vec<u8>,
+}
+
 pub struct PayloadData {
     pub logical_name: Option<String>,
     pub source_idx: usize,
@@ -45,6 +58,8 @@ pub struct PayloadData {
     pub deps: Vec<DepPayload>,
     pub peer_requirements: Vec<PeerReqPayload>,
     pub platform_tags: Vec<PlatformTagPayload>,
+    pub exports: Vec<ExportPayload>,
+    pub artifacts: Vec<ArtifactPayload>,
     pub hook_hashes: Vec<HookHashPayload>,
     pub patch_hash: Option<(u8, Vec<u8>)>,
 }
@@ -137,6 +152,25 @@ pub fn pack_payload(data: &PayloadData) -> Vec<u8> {
     for tag in &data.platform_tags {
         buf.push(tag.os_id);
         buf.push(tag.arch_id);
+    }
+
+    buf.extend(crate::varint::encode_varint(data.exports.len() as u64));
+    for ex in &data.exports {
+        let id_bytes = ex.identifier.as_bytes();
+        buf.extend(crate::varint::encode_varint(id_bytes.len() as u64));
+        buf.extend_from_slice(id_bytes);
+        buf.push(ex.hash_algo);
+        buf.push(ex.digest.len() as u8);
+        buf.extend_from_slice(&ex.digest);
+    }
+
+    buf.extend(crate::varint::encode_varint(data.artifacts.len() as u64));
+    for art in &data.artifacts {
+        buf.push(art.os_id);
+        buf.push(art.arch_id);
+        buf.push(art.hash_algo);
+        buf.push(art.digest.len() as u8);
+        buf.extend_from_slice(&art.digest);
     }
 
     buf.extend(crate::varint::encode_varint(data.hook_hashes.len() as u64));
@@ -304,6 +338,36 @@ pub fn unpack_payload(bytes: &[u8], line_number: usize) -> Result<PayloadData, E
         cursor += 2;
     }
 
+    let ex_count = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+    let mut exports = Vec::new();
+    for _ in 0..ex_count {
+        let id_len = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+        if cursor + id_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+        let identifier = String::from_utf8(bytes[cursor..cursor + id_len].to_vec()).unwrap_or_default();
+        cursor += id_len;
+        if cursor + 1 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+        let hash_algo = bytes[cursor]; cursor += 1;
+        let digest_len = bytes[cursor] as usize; cursor += 1;
+        if cursor + digest_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+        let digest = bytes[cursor..cursor + digest_len].to_vec();
+        cursor += digest_len;
+        exports.push(ExportPayload { identifier, hash_algo, digest });
+    }
+
+    let art_count = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
+    let mut artifacts = Vec::new();
+    for _ in 0..art_count {
+        if cursor + 3 > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+        let os_id = bytes[cursor]; cursor += 1;
+        let arch_id = bytes[cursor]; cursor += 1;
+        let hash_algo = bytes[cursor]; cursor += 1;
+        let digest_len = bytes[cursor] as usize; cursor += 1;
+        if cursor + digest_len > bytes.len() { return Err(Error::InvalidBase64 { line_number }); }
+        let digest = bytes[cursor..cursor + digest_len].to_vec();
+        cursor += digest_len;
+        artifacts.push(ArtifactPayload { os_id, arch_id, hash_algo, digest });
+    }
+
     let sh_count = crate::varint::decode_varint(bytes, &mut cursor).map_err(|_| Error::InvalidBase64 { line_number })? as usize;
     let mut hook_hashes = Vec::new();
     for _ in 0..sh_count {
@@ -335,7 +399,7 @@ pub fn unpack_payload(bytes: &[u8], line_number: usize) -> Result<PayloadData, E
     let expected_crc = u32::from_le_bytes(bytes[cursor..cursor+4].try_into().unwrap());
     if expected_crc != crate::crc32::calculate(&bytes[..cursor]) { return Err(Error::IntegrityCheckFailed { line_number }); }
 
-    Ok(PayloadData { logical_name, source_idx, major, minor, patch, hashes, features, resolved_peers, deps, peer_requirements, platform_tags, hook_hashes, patch_hash })
+    Ok(PayloadData { logical_name, source_idx, major, minor, patch, hashes, features, resolved_peers, deps, peer_requirements, platform_tags, exports, artifacts, hook_hashes, patch_hash })
 }
 
 #[cfg(test)]
