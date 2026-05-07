@@ -1,5 +1,5 @@
 use hlock::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 #[test]
@@ -9,10 +9,12 @@ fn test_e2e_write_and_read_v5() {
         sources: vec![Source::Registry("https://npmjs.org/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![
             Package {
                 name: "alpha".to_string(),
@@ -73,10 +75,12 @@ fn test_e2e_workspace_roundtrip() {
         sources: vec![Source::Workspace],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![Package {
             name: "core".to_string(),
             logical_name: None,
@@ -104,10 +108,12 @@ fn test_string_api_crc_corruption() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![Package {
             name: "z".to_string(),
             logical_name: None,
@@ -135,7 +141,7 @@ fn test_string_api_crc_corruption() {
     let tampered_str: String = tampered.into_iter().collect();
     assert!(matches!(
         deserialize(&tampered_str),
-        Err(Error::IntegrityCheckFailed { .. })
+        Err(Error::PayloadDigestMismatch { .. })
     ));
 }
 
@@ -149,10 +155,12 @@ fn test_e2e_features_roundtrip() {
             "serde".to_string(),
             vec!["derive".to_string(), "rc".to_string()],
         )],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![
             Package {
                 name: "serde".to_string(),
@@ -203,10 +211,12 @@ fn test_e2e_optional_target_roundtrip() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![
             Package {
                 name: "esbuild".to_string(),
@@ -255,10 +265,12 @@ fn test_e2e_diff_after_adding_package() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![Package {
             name: "core".to_string(),
             logical_name: None,
@@ -279,10 +291,12 @@ fn test_e2e_diff_after_adding_package() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![
             Package {
                 name: "core".to_string(),
@@ -330,10 +344,12 @@ fn test_e2e_extract_and_serialize_is_valid() {
         ],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![
             Package {
                 name: "app".to_string(),
@@ -406,10 +422,12 @@ fn test_e2e_v7_provenance_roundtrip() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![Package {
             name: "crypto-lib".to_string(),
             logical_name: None,
@@ -444,10 +462,12 @@ fn test_e2e_graph_manipulation_ignores_provenance() {
         sources: vec![Source::Registry("r".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![Package {
             name: "a".to_string(),
             logical_name: None,
@@ -483,10 +503,12 @@ fn test_e2e_v8_peer_resolution_topology() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![
             Package {
                 name: "app".to_string(),
@@ -532,10 +554,12 @@ fn test_e2e_graph_extract_preserves_peers() {
         sources: vec![Source::Registry("r".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![Package {
             name: "a".to_string(),
             logical_name: None,
@@ -564,10 +588,12 @@ fn test_e2e_v8_alias_and_cas_roundtrip() {
         sources: vec![Source::CasHttp("https://cas.example.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![Package {
             name: "react".to_string(),
             logical_name: Some("react-v18".to_string()),
@@ -603,10 +629,12 @@ fn test_e2e_ipfs_source_roundtrip() {
         sources: vec![Source::Ipfs("ipfs://QmXyZ1abcDEF".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![Package {
             name: "some-pkg".to_string(),
             logical_name: None,
@@ -637,10 +665,12 @@ fn test_e2e_v9_peer_requirements_roundtrip() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![
             Package {
                 name: "react-dom".to_string(),
@@ -699,10 +729,12 @@ fn test_e2e_v9_platform_tags_roundtrip() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![
             Package {
                 name: "esbuild-darwin-arm64".to_string(),
@@ -762,18 +794,17 @@ fn test_e2e_sign_lockfile_and_verify() {
     ];
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
     let verifying_key_bytes = *signing_key.verifying_key().as_bytes();
-    let mut expanded_key = [0u8; 64];
-    expanded_key[..32].copy_from_slice(&seed);
-    expanded_key[32..].copy_from_slice(&verifying_key_bytes);
 
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![Package {
             name: "app".to_string(),
             logical_name: None,
@@ -786,10 +817,13 @@ fn test_e2e_sign_lockfile_and_verify() {
     };
     let serialized = serialize(&mut lockfile).unwrap();
 
-    let signed = sign_lockfile(&serialized, "ci@company.com", &expanded_key).unwrap();
+    let signed = sign_lockfile(&serialized, "ci@company.com", SignatureAlgorithm::Ed25519, &seed, 0).unwrap();
     assert!(signed.contains("@signature ci@company.com "));
 
-    let verify_result = verify_signature(&signed, &verifying_key_bytes);
+    let leaked: &'static [u8] = Box::leak(Box::new(verifying_key_bytes) as Box<[u8]>);
+    let mut trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+    trusted.insert("ci@company.com".to_string(), (leaked, SignatureAlgorithm::Ed25519));
+    let verify_result = verify_signature(&signed, &trusted);
     assert!(verify_result.is_ok());
 }
 
@@ -800,20 +834,17 @@ fn test_e2e_signed_lockfile_deserializes_correctly() {
         0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae,
         0x7f, 0x60,
     ];
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-    let verifying_key_bytes = *signing_key.verifying_key().as_bytes();
-    let mut expanded_key = [0u8; 64];
-    expanded_key[..32].copy_from_slice(&seed);
-    expanded_key[32..].copy_from_slice(&verifying_key_bytes);
 
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![
             Package {
                 name: "alpha".to_string(),
@@ -836,7 +867,7 @@ fn test_e2e_signed_lockfile_deserializes_correctly() {
         ],
     };
     let serialized = serialize(&mut lockfile).unwrap();
-    let signed = sign_lockfile(&serialized, "bot@github-actions", &expanded_key).unwrap();
+    let signed = sign_lockfile(&serialized, "bot@github-actions", SignatureAlgorithm::Ed25519, &seed, 0).unwrap();
 
     let deserialized = deserialize(&signed).unwrap();
     assert_eq!(deserialized.packages.len(), 2);
@@ -850,10 +881,12 @@ fn test_e2e_platform_extraction_with_real_lockfile() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
+        metadata: vec![],
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         patches: vec![],
+        artifacts: vec![],
         packages: vec![
             Package {
                 name: "app".to_string(),

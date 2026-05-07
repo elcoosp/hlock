@@ -121,10 +121,10 @@ pub fn verify_signature(
 ) -> Result<(), SignatureError> {
     let mut sig_start: Option<usize> = None;
     let mut sig_directives: Vec<SignatureDirective> = Vec::new();
-    for (idx, line) in lockfile_content.lines().enumerate() {
+    for line in lockfile_content.lines() {
         if line.starts_with("@signature ") {
             if sig_start.is_none() {
-                sig_start = Some(lockfile_content.len() - lockfile_content[idx..].len());
+                sig_start = lockfile_content.find("@signature ");
             }
             sig_directives.push(parse_signature_directive(line)?);
         }
@@ -241,7 +241,7 @@ mod tests {
     fn test_verify_tampered_message() {
         let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
         let signed = sign_lockfile(lockfile, "ci@example.com", SignatureAlgorithm::Ed25519, &SEED, 0).unwrap();
-        let tampered = signed.replace("reg.com", "reg.org");
+        let tampered = signed.replace("r.com", "r.org");
         match verify_signature(&tampered, &make_trusted()) {
             Err(SignatureError::VerificationFailed) => {}
             other => panic!("expected VerificationFailed, got {:?}", other),
