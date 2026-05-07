@@ -5,32 +5,39 @@ A binary lockfile format for package managers. Single lockfile, many platforms, 
 ## Features
 
 - **Single Lockfile, Many Platforms** — Encode all packages for all targets in one `.hlock` file. Extract platform-specific subgraphs for installation.
+- **Interface Integrity** — Lock the public export map of each module, making dependency confusion attacks cryptographically detectable.
+- **Artifact Transparency** — Hash dynamically fetched or compiled platform-specific binaries, closing the "trusted post-link script" loophole.
 - **Full Peer Lifecycle** — Record both *what* peer dependencies require and *how* they were resolved, enabling installers to re-validate topology without re-resolving.
 - **Tamper-Proof by Default** — Optional Ed25519 lockfile signing. CI pipelines verify lockfiles were produced by trusted identities before installing.
-- **Backward Compatible** — v0.9 deserializers read v0.8 lockfiles transparently. A `CompatMode::V8` serializer is available for mixed-ecosystem teams.
+- **Language Agnostic** — No assumptions about specific ecosystems. Hook names, export identifiers, and metadata are all raw strings.
 
 ## Installation
 
 Add to your `Cargo.toml`:
 
-```
+```toml
 [dependencies]
-hlock = "0.9.0"
+hlock = "0.11.0"
 ```
 
 ## File Format
 
-```
+```text
 @source 0 https://registry.npmjs.org/
 @override lodash 4.0.0 -> 4.17.21
 @feature serde derive,rc
+@metadata license MIT
+@metadata repository https://github.com/example/project
 
 serde\tBwcXCh8KFQ...
 app\tBwcXCh8KFQ...
+@artifact 00000000deadbeef 01 01 ./binaries/app-linux-x64
+@artifact 00000000deadbeef 02 02 ./binaries/app-darwin-arm64
+@patch 00000000cafebabe 01 ./patches/fix.patch
 @signature ci@company.com FYF9Siwdqj2GB7BkK6eR8Kkx6hSp1KkvXpS1m0B1-Jdc2J6jJ5EGZjZmT1wiGlElb58K9ZmFP6jcuOhjMw_Bw
 ```
 
-Each package line is a tab-separated pair of the package name and a Base64URL-encoded binary payload containing: name, version, source index, integrity hashes, features, peer resolutions, peer requirements, platform tags, and dependencies — all with CRC32 integrity protection.
+Each package line is a tab-separated pair of the package name and a Base64URL-encoded binary payload containing: logical name, version, source index, integrity hashes, features, peer resolutions, dependencies, peer requirements, platform tags, exports, artifacts, and hook hashes — all with CRC32 integrity protection.
 
 ## Usage
 
@@ -43,7 +50,13 @@ let mut lockfile = Lockfile {
     sources: vec![Source::Registry("https://registry.npmjs.org/".into())],
     overrides: vec![],
     features: vec![],
+    metadata: vec![],
+    workspace_root: None,
+    workspace_pkgs: vec![],
+    hoist_boundaries: vec![],
     packages: vec![/* ... */],
+    artifacts: vec![],
+    patches: vec![],
 };
 
 let serialized = serialize(&mut lockfile)?;
@@ -89,21 +102,60 @@ let signed = sign_lockfile(&serialized, "ci@company.com", &expanded_key)?;
 verify_signature(&signed, &vk_bytes)?;
 ```
 
-### V8 Compatibility Mode
+### Interface Locking (Exports)
 
-For teams with tooling that only understands v0.8:
+Lock the public export map of a module to detect dependency confusion:
 
 ```rust
 use hlock::*;
 
-let v8_safe = serialize_compat(&mut lockfile, CompatMode::V8)?;
-// Peer requirements and platform tags are stripped.
-// Readable by any v0.8-compatible parser.
+let pkg = Package {
+    name: "my-lib".into(),
+    exports: vec![
+        Export {
+            identifier: "./core".into(),
+            hash_algo: HashAlgorithm::Sha256,
+            digest: vec![/* hash of resolved ./core file */],
+        },
+        Export {
+            identifier: "./utils".into(),
+            hash_algo: HashAlgorithm::Sha256,
+            digest: vec![/* hash of resolved ./utils file */],
+        },
+    ],
+    // ... other fields
+};
+```
+
+### Artifact Verification
+
+Declare platform-specific binaries with integrity hashes:
+
+```rust
+use hlock::*;
+
+// In the binary payload:
+let pkg = Package {
+    name: "native-tool".into(),
+    artifacts: vec![
+        Artifact { os_id: 0x01, arch_id: 0x01, hash_algo: HashAlgorithm::Sha256, digest: vec![/* ... */] },
+        Artifact { os_id: 0x02, arch_id: 0x02, hash_algo: HashAlgorithm::Sha256, digest: vec![/* ... */] },
+    ],
+    // ... other fields
+};
+
+// In the header:
+let directive = ArtifactDirective {
+    content_id: fnv::calculate("native-tool@1.0.0"),
+    os_id: 0x01,
+    arch_id: 0x01,
+    relative_path: "./binaries/native-tool-linux-x64".into(),
+};
 ```
 
 ## Platform Tags
 
-Native binaries declare their target platform. Pure JS/TS packages use an empty list (platform-agnostic).
+Native binaries declare their target platform. Pure packages use an empty list (platform-agnostic).
 
 | Tag | Meaning |
 |-----|---------|
