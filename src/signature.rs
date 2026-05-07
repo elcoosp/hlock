@@ -170,7 +170,7 @@ pub fn verify_signature(
                 let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&pk_bytes).map_err(|e| {
                     SignatureError::MalformedDirective { reason: format!("invalid Ed25519 public key: {}", e) }
                 })?;
-                let signature = ed25519::Signature::from_bytes(&sig_bytes);
+                let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
                 use ed25519_dalek::Verifier;
                 verifying_key.verify(message, &signature).map_err(|_| SignatureError::VerificationFailed)?;
             }

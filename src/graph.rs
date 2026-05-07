@@ -278,6 +278,263 @@ pub fn extract_subgraph_platform(
     })
 }
 
+pub fn topological_sort(lockfile: &Lockfile) -> Result<Vec<usize>, Vec<String>> {
+    use std::collections::BTreeSet;
+
+    let name_to_idx: HashMap<&str, usize> = lockfile.packages.iter()
+        .enumerate()
+        .map(|(i, p)| (p.name.as_str(), i))
+        .collect();
+
+    let n = lockfile.packages.len();
+    let mut in_degree = vec![0usize; n];
+    let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); n];
+
+    for (i, pkg) in lockfile.packages.iter().enumerate() {
+        for dep in &pkg.dependencies {
+            if let Some(&dep_idx) = name_to_idx.get(dep.name.as_str()) {
+                in_degree[i] += 1;
+                dependents[dep_idx].push(i);
+            }
+        }
+    }
+
+    let mut queue: BTreeSet<(&str, usize)> = BTreeSet::new();
+    for i in 0..n {
+        if in_degree[i] == 0 {
+            queue.insert((lockfile.packages[i].name.as_str(), i));
+        }
+    }
+
+    let mut result = Vec::with_capacity(n);
+    while let Some(&(_, idx)) = queue.iter().next() {
+        queue.remove(&(lockfile.packages[idx].name.as_str(), idx));
+        result.push(idx);
+        for &dep_idx in &dependents[idx] {
+            in_degree[dep_idx] -= 1;
+            if in_degree[dep_idx] == 0 {
+                queue.insert((lockfile.packages[dep_idx].name.as_str(), dep_idx));
+            }
+        }
+    }
+
+    if result.len() != n {
+        if let Some(cycle) = detect_cycle(lockfile) {
+            return Err(cycle);
+        }
+        return Err(vec!["unknown cycle".to_string()]);
+    }
+
+    Ok(result)
+}
+
+pub fn dependents_of(lockfile: &Lockfile, package_name: &str) -> Vec<String> {
+    let name_to_idx: HashMap<&str, usize> = lockfile.packages.iter()
+        .enumerate()
+        .map(|(i, p)| (p.name.as_str(), i))
+        .collect();
+
+    let mut reverse_adj: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, pkg) in lockfile.packages.iter().enumerate() {
+        for dep in &pkg.dependencies {
+            if let Some(&dep_idx) = name_to_idx.get(dep.name.as_str()) {
+                reverse_adj.entry(dep_idx).or_default().push(i);
+            }
+        }
+    }
+
+    let start_idx = match name_to_idx.get(package_name) {
+        Some(&idx) => idx,
+        None => return Vec::new(),
+    };
+
+    let mut visited = HashSet::new();
+    let mut queue = vec![start_idx];
+    visited.insert(start_idx);
+    let mut result = Vec::new();
+
+    while let Some(idx) = queue.pop() {
+        if let Some(deps) = reverse_adj.get(&idx) {
+            for &dep_idx in deps {
+                if visited.insert(dep_idx) {
+                    queue.push(dep_idx);
+                    result.push(lockfile.packages[dep_idx].name.clone());
+                }
+            }
+        }
+    }
+
+    result.sort();
+    result
+}
+
+pub fn transitive_deps(lockfile: &Lockfile, package_name: &str) -> HashSet<String> {
+    let name_to_idx: HashMap<&str, usize> = lockfile.packages.iter()
+        .enumerate()
+        .map(|(i, p)| (p.name.as_str(), i))
+        .collect();
+
+    let start_idx = match name_to_idx.get(package_name) {
+        Some(&idx) => idx,
+        None => return HashSet::new(),
+    };
+
+    let mut visited = HashSet::new();
+    let mut queue = vec![start_idx];
+    visited.insert(start_idx);
+
+    while let Some(idx) = queue.pop() {
+        for dep in &lockfile.packages[idx].dependencies {
+            if let Some(&dep_idx) = name_to_idx.get(dep.name.as_str()) {
+                if visited.insert(dep_idx) {
+                    queue.push(dep_idx);
+                }
+            }
+        }
+    }
+
+    visited.into_iter()
+        .filter_map(|i| {
+            if i != start_idx {
+                Some(lockfile.packages[i].name.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+pub fn leaf_packages(lockfile: &Lockfile) -> Vec<&Package> {
+    let name_to_idx: HashMap<&str, usize> = lockfile.packages.iter()
+        .enumerate()
+        .map(|(i, p)| (p.name.as_str(), i))
+        .collect();
+
+    let mut has_dependents: HashSet<usize> = HashSet::new();
+    for (_i, pkg) in lockfile.packages.iter().enumerate() {
+        for dep in &pkg.dependencies {
+            if let Some(&dep_idx) = name_to_idx.get(dep.name.as_str()) {
+                has_dependents.insert(dep_idx);
+            }
+        }
+    }
+
+    let mut leaves: Vec<&Package> = lockfile.packages.iter()
+        .enumerate()
+        .filter(|(i, _)| !has_dependents.contains(i))
+        .map(|(_, p)| p)
+        .collect();
+    leaves.sort_by_key(|p| &p.name);
+    leaves
+}
+
+pub fn detect_cycle(lockfile: &Lockfile) -> Option<Vec<String>> {
+    let name_to_idx: HashMap<&str, usize> = lockfile.packages.iter()
+        .enumerate()
+        .map(|(i, p)| (p.name.as_str(), i))
+        .collect();
+
+    let n = lockfile.packages.len();
+    let mut color = vec![0u8; n];
+    let mut parent: Vec<Option<usize>> = vec![None; n];
+
+    fn dfs(
+        idx: usize,
+        packages: &[Package],
+        name_to_idx: &HashMap<&str, usize>,
+        color: &mut [u8],
+        parent: &mut [Option<usize>],
+    ) -> Option<Vec<String>> {
+        color[idx] = 1;
+        for dep in &packages[idx].dependencies {
+            if let Some(&dep_idx) = name_to_idx.get(dep.name.as_str()) {
+                if dep_idx == idx {
+                    return Some(vec![packages[idx].name.clone()]);
+                }
+                match color[dep_idx] {
+                    0 => {
+                        parent[dep_idx] = Some(idx);
+                        if let Some(cycle) = dfs(dep_idx, packages, name_to_idx, color, parent) {
+                            return Some(cycle);
+                        }
+                    }
+                    1 => {
+                        let mut cycle = Vec::new();
+                        let mut cur = Some(idx);
+                        while let Some(c) = cur {
+                            cycle.push(packages[c].name.clone());
+                            if c == dep_idx {
+                                break;
+                            }
+                            cur = parent[c];
+                        }
+                        cycle.reverse();
+                        return Some(cycle);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        color[idx] = 2;
+        None
+    }
+
+    for i in 0..n {
+        if color[i] == 0 {
+            if let Some(cycle) = dfs(i, &lockfile.packages, &name_to_idx, &mut color, &mut parent) {
+                return Some(cycle);
+            }
+        }
+    }
+
+    None
+}
+
+pub fn would_create_cycle(
+    lockfile: &Lockfile,
+    package_name: &str,
+    new_deps: &[String],
+) -> bool {
+    let name_to_idx: HashMap<&str, usize> = lockfile.packages.iter()
+        .enumerate()
+        .map(|(i, p)| (p.name.as_str(), i))
+        .collect();
+
+    let start_idx = match name_to_idx.get(package_name) {
+        Some(&idx) => idx,
+        None => return false,
+    };
+
+    for new_dep in new_deps {
+        if new_dep == package_name {
+            return true;
+        }
+        let dep_idx = match name_to_idx.get(new_dep.as_str()) {
+            Some(&idx) => idx,
+            None => continue,
+        };
+
+        let mut visited = HashSet::new();
+        let mut queue = vec![dep_idx];
+        visited.insert(dep_idx);
+
+        while let Some(idx) = queue.pop() {
+            if idx == start_idx {
+                return true;
+            }
+            for dep in &lockfile.packages[idx].dependencies {
+                if let Some(&next_idx) = name_to_idx.get(dep.name.as_str()) {
+                    if visited.insert(next_idx) {
+                        queue.push(next_idx);
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,5 +804,291 @@ mod tests {
         let res =
             extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64);
         assert!(matches!(res, Err(Error::NoPackagesForPlatform { .. })));
+    }
+
+    fn make_graph_lockfile(packages: Vec<Package>) -> Lockfile {
+        Lockfile {
+            sources: vec![crate::lockfile::Source::Registry("r".to_string())],
+            overrides: vec![],
+            features: vec![],
+            metadata: vec![],
+            workspace_root: None,
+            workspace_pkgs: vec![],
+            hoist_boundaries: vec![],
+            artifacts: vec![],
+            patches: vec![],
+            packages,
+        }
+    }
+
+    #[test]
+    fn test_topological_sort_simple() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("c", 1, 0, 0, vec![("b", DepType::Runtime)], vec![]),
+            mock_pkg("a", 1, 0, 0, vec![("b", DepType::Runtime)], vec![]),
+            mock_pkg("b", 1, 0, 0, vec![], vec![]),
+        ]);
+        let order = topological_sort(&lockfile).unwrap();
+        let names: Vec<&str> = order.iter().map(|&i| lockfile.packages[i].name.as_str()).collect();
+        let b_pos = names.iter().position(|&n| n == "b").unwrap();
+        let a_pos = names.iter().position(|&n| n == "a").unwrap();
+        let c_pos = names.iter().position(|&n| n == "c").unwrap();
+        assert!(b_pos < a_pos);
+        assert!(b_pos < c_pos);
+    }
+
+    #[test]
+    fn test_topological_sort_lexicographic_tiebreak() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("z", 1, 0, 0, vec![], vec![]),
+            mock_pkg("a", 1, 0, 0, vec![], vec![]),
+            mock_pkg("m", 1, 0, 0, vec![], vec![]),
+        ]);
+        let order = topological_sort(&lockfile).unwrap();
+        let names: Vec<&str> = order.iter().map(|&i| lockfile.packages[i].name.as_str()).collect();
+        assert_eq!(names, vec!["a", "m", "z"]);
+    }
+
+    #[test]
+    fn test_topological_sort_detects_cycle() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("a", 1, 0, 0, vec![("b", DepType::Runtime)], vec![]),
+            mock_pkg("b", 1, 0, 0, vec![("a", DepType::Runtime)], vec![]),
+        ]);
+        let res = topological_sort(&lockfile);
+        assert!(res.is_err());
+        let cycle = res.unwrap_err();
+        assert!(cycle.contains(&"a".to_string()));
+        assert!(cycle.contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn test_topological_sort_self_dependency() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("a", 1, 0, 0, vec![("a", DepType::Runtime)], vec![]),
+        ]);
+        let res = topological_sort(&lockfile);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_dependents_of_direct() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("lib", DepType::Runtime)], vec![]),
+            mock_pkg("lib", 1, 0, 0, vec![], vec![]),
+        ]);
+        let deps = dependents_of(&lockfile, "lib");
+        assert_eq!(deps, vec!["app"]);
+    }
+
+    #[test]
+    fn test_dependents_of_transitive() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("mid", DepType::Runtime)], vec![]),
+            mock_pkg("mid", 1, 0, 0, vec![("leaf", DepType::Runtime)], vec![]),
+            mock_pkg("leaf", 1, 0, 0, vec![], vec![]),
+        ]);
+        let deps = dependents_of(&lockfile, "leaf");
+        assert_eq!(deps, vec!["app", "mid"]);
+    }
+
+    #[test]
+    fn test_dependents_of_no_dependents() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("lib", DepType::Runtime)], vec![]),
+            mock_pkg("lib", 1, 0, 0, vec![], vec![]),
+        ]);
+        let deps = dependents_of(&lockfile, "app");
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_dependents_of_unknown_package() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![], vec![]),
+        ]);
+        let deps = dependents_of(&lockfile, "nonexistent");
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_transitive_deps_direct() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("lib", DepType::Runtime)], vec![]),
+            mock_pkg("lib", 1, 0, 0, vec![], vec![]),
+        ]);
+        let deps = transitive_deps(&lockfile, "app");
+        assert_eq!(deps, HashSet::from(["lib".to_string()]));
+    }
+
+    #[test]
+    fn test_transitive_deps_deep() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("mid", DepType::Runtime)], vec![]),
+            mock_pkg("mid", 1, 0, 0, vec![("leaf", DepType::Runtime)], vec![]),
+            mock_pkg("leaf", 1, 0, 0, vec![], vec![]),
+        ]);
+        let deps = transitive_deps(&lockfile, "app");
+        assert_eq!(deps, HashSet::from(["mid".to_string(), "leaf".to_string()]));
+    }
+
+    #[test]
+    fn test_transitive_deps_excludes_self() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![], vec![]),
+        ]);
+        let deps = transitive_deps(&lockfile, "app");
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_transitive_deps_unknown_package() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![], vec![]),
+        ]);
+        let deps = transitive_deps(&lockfile, "nonexistent");
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_leaf_packages_basic() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("lib", DepType::Runtime)], vec![]),
+            mock_pkg("lib", 1, 0, 0, vec![], vec![]),
+        ]);
+        let leaves = leaf_packages(&lockfile);
+        let names: Vec<&str> = leaves.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["app"]);
+    }
+
+    #[test]
+    fn test_leaf_packages_multiple() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("a", DepType::Runtime), ("b", DepType::Runtime)], vec![]),
+            mock_pkg("a", 1, 0, 0, vec![], vec![]),
+            mock_pkg("b", 1, 0, 0, vec![], vec![]),
+        ]);
+        let leaves = leaf_packages(&lockfile);
+        let names: Vec<&str> = leaves.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["app"]);
+    }
+
+    #[test]
+    fn test_leaf_packages_sorted() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("z", 1, 0, 0, vec![], vec![]),
+            mock_pkg("a", 1, 0, 0, vec![], vec![]),
+        ]);
+        let leaves = leaf_packages(&lockfile);
+        let names: Vec<&str> = leaves.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "z"]);
+    }
+
+    #[test]
+    fn test_detect_cycle_no_cycle() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("a", 1, 0, 0, vec![("b", DepType::Runtime)], vec![]),
+            mock_pkg("b", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert!(detect_cycle(&lockfile).is_none());
+    }
+
+    #[test]
+    fn test_detect_cycle_simple() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("a", 1, 0, 0, vec![("b", DepType::Runtime)], vec![]),
+            mock_pkg("b", 1, 0, 0, vec![("a", DepType::Runtime)], vec![]),
+        ]);
+        let cycle = detect_cycle(&lockfile).unwrap();
+        assert!(cycle.contains(&"a".to_string()));
+        assert!(cycle.contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn test_detect_cycle_self() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("a", 1, 0, 0, vec![("a", DepType::Runtime)], vec![]),
+        ]);
+        let cycle = detect_cycle(&lockfile).unwrap();
+        assert_eq!(cycle, vec!["a"]);
+    }
+
+    #[test]
+    fn test_detect_cycle_three_node() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("a", 1, 0, 0, vec![("b", DepType::Runtime)], vec![]),
+            mock_pkg("b", 1, 0, 0, vec![("c", DepType::Runtime)], vec![]),
+            mock_pkg("c", 1, 0, 0, vec![("a", DepType::Runtime)], vec![]),
+        ]);
+        let cycle = detect_cycle(&lockfile).unwrap();
+        assert_eq!(cycle.len(), 3);
+        assert!(cycle.contains(&"a".to_string()));
+        assert!(cycle.contains(&"b".to_string()));
+        assert!(cycle.contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn test_detect_cycle_isolated_component() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("a", 1, 0, 0, vec![], vec![]),
+            mock_pkg("x", 1, 0, 0, vec![("y", DepType::Runtime)], vec![]),
+            mock_pkg("y", 1, 0, 0, vec![("x", DepType::Runtime)], vec![]),
+        ]);
+        let cycle = detect_cycle(&lockfile).unwrap();
+        assert!(cycle.contains(&"x".to_string()));
+        assert!(cycle.contains(&"y".to_string()));
+    }
+
+    #[test]
+    fn test_would_create_cycle_no() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("lib", DepType::Runtime)], vec![]),
+            mock_pkg("lib", 1, 0, 0, vec![], vec![]),
+            mock_pkg("new-dep", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert!(!would_create_cycle(&lockfile, "app", &["new-dep".to_string()]));
+    }
+
+    #[test]
+    fn test_would_create_cycle_yes() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("lib", DepType::Runtime)], vec![]),
+            mock_pkg("lib", 1, 0, 0, vec![("app", DepType::Runtime)], vec![]),
+        ]);
+        assert!(would_create_cycle(&lockfile, "lib", &["app".to_string()]));
+    }
+
+    #[test]
+    fn test_would_create_cycle_self() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert!(would_create_cycle(&lockfile, "app", &["app".to_string()]));
+    }
+
+    #[test]
+    fn test_would_create_cycle_transitive() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("mid", DepType::Runtime)], vec![]),
+            mock_pkg("mid", 1, 0, 0, vec![("leaf", DepType::Runtime)], vec![]),
+            mock_pkg("leaf", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert!(would_create_cycle(&lockfile, "leaf", &["app".to_string()]));
+    }
+
+    #[test]
+    fn test_would_create_cycle_unknown_dep() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert!(!would_create_cycle(&lockfile, "app", &["nonexistent".to_string()]));
+    }
+
+    #[test]
+    fn test_would_create_cycle_unknown_package() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert!(!would_create_cycle(&lockfile, "nonexistent", &["app".to_string()]));
     }
 }

@@ -16,7 +16,11 @@ pub use lockfile::{
     deserialize, read_lockfile, serialize, validate_hoist_boundary, validate_patches,
     validate_scripts, write_lockfile,
 };
-pub use graph::{diff_lockfiles, extract_subgraph, extract_subgraph_platform};
+pub use graph::{
+    diff_lockfiles, extract_subgraph, extract_subgraph_platform,
+    topological_sort, dependents_of, transitive_deps,
+    leaf_packages, detect_cycle, would_create_cycle,
+};
 pub use payload::{
     DepPayload, pack_payload, unpack_payload, PeerReqPayload, PlatformTagPayload,
     HookHashPayload, PayloadData,
