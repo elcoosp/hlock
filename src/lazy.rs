@@ -32,6 +32,12 @@ pub struct LazyLockfile {
     header: LockfileHeader,
     index: Vec<IndexEntry>,
     provenance: Vec<ResolutionProvenance>,
+    advisories: vec![],
+    licenses: vec![],
+    policies: vec![],
+    trust_roots: vec![],
+    mirrors: vec![],
+    compat: None,
 }
 
 impl LazyLockfile {
@@ -191,7 +197,13 @@ impl LazyLockfile {
             patches: self.header.patches,
             provenance: self.provenance,
         })
-    }
+    },
+                        advisories: vec![],
+                        licenses: vec![],
+                        policies: vec![],
+                        trust_roots: vec![],
+                        mirrors: vec![],
+                        compat: None,
 }
 
 fn payload_to_package(
@@ -470,6 +482,12 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
+    advisories: vec![],
+    licenses: vec![],
+    policies: vec![],
+    trust_roots: vec![],
+    mirrors: vec![],
+    compat: None,
         };
         crate::lockfile::serialize(&mut lf).unwrap()
     }

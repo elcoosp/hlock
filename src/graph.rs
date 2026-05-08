@@ -150,7 +150,13 @@ pub fn extract_subgraph(lockfile: &Lockfile, root_content_ids: &[u64]) -> Result
         artifacts: vec![],
         patches: lockfile.patches.clone(),
         provenance: filtered_provenance,
-    })
+    }),
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
 }
 
 fn platform_matches(tag: &PlatformTag, target_os: &TargetOS, target_arch: &TargetArch) -> bool {
@@ -283,7 +289,13 @@ pub fn extract_subgraph_platform(
         artifacts: vec![],
         patches: lockfile.patches.clone(),
         provenance: lockfile.provenance.clone(),
-    })
+    }),
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
 }
 
 pub fn topological_sort(lockfile: &Lockfile) -> Result<Vec<usize>, Vec<String>> {
@@ -720,6 +732,12 @@ mod tests {
             hoist_boundaries: vec![],
             artifacts: vec![],
             patches: vec![], provenance: vec![],
+    advisories: vec![],
+    licenses: vec![],
+    policies: vec![],
+    trust_roots: vec![],
+    mirrors: vec![],
+    compat: None,
             packages: vec![
                 mock_pkg(
                     "app",
@@ -776,6 +794,12 @@ mod tests {
             hoist_boundaries: vec![],
             artifacts: vec![],
             patches: vec![], provenance: vec![],
+    advisories: vec![],
+    licenses: vec![],
+    policies: vec![],
+    trust_roots: vec![],
+    mirrors: vec![],
+    compat: None,
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("pure-lib", DepType::Runtime)], vec![]),
                 mock_pkg("pure-lib", 1, 0, 0, vec![], vec![]),
@@ -800,6 +824,12 @@ mod tests {
             hoist_boundaries: vec![],
             artifacts: vec![],
             patches: vec![], provenance: vec![],
+    advisories: vec![],
+    licenses: vec![],
+    policies: vec![],
+    trust_roots: vec![],
+    mirrors: vec![],
+    compat: None,
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("napi", DepType::Runtime)], vec![]),
                 mock_pkg(
@@ -834,6 +864,12 @@ mod tests {
             hoist_boundaries: vec![],
             artifacts: vec![],
             patches: vec![], provenance: vec![],
+    advisories: vec![],
+    licenses: vec![],
+    policies: vec![],
+    trust_roots: vec![],
+    mirrors: vec![],
+    compat: None,
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("multi", DepType::Runtime)], vec![]),
                 mock_pkg(
@@ -882,6 +918,12 @@ mod tests {
             hoist_boundaries: vec![],
             artifacts: vec![],
             patches: vec![], provenance: vec![],
+    advisories: vec![],
+    licenses: vec![],
+    policies: vec![],
+    trust_roots: vec![],
+    mirrors: vec![],
+    compat: None,
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("mid", DepType::Runtime)], vec![]),
                 mock_pkg("mid", 1, 0, 0, vec![("leaf", DepType::Runtime)], vec![]),
@@ -921,6 +963,12 @@ mod tests {
             hoist_boundaries: vec![],
             artifacts: vec![],
             patches: vec![], provenance: vec![],
+    advisories: vec![],
+    licenses: vec![],
+    policies: vec![],
+    trust_roots: vec![],
+    mirrors: vec![],
+    compat: None,
             packages: vec![mock_pkg(
                 "app",
                 1,
@@ -950,6 +998,12 @@ mod tests {
             hoist_boundaries: vec![],
             artifacts: vec![],
             patches: vec![], provenance: vec![],
+    advisories: vec![],
+    licenses: vec![],
+    policies: vec![],
+    trust_roots: vec![],
+    mirrors: vec![],
+    compat: None,
             packages,
         }
     }
@@ -1260,7 +1314,13 @@ mod tests {
                 mock_pkg("lib", 1, 0, 0, vec![], vec![]),
                 mock_pkg("unused", 1, 0, 0, vec![], vec![]),
             ],
-        };
+        };,
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
         let app_cid = fnv::calculate("app@1.0.0");
         let sub = extract_subgraph(&lockfile, &[app_cid]).unwrap();
         let prov_names: Vec<&str> = sub.provenance.iter().map(|p| p.package_name.as_str()).collect();

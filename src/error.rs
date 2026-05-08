@@ -135,4 +135,31 @@ pub enum Error {
 
     #[error("Duplicate @provenance directive for package '{package}'")]
     DuplicateProvenance { package: String },
+
+    #[error("Advisory severity '{severity}' is not one of: critical, high, medium, low, info")]
+    InvalidAdvisorySeverity { line_number: usize, severity: String },
+
+    #[error("Policy type '{type_id}' is not recognized")]
+    InvalidPolicyType { line_number: usize, type_id: String },
+
+    #[error("Trust root key '{key_id}' has expired")]
+    TrustRootExpired { key_id: String, expires_epoch: u64 },
+
+    #[error("No trust root key with role 'root' found")]
+    MissingTrustRoot,
+
+    #[error("Trust root signature verification failed for key '{key_id}'")]
+    TrustRootVerificationFailed { key_id: String },
+
+    #[error("Mirror scope '{scope}' conflicts with existing mirror")]
+    DuplicateMirrorScope { scope: String },
+
+    #[error("Import failed: {reason}")]
+    ImportFailed { format: String, reason: String },
+
+    #[error("Hook '{hook}' denied for package '{package}' by policy")]
+    HookDeniedByPolicy { package: String, hook: String },
+
+    #[error("Engine constraint '{constraint}' not satisfied for package '{package}'")]
+    EngineConstraintUnsatisfied { package: String, constraint: String },
 }

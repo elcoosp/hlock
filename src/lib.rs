@@ -7,6 +7,7 @@ pub mod graph;
 pub mod lockfile;
 pub mod payload;
 pub mod merge;
+pub mod policy;
 pub mod provenance;
 pub mod sbom;
 pub mod signature;
@@ -37,6 +38,11 @@ pub use payload::{
 pub use signature::{sign_lockfile, verify_signature, SignatureAlgorithm, SignatureDirective};
 pub use merge::{MergeConflict, MergeResult, ConflictStrategy, merge_lockfiles};
 pub use provenance::{ProvenanceSourceType, ResolutionProvenance};
+pub use policy::{
+    Advisory, AdvisorySeverity, AuditReport, DedupOpportunity, LicenseEntry,
+    Mirror, Policy, PolicyDecision, PolicyReport, PolicyType, PolicyViolation,
+    TrustRole, TrustRoot, TrustVerification,
+};
 pub use sbom::{SbomFormat, generate_sbom};
 pub use lazy::{LazyLockfile, LockfileHeader};
 pub use lint::{LintFinding, LintReport, LintRule, LintSeverity, lint_default};
