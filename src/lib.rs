@@ -4,6 +4,7 @@ pub mod fnv;
 pub mod graph;
 pub mod lockfile;
 pub mod payload;
+pub mod merge;
 pub mod provenance;
 pub mod signature;
 pub mod varint;
@@ -31,3 +32,4 @@ pub use payload::{
     HookHashPayload, PayloadData,
 };
 pub use signature::{sign_lockfile, verify_signature, SignatureAlgorithm, SignatureDirective};
+pub use merge::{MergeConflict, MergeResult, ConflictStrategy, merge_lockfiles};
