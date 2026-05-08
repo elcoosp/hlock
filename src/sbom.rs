@@ -155,7 +155,7 @@ fn generate_spdx(lockfile: &Lockfile, namespace: &str) -> Result<String, Error> 
     })
 }
 
-fn generate_cyclonedx(lockfile: &Lockfile, namespace: &str) -> Result<String, Error> {
+fn generate_cyclonedx(lockfile: &Lockfile, _namespace: &str) -> Result<String, Error> {
     let mut components = Vec::new();
     let mut dependencies = Vec::new();
 

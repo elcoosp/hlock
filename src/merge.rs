@@ -332,7 +332,7 @@ fn merge_patches(base: &Lockfile, ours: &Lockfile, theirs: &Lockfile) -> Vec<cra
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lockfile::{DepType, HashAlgorithm, IntegrityHash, Attestation, Source};
+    use crate::lockfile::{DepType, Source};
     use crate::provenance::{ProvenanceSourceType, ResolutionProvenance};
 
     fn base_lockfile() -> Lockfile {
