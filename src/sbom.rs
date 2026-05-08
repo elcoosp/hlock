@@ -147,7 +147,7 @@ fn generate_spdx(lockfile: &Lockfile, namespace: &str) -> Result<String, Error> 
         "name": namespace,
         "documentNamespace": namespace,
         "creationInfo": {
-            "creators": ["Tool: hlock-0.14.0"]
+            "creators": [format!("Tool: hlock-{}", env!("CARGO_PKG_VERSION"))]
         },
         "packages": packages_json,
         "relationships": relationships_json,
@@ -214,7 +214,7 @@ fn generate_cyclonedx(lockfile: &Lockfile, _namespace: &str) -> Result<String, E
         "specVersion": "1.5",
         "version": 1,
         "metadata": {
-            "tools": [{ "name": "hlock", "version": "0.14.0" }]
+            "tools": [{ "name": "hlock", "version": env!("CARGO_PKG_VERSION") }]
         },
         "components": components,
         "dependencies": dependencies,

@@ -162,4 +162,10 @@ pub enum Error {
 
     #[error("Engine constraint '{constraint}' not satisfied for package '{package}'")]
     EngineConstraintUnsatisfied { package: String, constraint: String },
+
+    #[error("Trust root rotation invalid: {reason}")]
+    TrustRootRotationInvalid { reason: String },
+
+    #[error("Line {line_number}: Invalid VEX status '{status}'")]
+    InvalidVexStatus { line_number: usize, status: String },
 }
