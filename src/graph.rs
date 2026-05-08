@@ -1,7 +1,7 @@
 use crate::error::Error;
 use crate::fnv;
 use crate::lockfile::{
-    Lockfile, LockfileDiff, Package, PackageChange, PlatformTag, TargetArch, TargetOS,
+    DepType, Dependency, Lockfile, LockfileDiff, Package, PackageChange, PlatformTag, TargetArch, TargetOS,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -426,6 +426,131 @@ pub fn leaf_packages(lockfile: &Lockfile) -> Vec<&Package> {
         .collect();
     leaves.sort_by_key(|p| &p.name);
     leaves
+}
+
+fn follows_edge(dep: &Dependency, query_type: DepType) -> bool {
+    match query_type {
+        DepType::Runtime => dep.dep_type == DepType::Runtime,
+        DepType::Dev => dep.dep_type == DepType::Dev,
+        _ => false,
+    }
+}
+
+fn typed_transitive_deps(lockfile: &Lockfile, package_name: &str, query_type: DepType) -> HashSet<String> {
+    let name_to_idx: HashMap<&str, usize> = lockfile.packages.iter()
+        .enumerate()
+        .map(|(i, p)| (p.name.as_str(), i))
+        .collect();
+
+    let start_idx = match name_to_idx.get(package_name) {
+        Some(&idx) => idx,
+        None => return HashSet::new(),
+    };
+
+    let mut visited = HashSet::new();
+    let mut queue = vec![start_idx];
+    visited.insert(start_idx);
+
+    while let Some(idx) = queue.pop() {
+        for dep in &lockfile.packages[idx].dependencies {
+            if follows_edge(dep, query_type.clone()) {
+                if let Some(&dep_idx) = name_to_idx.get(dep.name.as_str()) {
+                    if visited.insert(dep_idx) {
+                        queue.push(dep_idx);
+                    }
+                }
+            }
+        }
+    }
+
+    visited.into_iter()
+        .filter_map(|i| {
+            if i != start_idx {
+                Some(lockfile.packages[i].name.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+pub fn runtime_deps(lockfile: &Lockfile, package_name: &str) -> HashSet<String> {
+    typed_transitive_deps(lockfile, package_name, DepType::Runtime)
+}
+
+pub fn dev_deps(lockfile: &Lockfile, package_name: &str) -> HashSet<String> {
+    typed_transitive_deps(lockfile, package_name, DepType::Dev)
+}
+
+fn typed_dependents_of(lockfile: &Lockfile, package_name: &str, query_type: DepType) -> Vec<String> {
+    let name_to_idx: HashMap<&str, usize> = lockfile.packages.iter()
+        .enumerate()
+        .map(|(i, p)| (p.name.as_str(), i))
+        .collect();
+
+    let mut reverse_adj: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, pkg) in lockfile.packages.iter().enumerate() {
+        for dep in &pkg.dependencies {
+            if follows_edge(dep, query_type.clone()) {
+                if let Some(&dep_idx) = name_to_idx.get(dep.name.as_str()) {
+                    reverse_adj.entry(dep_idx).or_default().push(i);
+                }
+            }
+        }
+    }
+
+    let start_idx = match name_to_idx.get(package_name) {
+        Some(&idx) => idx,
+        None => return Vec::new(),
+    };
+
+    let mut visited = HashSet::new();
+    let mut queue = vec![start_idx];
+    visited.insert(start_idx);
+    let mut result = Vec::new();
+
+    while let Some(idx) = queue.pop() {
+        if let Some(deps) = reverse_adj.get(&idx) {
+            for &dep_idx in deps {
+                if visited.insert(dep_idx) {
+                    queue.push(dep_idx);
+                    result.push(lockfile.packages[dep_idx].name.clone());
+                }
+            }
+        }
+    }
+
+    result.sort();
+    result
+}
+
+pub fn runtime_dependents_of(lockfile: &Lockfile, package_name: &str) -> Vec<String> {
+    typed_dependents_of(lockfile, package_name, DepType::Runtime)
+}
+
+pub fn dev_dependents_of(lockfile: &Lockfile, package_name: &str) -> Vec<String> {
+    typed_dependents_of(lockfile, package_name, DepType::Dev)
+}
+
+pub fn has_dep_path(lockfile: &Lockfile, package_name: &str, target: &str, dep_type: DepType) -> bool {
+    if package_name == target {
+        let name_to_idx: HashMap<&str, usize> = lockfile.packages.iter()
+            .enumerate()
+            .map(|(i, p)| (p.name.as_str(), i))
+            .collect();
+        return name_to_idx.contains_key(package_name);
+    }
+
+    let reachable = typed_transitive_deps(lockfile, package_name, dep_type);
+    reachable.contains(target)
+}
+
+pub fn dep_count(lockfile: &Lockfile, package_name: &str, dep_type: DepType) -> usize {
+    let pkg = match lockfile.packages.iter().find(|p| p.name == package_name) {
+        Some(p) => p,
+        None => return 0,
+    };
+    pkg.dependencies.iter().filter(|d| d.dep_type == dep_type).count()
 }
 
 pub fn detect_cycle(lockfile: &Lockfile) -> Option<Vec<String>> {
@@ -1091,4 +1216,181 @@ mod tests {
         ]);
         assert!(!would_create_cycle(&lockfile, "nonexistent", &["app".to_string()]));
     }
+
+    #[test]
+    fn test_runtime_deps_only_follows_runtime() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("rt-lib", DepType::Runtime), ("dev-lib", DepType::Dev)], vec![]),
+            mock_pkg("rt-lib", 1, 0, 0, vec![("deep-rt", DepType::Runtime)], vec![]),
+            mock_pkg("dev-lib", 1, 0, 0, vec![], vec![]),
+            mock_pkg("deep-rt", 1, 0, 0, vec![], vec![]),
+        ]);
+        let deps = runtime_deps(&lockfile, "app");
+        assert!(deps.contains("rt-lib"));
+        assert!(deps.contains("deep-rt"));
+        assert!(!deps.contains("dev-lib"));
+    }
+
+    #[test]
+    fn test_dev_deps_only_follows_dev() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("rt-lib", DepType::Runtime), ("dev-lib", DepType::Dev)], vec![]),
+            mock_pkg("rt-lib", 1, 0, 0, vec![], vec![]),
+            mock_pkg("dev-lib", 1, 0, 0, vec![("deep-dev", DepType::Dev)], vec![]),
+            mock_pkg("deep-dev", 1, 0, 0, vec![], vec![]),
+        ]);
+        let deps = dev_deps(&lockfile, "app");
+        assert!(deps.contains("dev-lib"));
+        assert!(deps.contains("deep-dev"));
+        assert!(!deps.contains("rt-lib"));
+    }
+
+    #[test]
+    fn test_runtime_deps_ignores_peer() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("peer-lib", DepType::Peer)], vec![]),
+            mock_pkg("peer-lib", 1, 0, 0, vec![], vec![]),
+        ]);
+        let deps = runtime_deps(&lockfile, "app");
+        assert!(!deps.contains("peer-lib"));
+    }
+
+    #[test]
+    fn test_runtime_deps_unknown_package() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![], vec![]),
+        ]);
+        let deps = runtime_deps(&lockfile, "nonexistent");
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_runtime_dependents_of() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("lib", DepType::Runtime)], vec![]),
+            mock_pkg("test-util", 1, 0, 0, vec![("lib", DepType::Dev)], vec![]),
+            mock_pkg("lib", 1, 0, 0, vec![], vec![]),
+        ]);
+        let dependents = runtime_dependents_of(&lockfile, "lib");
+        assert!(dependents.contains(&"app".to_string()));
+        assert!(!dependents.contains(&"test-util".to_string()));
+    }
+
+    #[test]
+    fn test_dev_dependents_of() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("lib", DepType::Runtime)], vec![]),
+            mock_pkg("test-util", 1, 0, 0, vec![("lib", DepType::Dev)], vec![]),
+            mock_pkg("lib", 1, 0, 0, vec![], vec![]),
+        ]);
+        let dependents = dev_dependents_of(&lockfile, "lib");
+        assert!(dependents.contains(&"test-util".to_string()));
+        assert!(!dependents.contains(&"app".to_string()));
+    }
+
+    #[test]
+    fn test_runtime_dependents_of_transitive() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("top", 1, 0, 0, vec![("mid", DepType::Runtime)], vec![]),
+            mock_pkg("mid", 1, 0, 0, vec![("leaf", DepType::Runtime)], vec![]),
+            mock_pkg("leaf", 1, 0, 0, vec![], vec![]),
+        ]);
+        let dependents = runtime_dependents_of(&lockfile, "leaf");
+        assert!(dependents.contains(&"mid".to_string()));
+        assert!(dependents.contains(&"top".to_string()));
+    }
+
+    #[test]
+    fn test_has_dep_path_runtime_true() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("mid", DepType::Runtime)], vec![]),
+            mock_pkg("mid", 1, 0, 0, vec![("leaf", DepType::Runtime)], vec![]),
+            mock_pkg("leaf", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert!(has_dep_path(&lockfile, "app", "leaf", DepType::Runtime));
+    }
+
+    #[test]
+    fn test_has_dep_path_runtime_false_via_dev() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![("mid", DepType::Dev)], vec![]),
+            mock_pkg("mid", 1, 0, 0, vec![("leaf", DepType::Runtime)], vec![]),
+            mock_pkg("leaf", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert!(!has_dep_path(&lockfile, "app", "leaf", DepType::Runtime));
+    }
+
+    #[test]
+    fn test_has_dep_path_same_package() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert!(has_dep_path(&lockfile, "app", "app", DepType::Runtime));
+    }
+
+    #[test]
+    fn test_has_dep_path_unknown_source() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert!(!has_dep_path(&lockfile, "nonexistent", "app", DepType::Runtime));
+    }
+
+    #[test]
+    fn test_has_dep_path_unknown_target() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert!(!has_dep_path(&lockfile, "app", "nonexistent", DepType::Runtime));
+    }
+
+    #[test]
+    fn test_dep_count_runtime() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![
+                ("lib1", DepType::Runtime),
+                ("lib2", DepType::Runtime),
+                ("dev1", DepType::Dev),
+            ], vec![]),
+            mock_pkg("lib1", 1, 0, 0, vec![], vec![]),
+            mock_pkg("lib2", 1, 0, 0, vec![], vec![]),
+            mock_pkg("dev1", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert_eq!(dep_count(&lockfile, "app", DepType::Runtime), 2);
+    }
+
+    #[test]
+    fn test_dep_count_dev() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![
+                ("lib1", DepType::Runtime),
+                ("dev1", DepType::Dev),
+                ("dev2", DepType::Dev),
+            ], vec![]),
+            mock_pkg("lib1", 1, 0, 0, vec![], vec![]),
+            mock_pkg("dev1", 1, 0, 0, vec![], vec![]),
+            mock_pkg("dev2", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert_eq!(dep_count(&lockfile, "app", DepType::Dev), 2);
+    }
+
+    #[test]
+    fn test_dep_count_peer() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![
+                ("peer1", DepType::Peer),
+            ], vec![]),
+            mock_pkg("peer1", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert_eq!(dep_count(&lockfile, "app", DepType::Peer), 1);
+    }
+
+    #[test]
+    fn test_dep_count_unknown_package() {
+        let lockfile = make_graph_lockfile(vec![
+            mock_pkg("app", 1, 0, 0, vec![], vec![]),
+        ]);
+        assert_eq!(dep_count(&lockfile, "nonexistent", DepType::Runtime), 0);
+    }
+
 }
