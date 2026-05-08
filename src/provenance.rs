@@ -70,6 +70,12 @@ mod tests {
             packages: vec![],
             artifacts: vec![],
             patches: vec![],
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
             provenance: vec![
                 ResolutionProvenance {
                     package_name: "app".to_string(),

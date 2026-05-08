@@ -259,6 +259,12 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
         }
     }
 
@@ -357,6 +363,12 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
         };
         let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
@@ -384,6 +396,12 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
         };
         let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
