@@ -1,6 +1,7 @@
 use hlock::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use fips204::traits::SerDes as FipsSerDes;
 
 #[test]
 fn test_e2e_write_and_read_v5() {
@@ -1023,4 +1024,226 @@ fn test_e2e_platform_extraction_with_real_lockfile() {
     assert!(win_names.contains("lodash"));
     assert!(!win_names.contains("esbuild-darwin-arm64"));
     assert!(!win_names.contains("esbuild-linux-x64"));
+}
+
+#[test]
+fn test_v013_reexports_exist() {
+    let _ = hlock::DiffFormat::Text;
+    let _ = hlock::DiffFormat::Json;
+    let content = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+    let _ = hlock::whole_lockfile_digest(content);
+    let _ = hlock::validate_digest(content);
+    let lockfile = hlock::Lockfile {
+        sources: vec![hlock::Source::Registry("r".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![],
+    };
+    let _ = hlock::runtime_deps(&lockfile, "x");
+    let _ = hlock::dev_deps(&lockfile, "x");
+    let _ = hlock::runtime_dependents_of(&lockfile, "x");
+    let _ = hlock::dev_dependents_of(&lockfile, "x");
+    let _ = hlock::has_dep_path(&lockfile, "a", "b", hlock::DepType::Runtime);
+    let _ = hlock::dep_count(&lockfile, "x", hlock::DepType::Runtime);
+}
+
+#[test]
+fn test_e2e_diff_serialization_text() {
+    let mut v1 = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![Package {
+            name: "core".to_string(), logical_name: None, source_idx: 0,
+            major: 1, minor: 0, patch: 0, ..Default::default()
+        }],
+    };
+    let serialized_v1 = serialize(&mut v1).unwrap();
+    let parsed_v1 = deserialize(&serialized_v1).unwrap();
+
+    let v2 = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![
+            Package {
+                name: "core".to_string(), logical_name: None, source_idx: 0,
+                major: 2, minor: 0, patch: 0, ..Default::default()
+            },
+            Package {
+                name: "utils".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0, ..Default::default()
+            },
+        ],
+    };
+
+    let diff = diff_lockfiles(&parsed_v1, &v2);
+    let text = serialize_diff(&diff, DiffFormat::Text);
+    assert!(text.contains("LOCKFILE DIFF"));
+    assert!(text.contains("+ utils@1.0.0"));
+    assert!(text.contains("~ core@1.0.0 -> core@2.0.0"));
+}
+
+#[test]
+fn test_e2e_diff_serialization_json() {
+    let mut v1 = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![Package {
+            name: "core".to_string(), logical_name: None, source_idx: 0,
+            major: 1, minor: 0, patch: 0, ..Default::default()
+        }],
+    };
+    let serialized_v1 = serialize(&mut v1).unwrap();
+    let parsed_v1 = deserialize(&serialized_v1).unwrap();
+
+    let v2 = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![
+            Package {
+                name: "core".to_string(), logical_name: None, source_idx: 0,
+                major: 2, minor: 0, patch: 0, ..Default::default()
+            },
+            Package {
+                name: "utils".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0, ..Default::default()
+            },
+        ],
+    };
+
+    let diff = diff_lockfiles(&parsed_v1, &v2);
+    let json_str = serialize_diff(&diff, DiffFormat::Json);
+    let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(parsed["changes"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn test_e2e_digest_roundtrip() {
+    let temp_path = std::path::PathBuf::from("target/test_digest_v13.hlock");
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![Package {
+            name: "pkg".to_string(), logical_name: None, source_idx: 0,
+            major: 1, minor: 0, patch: 0,
+            hashes: vec![IntegrityHash {
+                algo: HashAlgorithm::Blake3,
+                digest: vec![42u8; 32],
+                attestation: Attestation::None,
+            }],
+            ..Default::default()
+        }],
+    };
+    write_lockfile(&temp_path, &mut lockfile).unwrap();
+    let content = std::fs::read_to_string(&temp_path).unwrap();
+    assert!(content.contains("@digest "));
+    assert!(validate_digest(&content).is_ok());
+    let read_back = read_lockfile(&temp_path).unwrap();
+    assert_eq!(read_back.packages.len(), 1);
+    let tampered = content.replace("pkg", "pkx");
+    assert!(matches!(validate_digest(&tampered), Err(Error::DigestMismatch { .. })));
+    std::fs::remove_file(&temp_path).ok();
+}
+
+#[test]
+fn test_e2e_ml_dsa65_signed_lockfile() {
+    let (pk, sk) = fips204::ml_dsa_65::try_keygen().unwrap();
+    let sk_bytes = FipsSerDes::into_bytes(sk);
+    let vk_bytes = FipsSerDes::into_bytes(pk);
+
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![Package {
+            name: "app".to_string(), logical_name: None, source_idx: 0,
+            major: 1, minor: 0, patch: 0, ..Default::default()
+        }],
+    };
+    let serialized = serialize(&mut lockfile).unwrap();
+
+    let signed = sign_lockfile(
+        &serialized,
+        "pq@company.com",
+        SignatureAlgorithm::MlDsa65,
+        &sk_bytes,
+        0,
+    ).unwrap();
+    assert!(signed.contains("@signature pq@company.com 02 0 "));
+
+    let leaked: &'static [u8] = Box::leak(Box::new(vk_bytes) as Box<[u8]>);
+    let mut trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+    trusted.insert("pq@company.com".to_string(), (leaked, SignatureAlgorithm::MlDsa65));
+
+    assert!(verify_signature(&signed, &trusted).is_ok());
+
+    let deserialized = deserialize(&signed).unwrap();
+    assert_eq!(deserialized.packages.len(), 1);
+}
+
+#[test]
+fn test_e2e_typed_graph_queries() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![
+            Package {
+                name: "app".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0,
+                dependencies: vec![
+                    Dependency { name: "lodash".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
+                    Dependency { name: "jest".to_string(), dep_type: DepType::Dev, requested_features: vec![] },
+                ],
+                ..Default::default()
+            },
+            Package {
+                name: "lodash".to_string(), logical_name: None, source_idx: 0,
+                major: 4, minor: 17, patch: 21,
+                dependencies: vec![],
+                ..Default::default()
+            },
+            Package {
+                name: "jest".to_string(), logical_name: None, source_idx: 0,
+                major: 29, minor: 0, patch: 0,
+                dependencies: vec![
+                    Dependency { name: "lodash".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
+                ],
+                ..Default::default()
+            },
+        ],
+    };
+
+    let rt = runtime_deps(&lockfile, "app");
+    assert!(rt.contains("lodash"));
+    assert!(!rt.contains("jest"));
+
+    let dd = dev_deps(&lockfile, "app");
+    assert!(dd.contains("jest"));
+    assert!(!dd.contains("lodash"));
+
+    let rt_deps = runtime_dependents_of(&lockfile, "lodash");
+    assert!(rt_deps.contains(&"app".to_string()));
+    assert!(rt_deps.contains(&"jest".to_string()));
+
+    let dd_deps = dev_dependents_of(&lockfile, "lodash");
+    assert!(dd_deps.is_empty());
+
+    assert!(has_dep_path(&lockfile, "app", "lodash", DepType::Runtime));
+    assert!(!has_dep_path(&lockfile, "app", "jest", DepType::Runtime));
+
+    assert_eq!(dep_count(&lockfile, "app", DepType::Runtime), 1);
+    assert_eq!(dep_count(&lockfile, "app", DepType::Dev), 1);
 }
