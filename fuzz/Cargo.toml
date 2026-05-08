@@ -1,0 +1,16 @@
+[package]
+name = "hlock-fuzz"
+version = "0.0.0"
+publish = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+hlock = { path = ".." }
+
+[[bin]]
+name = "fuzz_unpack_payload"
+path = "fuzz_targets/fuzz_unpack_payload.rs"
+
+[[bin]]
+name = "fuzz_deserialize"
+path = "fuzz_targets/fuzz_deserialize.rs"

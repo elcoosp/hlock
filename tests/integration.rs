@@ -2034,3 +2034,436 @@ fn test_e2e_typed_graph_queries() {
     assert_eq!(dep_count(&lockfile, "app", DepType::Runtime), 1);
     assert_eq!(dep_count(&lockfile, "app", DepType::Dev), 1);
 }
+
+#[test]
+fn test_digest_covers_licenses() {
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        packages: vec![Package {
+            name: "pkg".to_string(),
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            hashes: vec![IntegrityHash {
+                algo: HashAlgorithm::Blake3,
+                digest: vec![42u8; 32],
+                attestation: Attestation::None,
+            }],
+            ..Default::default()
+        }],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![hlock::policy::LicenseEntry {
+            package: "pkg".to_string(),
+            expression: "MIT".to_string(),
+        }],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
+        compat: None,
+    };
+    let serialized = serialize(&mut lockfile).unwrap();
+    assert!(validate_digest(&serialized).is_ok());
+    let tampered = serialized.replace("MIT", "GPL");
+    assert!(matches!(validate_digest(&tampered), Err(Error::DigestMismatch { .. })));
+}
+
+#[test]
+fn test_vex_roundtrip() {
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        packages: vec![Package {
+            name: "lodash".to_string(),
+            logical_name: None,
+            source_idx: 0,
+            major: 4,
+            minor: 17,
+            patch: 21,
+            ..Default::default()
+        }],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![
+            hlock::VexEntry {
+                package: "lodash".to_string(),
+                advisory_id: "CVE-2024-12345".to_string(),
+                status: hlock::VexStatus::NotAffected,
+                justification: "vulnerable_code_not_in_execute_path".to_string(),
+                impact_statement: "not_applicable".to_string(),
+            },
+        ],
+        compat: None,
+    };
+    let serialized = serialize(&mut lockfile).unwrap();
+    let deserialized = deserialize(&serialized).unwrap();
+    assert_eq!(deserialized.vex_entries.len(), 1);
+    assert_eq!(deserialized.vex_entries[0].package, "lodash");
+    assert_eq!(deserialized.vex_entries[0].advisory_id, "CVE-2024-12345");
+    assert_eq!(deserialized.vex_entries[0].status, hlock::VexStatus::NotAffected);
+}
+
+#[test]
+fn test_effective_advisories_filters_not_affected() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        packages: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![
+            hlock::policy::Advisory {
+                package: "lodash".to_string(),
+                advisory_id: "CVE-2024-1".to_string(),
+                severity: hlock::policy::AdvisorySeverity::High,
+                url: "".to_string(),
+                affected_versions: "*".to_string(),
+            },
+        ],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![
+            hlock::VexEntry {
+                package: "lodash".to_string(),
+                advisory_id: "CVE-2024-1".to_string(),
+                status: hlock::VexStatus::NotAffected,
+                justification: "code_not_present".to_string(),
+                impact_statement: "not_applicable".to_string(),
+            },
+        ],
+        compat: None,
+    };
+    let report = lockfile.effective_advisories();
+    assert!(report.high.is_empty());
+}
+
+#[test]
+fn test_effective_advisories_filters_fixed() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        packages: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![
+            hlock::policy::Advisory {
+                package: "lodash".to_string(),
+                advisory_id: "CVE-2024-2".to_string(),
+                severity: hlock::policy::AdvisorySeverity::Critical,
+                url: "".to_string(),
+                affected_versions: "<4.17.21".to_string(),
+            },
+        ],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![
+            hlock::VexEntry {
+                package: "lodash".to_string(),
+                advisory_id: "CVE-2024-2".to_string(),
+                status: hlock::VexStatus::Fixed,
+                justification: "patch_applied".to_string(),
+                impact_statement: "resolved".to_string(),
+            },
+        ],
+        compat: None,
+    };
+    let report = lockfile.effective_advisories();
+    assert!(report.critical.is_empty());
+}
+
+#[test]
+fn test_effective_advisories_includes_affected() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        packages: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![
+            hlock::policy::Advisory {
+                package: "lodash".to_string(),
+                advisory_id: "CVE-2024-3".to_string(),
+                severity: hlock::policy::AdvisorySeverity::Medium,
+                url: "".to_string(),
+                affected_versions: "*".to_string(),
+            },
+        ],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![
+            hlock::VexEntry {
+                package: "lodash".to_string(),
+                advisory_id: "CVE-2024-3".to_string(),
+                status: hlock::VexStatus::Affected,
+                justification: "vulnerable_code_executed".to_string(),
+                impact_statement: "high".to_string(),
+            },
+        ],
+        compat: None,
+    };
+    let report = lockfile.effective_advisories();
+    assert_eq!(report.medium.len(), 1);
+}
+
+#[test]
+fn test_effective_advisories_includes_no_vex() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        packages: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![
+            hlock::policy::Advisory {
+                package: "lodash".to_string(),
+                advisory_id: "CVE-2024-4".to_string(),
+                severity: hlock::policy::AdvisorySeverity::Low,
+                url: "".to_string(),
+                affected_versions: "*".to_string(),
+            },
+        ],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
+        compat: None,
+    };
+    let report = lockfile.effective_advisories();
+    assert_eq!(report.low.len(), 1);
+}
+
+#[test]
+fn test_trust_root_rotation_roundtrip() {
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        packages: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![
+            hlock::policy::TrustRoot {
+                key_id: "old@key".to_string(),
+                algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
+                public_key: vec![42u8; 32],
+                expires_epoch: 2000000000,
+                role: hlock::policy::TrustRole::Root,
+            },
+        ],
+        mirrors: vec![],
+        root_rotations: vec![
+            hlock::TrustRootRotation {
+                old_key_id: "old@key".to_string(),
+                new_key_id: "new@key".to_string(),
+                threshold: 1,
+                new_algorithm: hlock::signature::SignatureAlgorithm::MlDsa65,
+                new_public_key: vec![43u8; 65],
+                new_expires_epoch: 2100000000,
+                new_role: hlock::policy::TrustRole::Root,
+                rotation_signature_key_id: "old@key".to_string(),
+                rotation_signature: vec![0xAA; 64],
+            },
+        ],
+        vex_entries: vec![],
+        compat: None,
+    };
+    let serialized = serialize(&mut lockfile).unwrap();
+    let deserialized = deserialize(&serialized).unwrap();
+    assert_eq!(deserialized.root_rotations.len(), 1);
+    assert_eq!(deserialized.root_rotations[0].old_key_id, "old@key");
+    assert_eq!(deserialized.root_rotations[0].new_key_id, "new@key");
+    assert_eq!(deserialized.root_rotations[0].threshold, 1);
+    assert_eq!(deserialized.root_rotations[0].new_algorithm, hlock::signature::SignatureAlgorithm::MlDsa65);
+    assert_eq!(deserialized.root_rotations[0].new_expires_epoch, 2100000000);
+    assert_eq!(deserialized.root_rotations[0].new_role, hlock::policy::TrustRole::Root);
+}
+
+#[test]
+fn test_root_rotation_rejects_expired_old_key() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        packages: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![
+            hlock::policy::TrustRoot {
+                key_id: "old@key".to_string(),
+                algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
+                public_key: vec![42u8; 32],
+                expires_epoch: 1000,
+                role: hlock::policy::TrustRole::Root,
+            },
+        ],
+        mirrors: vec![],
+        root_rotations: vec![
+            hlock::TrustRootRotation {
+                old_key_id: "old@key".to_string(),
+                new_key_id: "new@key".to_string(),
+                threshold: 1,
+                new_algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
+                new_public_key: vec![0u8; 32],
+                new_expires_epoch: 9999,
+                new_role: hlock::policy::TrustRole::Root,
+                rotation_signature_key_id: "old@key".to_string(),
+                rotation_signature: vec![0u8; 64],
+            },
+        ],
+        vex_entries: vec![],
+        compat: None,
+    };
+    assert!(lockfile.validate_root_rotation(2000).is_err());
+}
+
+#[test]
+fn test_root_rotation_accepts_valid() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        packages: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![
+            hlock::policy::TrustRoot {
+                key_id: "old@key".to_string(),
+                algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
+                public_key: vec![42u8; 32],
+                expires_epoch: 9999,
+                role: hlock::policy::TrustRole::Root,
+            },
+        ],
+        mirrors: vec![],
+        root_rotations: vec![
+            hlock::TrustRootRotation {
+                old_key_id: "old@key".to_string(),
+                new_key_id: "new@key".to_string(),
+                threshold: 1,
+                new_algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
+                new_public_key: vec![0u8; 32],
+                new_expires_epoch: 9999,
+                new_role: hlock::policy::TrustRole::Root,
+                rotation_signature_key_id: "old@key".to_string(),
+                rotation_signature: vec![0u8; 64],
+            },
+        ],
+        vex_entries: vec![],
+        compat: None,
+    };
+    assert!(lockfile.validate_root_rotation(1000).is_ok());
+}
+
+#[test]
+fn test_dedup_saving_bytes_nonzero() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        packages: vec![
+            Package { name: "lodash".to_string(), source_idx: 0, major: 4, minor: 17, patch: 20, ..Default::default() },
+            Package { name: "lodash".to_string(), source_idx: 0, major: 4, minor: 17, patch: 21, ..Default::default() },
+        ],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
+        compat: None,
+    };
+    let opps = lockfile.dedup_opportunities();
+    assert_eq!(opps.len(), 1);
+    assert!(opps[0].potential_saving_bytes > 0);
+}
