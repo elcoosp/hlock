@@ -1,9 +1,7 @@
 //! Header parsing and formatting
 
 use crate::error::Error;
-use super::types::{Mirror, 
-    Source, Override, WorkspacePkg, HoistBoundary, Lockfile, DepType,
-};
+use super::types::{Mirror, Source, Override, WorkspacePkg, HoistBoundary, Lockfile, DepType};
 
 fn classify_source(val: &str) -> Source {
     if val == "workspace" {
@@ -37,6 +35,21 @@ pub fn format_header(lockfile: &Lockfile) -> Result<String, Error> {
     for mirror in &lockfile.mirrors {
         out.push_str(&format!("@mirror {} {}\n", mirror.scope, mirror.url));
     }
+    for tr in &lockfile.trust_roots {
+        let algo_str = match tr.algorithm {
+            crate::signature::SignatureAlgorithm::Ed25519 => "00",
+            crate::signature::SignatureAlgorithm::Ed448 => "01",
+            crate::signature::SignatureAlgorithm::MlDsa65 => "02",
+        };
+        let role_str = match tr.role {
+            crate::policy::TrustRole::Root => "root",
+            crate::policy::TrustRole::Targets => "targets",
+            crate::policy::TrustRole::Snapshot => "snapshot",
+            crate::policy::TrustRole::Delegation => "delegation",
+        };
+        let pub_key_hex = tr.public_key.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+        out.push_str(&format!("@trust-root {} {} {} {} {}\n", tr.key_id, algo_str, pub_key_hex, tr.expires_epoch, role_str));
+    }
     for ovr in &lockfile.overrides {
         out.push_str(&format!("@override {} {} -> {}\n", ovr.name, ovr.from_version, ovr.to_version));
     }
@@ -69,6 +82,7 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
     let mut workspace_root = None;
     let mut workspace_pkgs = Vec::new();
     let mut mirrors = Vec::new();
+    let mut trust_roots: Vec<crate::policy::TrustRoot> = Vec::new();
     let mut hoist_boundaries = Vec::new();
     let lines = content.lines().enumerate();
 
@@ -87,7 +101,7 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
                     advisories: vec![],
                     licenses: vec![],
                     policies: vec![],
-                    trust_roots: vec![],
+                    trust_roots,
                     mirrors,
                     compat: None,
                 },
@@ -117,6 +131,52 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
                 });
             }
             sources.push(source);
+        } else if let Some(rest) = line.strip_prefix("@trust-root ") {
+            let mut parts = rest.splitn(5, ' ');
+            let key_id = parts.next().unwrap_or("").to_string();
+            let algo_str = parts.next().unwrap_or("");
+            let public_key_hex = parts.next().unwrap_or("");
+            let expires_str = parts.next().unwrap_or("");
+            let role_str = parts.next().unwrap_or("");
+
+            let algorithm = match algo_str {
+                "00" => crate::signature::SignatureAlgorithm::Ed25519,
+                "01" => crate::signature::SignatureAlgorithm::Ed448,
+                "02" => crate::signature::SignatureAlgorithm::MlDsa65,
+                _ => return Err(Error::InvalidHeader {
+                    line_number: line_num,
+                    reason: format!("Unknown algorithm: {}", algo_str),
+                }),
+            };
+
+            let expires_epoch: u64 = expires_str.parse().map_err(|_| Error::InvalidHeader {
+                line_number: line_num,
+                reason: "Invalid expires_epoch".to_string(),
+            })?;
+
+            let role = match role_str {
+                "root" => crate::policy::TrustRole::Root,
+                "targets" => crate::policy::TrustRole::Targets,
+                "snapshot" => crate::policy::TrustRole::Snapshot,
+                "delegation" => crate::policy::TrustRole::Delegation,
+                _ => return Err(Error::InvalidHeader {
+                    line_number: line_num,
+                    reason: format!("Unknown role: {}", role_str),
+                }),
+            };
+
+            let public_key = (0..public_key_hex.len())
+                .step_by(2)
+                .filter_map(|i| u8::from_str_radix(&public_key_hex[i..i+2], 16).ok())
+                .collect::<Vec<u8>>();
+
+            trust_roots.push(crate::policy::TrustRoot {
+                key_id,
+                algorithm,
+                public_key,
+                expires_epoch,
+                role,
+            });
         } else if let Some(rest) = line.strip_prefix("@mirror ") {
             let mut parts = rest.splitn(2, ' ');
             let scope = parts.next().unwrap_or("").to_string();
