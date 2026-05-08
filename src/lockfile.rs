@@ -192,6 +192,7 @@ pub struct Lockfile {
     pub packages: Vec<Package>,
     pub artifacts: Vec<ArtifactDirective>,
     pub patches: Vec<PatchDirective>,
+    pub provenance: Vec<crate::provenance::ResolutionProvenance>,
 }
 
 pub fn serialize_diff(diff: &LockfileDiff, format: DiffFormat) -> String {
@@ -399,7 +400,7 @@ fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
         if line.is_empty() {
             let header_end = content.find("\n\n").map(|i| i + 2).unwrap_or(content.len());
             let remaining = &content[header_end..];
-            return Ok((Lockfile { sources, overrides, features, metadata, workspace_root, workspace_pkgs, hoist_boundaries, packages: vec![], artifacts: vec![], patches: vec![] }, remaining));
+            return Ok((Lockfile { sources, overrides, features, metadata, workspace_root, workspace_pkgs, hoist_boundaries, packages: vec![], artifacts: vec![], patches: vec![], provenance: vec![] }, remaining));
         }
 
         if let Some(rest) = line.strip_prefix("@source ") {
@@ -892,7 +893,7 @@ mod tests {
                 ("repository".to_string(), "https://github.com/example".to_string()),
             ],
             workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-            artifacts: vec![], patches: vec![],
+            artifacts: vec![], patches: vec![], provenance: vec![],
             packages: vec![Package {
                 name: "pkg".to_string(), logical_name: None, source_idx: 0,
                 major: 1, minor: 0, patch: 0, ..Default::default()
@@ -918,7 +919,7 @@ mod tests {
                 arch_id: 0x01,
                 relative_path: "./bin/app".to_string(),
             }],
-            patches: vec![],
+            patches: vec![], provenance: vec![],
             packages: vec![Package {
                 name: "pkg".to_string(), logical_name: None, source_idx: 0,
                 major: 1, minor: 0, patch: 0, ..Default::default()
@@ -948,7 +949,8 @@ mod tests {
                 name: "pkg".to_string(), logical_name: None, source_idx: 0,
                 major: 1, minor: 0, patch: 0, ..Default::default()
             }],
-        };
+                provenance: vec![],
+    };
         let serialized = serialize(&mut lockfile).unwrap();
         let deserialized = deserialize(&serialized).unwrap();
         assert_eq!(deserialized.patches.len(), 1);
@@ -1131,7 +1133,7 @@ mod tests {
             sources: vec![Source::Registry("https://r.com/".to_string())],
             overrides: vec![], features: vec![], metadata: vec![],
             workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-            artifacts: vec![], patches: vec![],
+            artifacts: vec![], patches: vec![], provenance: vec![],
             packages: vec![Package {
                 name: "pkg".to_string(), logical_name: None, source_idx: 0,
                 major: 1, minor: 0, patch: 0, ..Default::default()
@@ -1147,7 +1149,7 @@ mod tests {
             sources: vec![Source::Registry("https://r.com/".to_string())],
             overrides: vec![], features: vec![], metadata: vec![],
             workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-            artifacts: vec![], patches: vec![],
+            artifacts: vec![], patches: vec![], provenance: vec![],
             packages: vec![Package {
                 name: "pkg".to_string(), logical_name: None, source_idx: 0,
                 major: 1, minor: 0, patch: 0, ..Default::default()
@@ -1180,7 +1182,7 @@ mod tests {
             sources: vec![Source::Registry("https://r.com/".to_string())],
             overrides: vec![], features: vec![], metadata: vec![],
             workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-            artifacts: vec![], patches: vec![],
+            artifacts: vec![], patches: vec![], provenance: vec![],
             packages: vec![Package {
                 name: "pkg".to_string(), logical_name: None, source_idx: 0,
                 major: 1, minor: 0, patch: 0, ..Default::default()
@@ -1197,7 +1199,7 @@ mod tests {
             sources: vec![Source::Registry("https://r.com/".to_string())],
             overrides: vec![], features: vec![], metadata: vec![],
             workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-            artifacts: vec![], patches: vec![],
+            artifacts: vec![], patches: vec![], provenance: vec![],
             packages: vec![Package {
                 name: "pkg".to_string(), logical_name: None, source_idx: 0,
                 major: 1, minor: 0, patch: 0, ..Default::default()

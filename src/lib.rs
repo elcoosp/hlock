@@ -4,6 +4,7 @@ pub mod fnv;
 pub mod graph;
 pub mod lockfile;
 pub mod payload;
+pub mod provenance;
 pub mod signature;
 pub mod varint;
 

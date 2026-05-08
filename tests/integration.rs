@@ -14,7 +14,7 @@ fn test_e2e_write_and_read_v5() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![
             Package {
@@ -80,7 +80,7 @@ fn test_e2e_workspace_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![Package {
             name: "core".to_string(),
@@ -113,7 +113,7 @@ fn test_string_api_crc_corruption() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![Package {
             name: "z".to_string(),
@@ -163,7 +163,7 @@ fn test_e2e_features_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![
             Package {
@@ -219,7 +219,7 @@ fn test_e2e_optional_target_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![
             Package {
@@ -273,7 +273,7 @@ fn test_e2e_diff_after_adding_package() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![Package {
             name: "core".to_string(),
@@ -299,7 +299,7 @@ fn test_e2e_diff_after_adding_package() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![
             Package {
@@ -352,7 +352,7 @@ fn test_e2e_extract_and_serialize_is_valid() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![
             Package {
@@ -430,7 +430,7 @@ fn test_e2e_v7_provenance_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![Package {
             name: "crypto-lib".to_string(),
@@ -470,7 +470,7 @@ fn test_e2e_graph_manipulation_ignores_provenance() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![Package {
             name: "a".to_string(),
@@ -511,7 +511,7 @@ fn test_e2e_v8_peer_resolution_topology() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![
             Package {
@@ -562,7 +562,7 @@ fn test_e2e_graph_extract_preserves_peers() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![Package {
             name: "a".to_string(),
@@ -596,7 +596,7 @@ fn test_e2e_v8_alias_and_cas_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![Package {
             name: "react".to_string(),
@@ -637,7 +637,7 @@ fn test_e2e_ipfs_source_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![Package {
             name: "some-pkg".to_string(),
@@ -673,7 +673,7 @@ fn test_e2e_v9_peer_requirements_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![
             Package {
@@ -737,7 +737,7 @@ fn test_e2e_v9_platform_tags_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![
             Package {
@@ -807,7 +807,7 @@ fn test_e2e_sign_lockfile_and_verify() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![Package {
             name: "app".to_string(),
@@ -847,7 +847,7 @@ fn test_e2e_signed_lockfile_deserializes_correctly() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![
             Package {
@@ -889,7 +889,7 @@ fn test_e2e_platform_extraction_with_real_lockfile() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![],
+        patches: vec![], provenance: vec![],
         artifacts: vec![],
         packages: vec![
             Package {
@@ -1037,7 +1037,7 @@ fn test_v013_reexports_exist() {
         sources: vec![hlock::Source::Registry("r".to_string())],
         overrides: vec![], features: vec![], metadata: vec![],
         workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        artifacts: vec![], patches: vec![], provenance: vec![],
         packages: vec![],
     };
     let _ = hlock::runtime_deps(&lockfile, "x");
@@ -1054,7 +1054,7 @@ fn test_e2e_diff_serialization_text() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![], metadata: vec![],
         workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        artifacts: vec![], patches: vec![], provenance: vec![],
         packages: vec![Package {
             name: "core".to_string(), logical_name: None, source_idx: 0,
             major: 1, minor: 0, patch: 0, ..Default::default()
@@ -1067,7 +1067,7 @@ fn test_e2e_diff_serialization_text() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![], metadata: vec![],
         workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        artifacts: vec![], patches: vec![], provenance: vec![],
         packages: vec![
             Package {
                 name: "core".to_string(), logical_name: None, source_idx: 0,
@@ -1093,7 +1093,7 @@ fn test_e2e_diff_serialization_json() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![], metadata: vec![],
         workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        artifacts: vec![], patches: vec![], provenance: vec![],
         packages: vec![Package {
             name: "core".to_string(), logical_name: None, source_idx: 0,
             major: 1, minor: 0, patch: 0, ..Default::default()
@@ -1106,7 +1106,7 @@ fn test_e2e_diff_serialization_json() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![], metadata: vec![],
         workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        artifacts: vec![], patches: vec![], provenance: vec![],
         packages: vec![
             Package {
                 name: "core".to_string(), logical_name: None, source_idx: 0,
@@ -1132,7 +1132,7 @@ fn test_e2e_digest_roundtrip() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![], metadata: vec![],
         workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        artifacts: vec![], patches: vec![], provenance: vec![],
         packages: vec![Package {
             name: "pkg".to_string(), logical_name: None, source_idx: 0,
             major: 1, minor: 0, patch: 0,
@@ -1165,7 +1165,7 @@ fn test_e2e_ml_dsa65_signed_lockfile() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![], metadata: vec![],
         workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        artifacts: vec![], patches: vec![], provenance: vec![],
         packages: vec![Package {
             name: "app".to_string(), logical_name: None, source_idx: 0,
             major: 1, minor: 0, patch: 0, ..Default::default()
@@ -1198,7 +1198,7 @@ fn test_e2e_typed_graph_queries() {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![], features: vec![], metadata: vec![],
         workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        artifacts: vec![], patches: vec![], provenance: vec![],
         packages: vec![
             Package {
                 name: "app".to_string(), logical_name: None, source_idx: 0,

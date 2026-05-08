@@ -143,6 +143,7 @@ pub fn extract_subgraph(lockfile: &Lockfile, root_content_ids: &[u64]) -> Result
         packages: extracted_packages,
         artifacts: vec![],
         patches: lockfile.patches.clone(),
+        provenance: lockfile.provenance.clone(),
     })
 }
 
@@ -275,6 +276,7 @@ pub fn extract_subgraph_platform(
         packages: extracted_packages,
         artifacts: vec![],
         patches: lockfile.patches.clone(),
+        provenance: lockfile.provenance.clone(),
     })
 }
 
@@ -711,7 +713,7 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![],
+            patches: vec![], provenance: vec![],
             packages: vec![
                 mock_pkg(
                     "app",
@@ -767,7 +769,7 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![],
+            patches: vec![], provenance: vec![],
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("pure-lib", DepType::Runtime)], vec![]),
                 mock_pkg("pure-lib", 1, 0, 0, vec![], vec![]),
@@ -791,7 +793,7 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![],
+            patches: vec![], provenance: vec![],
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("napi", DepType::Runtime)], vec![]),
                 mock_pkg(
@@ -825,7 +827,7 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![],
+            patches: vec![], provenance: vec![],
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("multi", DepType::Runtime)], vec![]),
                 mock_pkg(
@@ -873,7 +875,7 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![],
+            patches: vec![], provenance: vec![],
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("mid", DepType::Runtime)], vec![]),
                 mock_pkg("mid", 1, 0, 0, vec![("leaf", DepType::Runtime)], vec![]),
@@ -912,7 +914,7 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![],
+            patches: vec![], provenance: vec![],
             packages: vec![mock_pkg(
                 "app",
                 1,
@@ -941,7 +943,7 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![],
+            patches: vec![], provenance: vec![],
             packages,
         }
     }

@@ -91,4 +91,48 @@ pub enum Error {
 
     #[error("Multiple @digest directives found")]
     DuplicateDigestDirective,
+
+    #[error("Merge conflict on package '{package_name}': {description}")]
+    MergeConflict {
+        package_name: String,
+        description: String,
+    },
+
+    #[error("Merge conflict on source index {index}: ours has '{ours_url}', theirs has '{theirs_url}'")]
+    MergeSourceConflict {
+        index: usize,
+        ours_url: String,
+        theirs_url: String,
+    },
+
+    #[error("Merge failed with {count} conflict(s)")]
+    MergeFailed { count: usize },
+
+    #[error("Package '{package}' was removed in one branch but altered in another")]
+    MergeRemoveAlterConflict { package: String },
+
+    #[error("Override conflict on '{name}': ours has '{ours}', theirs has '{theirs}'")]
+    MergeOverrideConflict {
+        name: String,
+        ours: String,
+        theirs: String,
+    },
+
+    #[error("Lazy lockfile index corrupt at line {line_number}: {reason}")]
+    LazyIndexCorrupt { line_number: usize, reason: String },
+
+    #[error("SBOM generation failed for package '{package}': {reason}")]
+    SbomGenerationFailed { package: String, reason: String },
+
+    #[error("SBOM generation requires at least one registry source")]
+    SbomNoRegistrySource,
+
+    #[error("Provenance directive references unknown dep type {type_id}")]
+    UnknownProvenanceDepType { type_id: u8 },
+
+    #[error("Provenance directive references unknown source type {type_id}")]
+    UnknownProvenanceSourceType { type_id: u8 },
+
+    #[error("Duplicate @provenance directive for package '{package}'")]
+    DuplicateProvenance { package: String },
 }
