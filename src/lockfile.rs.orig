@@ -479,12 +479,7 @@ fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
                     artifacts: vec![],
                     patches: vec![],
                     provenance: vec![],
-                    advisories: vec![],
-                    licenses: vec![],
-                    policies: vec![],
-                    trust_roots: vec![],
-                    mirrors: vec![],
-                    compat: None,
+                    
                 },
                 remaining,
             ));
@@ -1337,12 +1332,7 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+            
             packages: vec![Package {
                 name: "pkg".to_string(),
                 logical_name: None,
@@ -1376,15 +1366,11 @@ mod tests {
                 os_id: 0x01,
                 arch_id: 0x01,
                 relative_path: "./bin/app".to_string(),
+                
             }],
             patches: vec![],
             provenance: vec![],
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+            
             packages: vec![Package {
                 name: "pkg".to_string(),
                 logical_name: None,
@@ -1418,6 +1404,7 @@ mod tests {
                 content_id: 0xcafebabe,
                 patch_type: 0x01,
                 relative_path: "./fix.patch".to_string(),
+                
             }],
             packages: vec![Package {
                 name: "pkg".to_string(),
@@ -1429,12 +1416,7 @@ mod tests {
                 ..Default::default()
             }],
             provenance: vec![],
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+            
         };
         let serialized = serialize(&mut lockfile).unwrap();
         let deserialized = deserialize(&serialized).unwrap();
@@ -1646,12 +1628,7 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+            
             packages: vec![Package {
                 name: "pkg".to_string(),
                 logical_name: None,
@@ -1679,12 +1656,7 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+            
             packages: vec![Package {
                 name: "pkg".to_string(),
                 logical_name: None,
@@ -1736,12 +1708,7 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+            
             packages: vec![Package {
                 name: "pkg".to_string(),
                 logical_name: None,
@@ -1777,6 +1744,7 @@ mod tests {
                     dep_type: DepType::Runtime,
                     source_type: crate::provenance::ProvenanceSourceType::Registry,
                     depth: 1,
+                    
                 },
                 crate::provenance::ResolutionProvenance {
                     package_name: "jest".to_string(),
@@ -1797,6 +1765,7 @@ mod tests {
                 ..Default::default()
             }],
         };
+
         let serialized = serialize(&mut lockfile).unwrap();
         assert!(serialized.contains("@provenance lodash ^4.17.0 app 0 0 1"));
         assert!(serialized.contains("@provenance jest ^29.0.0  1 0 0"));
@@ -1828,12 +1797,7 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+            
             packages: vec![Package {
                 name: "app".to_string(),
                 logical_name: None,
@@ -1870,12 +1834,7 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+            
             packages: vec![Package {
                 name: "app".to_string(),
                 logical_name: None,
@@ -1912,12 +1871,7 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+            
             packages: vec![Package {
                 name: "app".to_string(),
                 logical_name: None,
@@ -1956,12 +1910,7 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+            
             packages: vec![Package {
                 name: "pkg".to_string(),
                 logical_name: None,

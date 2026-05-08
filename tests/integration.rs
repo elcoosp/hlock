@@ -1,7 +1,7 @@
+use fips204::traits::SerDes as FipsSerDes;
 use hlock::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use fips204::traits::SerDes as FipsSerDes;
 
 #[test]
 fn test_e2e_write_and_read_v5() {
@@ -14,13 +14,14 @@ fn test_e2e_write_and_read_v5() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![
             Package {
@@ -86,13 +87,14 @@ fn test_e2e_workspace_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![Package {
             name: "core".to_string(),
@@ -125,13 +127,14 @@ fn test_string_api_crc_corruption() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![Package {
             name: "z".to_string(),
@@ -148,7 +151,8 @@ fn test_string_api_crc_corruption() {
         }],
     };
     let serialized = serialize(&mut lockfile).unwrap();
-    let without_digest: String = serialized.lines()
+    let without_digest: String = serialized
+        .lines()
         .filter(|l| !l.starts_with("@digest "))
         .map(|l| format!("{}\n", l))
         .collect();
@@ -164,7 +168,10 @@ fn test_string_api_crc_corruption() {
         }
     }
     let tampered_str: String = tampered.into_iter().collect();
-    assert!(deserialize(&tampered_str).is_err(), "corrupted lockfile should fail deserialization");
+    assert!(
+        deserialize(&tampered_str).is_err(),
+        "corrupted lockfile should fail deserialization"
+    );
 }
 
 #[test]
@@ -181,13 +188,14 @@ fn test_e2e_features_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![
             Package {
@@ -243,13 +251,14 @@ fn test_e2e_optional_target_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![
             Package {
@@ -303,13 +312,14 @@ fn test_e2e_diff_after_adding_package() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![Package {
             name: "core".to_string(),
@@ -335,13 +345,14 @@ fn test_e2e_diff_after_adding_package() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![
             Package {
@@ -394,13 +405,14 @@ fn test_e2e_extract_and_serialize_is_valid() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![
             Package {
@@ -478,13 +490,14 @@ fn test_e2e_v7_provenance_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![Package {
             name: "crypto-lib".to_string(),
@@ -524,13 +537,14 @@ fn test_e2e_graph_manipulation_ignores_provenance() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![Package {
             name: "a".to_string(),
@@ -571,13 +585,14 @@ fn test_e2e_v8_peer_resolution_topology() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![
             Package {
@@ -628,13 +643,14 @@ fn test_e2e_graph_extract_preserves_peers() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![Package {
             name: "a".to_string(),
@@ -668,13 +684,14 @@ fn test_e2e_v8_alias_and_cas_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![Package {
             name: "react".to_string(),
@@ -715,13 +732,14 @@ fn test_e2e_ipfs_source_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![Package {
             name: "some-pkg".to_string(),
@@ -757,13 +775,14 @@ fn test_e2e_v9_peer_requirements_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![
             Package {
@@ -827,13 +846,14 @@ fn test_e2e_v9_platform_tags_roundtrip() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![
             Package {
@@ -903,13 +923,14 @@ fn test_e2e_sign_lockfile_and_verify() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![Package {
             name: "app".to_string(),
@@ -923,12 +944,22 @@ fn test_e2e_sign_lockfile_and_verify() {
     };
     let serialized = serialize(&mut lockfile).unwrap();
 
-    let signed = sign_lockfile(&serialized, "ci@company.com", SignatureAlgorithm::Ed25519, &seed, 0).unwrap();
+    let signed = sign_lockfile(
+        &serialized,
+        "ci@company.com",
+        SignatureAlgorithm::Ed25519,
+        &seed,
+        0,
+    )
+    .unwrap();
     assert!(signed.contains("@signature ci@company.com "));
 
     let leaked: &'static [u8] = Box::leak(Box::new(verifying_key_bytes) as Box<[u8]>);
     let mut trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
-    trusted.insert("ci@company.com".to_string(), (leaked, SignatureAlgorithm::Ed25519));
+    trusted.insert(
+        "ci@company.com".to_string(),
+        (leaked, SignatureAlgorithm::Ed25519),
+    );
     let verify_result = verify_signature(&signed, &trusted);
     assert!(verify_result.is_ok());
 }
@@ -949,13 +980,14 @@ fn test_e2e_signed_lockfile_deserializes_correctly() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![
             Package {
@@ -979,7 +1011,14 @@ fn test_e2e_signed_lockfile_deserializes_correctly() {
         ],
     };
     let serialized = serialize(&mut lockfile).unwrap();
-    let signed = sign_lockfile(&serialized, "bot@github-actions", SignatureAlgorithm::Ed25519, &seed, 0).unwrap();
+    let signed = sign_lockfile(
+        &serialized,
+        "bot@github-actions",
+        SignatureAlgorithm::Ed25519,
+        &seed,
+        0,
+    )
+    .unwrap();
 
     let deserialized = deserialize(&signed).unwrap();
     assert_eq!(deserialized.packages.len(), 2);
@@ -997,13 +1036,14 @@ fn test_e2e_platform_extraction_with_real_lockfile() {
         workspace_root: None,
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
-        patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         artifacts: vec![],
         packages: vec![
             Package {
@@ -1158,40 +1198,67 @@ fn test_v014_reexports_exist() {
 fn test_e2e_merge_no_conflicts() {
     let mut base = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
         packages: vec![Package {
-            name: "core".to_string(), logical_name: None, source_idx: 0,
-            major: 1, minor: 0, patch: 0, ..Default::default()
+            name: "core".to_string(),
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            ..Default::default()
         }],
         provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
     };
     let serialized_base = serialize(&mut base).unwrap();
     let parsed_base = deserialize(&serialized_base).unwrap();
 
     let mut ours = parsed_base.clone();
     ours.packages.push(Package {
-        name: "utils".to_string(), logical_name: None, source_idx: 0,
-        major: 1, minor: 0, patch: 0, ..Default::default()
+        name: "utils".to_string(),
+        logical_name: None,
+        source_idx: 0,
+        major: 1,
+        minor: 0,
+        patch: 0,
+        ..Default::default()
     });
 
     let mut theirs = parsed_base.clone();
     theirs.packages.push(Package {
-        name: "helpers".to_string(), logical_name: None, source_idx: 0,
-        major: 1, minor: 0, patch: 0, ..Default::default()
+        name: "helpers".to_string(),
+        logical_name: None,
+        source_idx: 0,
+        major: 1,
+        minor: 0,
+        patch: 0,
+        ..Default::default()
     });
 
-    let result = hlock::merge_lockfiles(&parsed_base, &ours, &theirs, hlock::ConflictStrategy::Fail).unwrap();
+    let result =
+        hlock::merge_lockfiles(&parsed_base, &ours, &theirs, hlock::ConflictStrategy::Fail)
+            .unwrap();
     assert!(result.conflicts.is_empty());
     assert_eq!(result.lockfile.packages.len(), 3);
-    let names: Vec<&str> = result.lockfile.packages.iter().map(|p| p.name.as_str()).collect();
+    let names: Vec<&str> = result
+        .lockfile
+        .packages
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect();
     assert!(names.contains(&"core"));
     assert!(names.contains(&"utils"));
     assert!(names.contains(&"helpers"));
@@ -1201,12 +1268,21 @@ fn test_e2e_merge_no_conflicts() {
 fn test_e2e_merge_roundtrip() {
     let mut base = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
         packages: vec![Package {
-            name: "core".to_string(), logical_name: None, source_idx: 0,
-            major: 1, minor: 0, patch: 0,
+            name: "core".to_string(),
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
             hashes: vec![IntegrityHash {
                 algo: HashAlgorithm::Sha256,
                 digest: vec![42u8; 32],
@@ -1215,12 +1291,12 @@ fn test_e2e_merge_roundtrip() {
             ..Default::default()
         }],
         provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
     };
     let serialized_base = serialize(&mut base).unwrap();
     let parsed_base = deserialize(&serialized_base).unwrap();
@@ -1228,7 +1304,9 @@ fn test_e2e_merge_roundtrip() {
     let ours = parsed_base.clone();
     let theirs = parsed_base.clone();
 
-    let result = hlock::merge_lockfiles(&parsed_base, &ours, &theirs, hlock::ConflictStrategy::Fail).unwrap();
+    let result =
+        hlock::merge_lockfiles(&parsed_base, &ours, &theirs, hlock::ConflictStrategy::Fail)
+            .unwrap();
     let mut merged = result.lockfile;
     let reserialized = serialize(&mut merged).unwrap();
     let redeserialized = deserialize(&reserialized).unwrap();
@@ -1240,13 +1318,22 @@ fn test_e2e_merge_roundtrip() {
 fn test_e2e_lazy_parse() {
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
         packages: vec![
             Package {
-                name: "alpha".to_string(), logical_name: None, source_idx: 0,
-                major: 1, minor: 0, patch: 0,
+                name: "alpha".to_string(),
+                logical_name: None,
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
                 hashes: vec![IntegrityHash {
                     algo: HashAlgorithm::Blake3,
                     digest: vec![0u8; 32],
@@ -1255,17 +1342,22 @@ fn test_e2e_lazy_parse() {
                 ..Default::default()
             },
             Package {
-                name: "beta".to_string(), logical_name: None, source_idx: 0,
-                major: 2, minor: 0, patch: 0, ..Default::default()
+                name: "beta".to_string(),
+                logical_name: None,
+                source_idx: 0,
+                major: 2,
+                minor: 0,
+                patch: 0,
+                ..Default::default()
             },
         ],
         provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
     };
     let serialized = serialize(&mut lockfile).unwrap();
     let lazy = hlock::LazyLockfile::scan(&serialized).unwrap();
@@ -1283,20 +1375,30 @@ fn test_e2e_lazy_parse() {
 fn test_e2e_lazy_validate_digest() {
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
         packages: vec![Package {
-            name: "pkg".to_string(), logical_name: None, source_idx: 0,
-            major: 1, minor: 0, patch: 0, ..Default::default()
+            name: "pkg".to_string(),
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            ..Default::default()
         }],
         provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
     };
     let serialized = serialize(&mut lockfile).unwrap();
     let lazy = hlock::LazyLockfile::scan(&serialized).unwrap();
@@ -1307,13 +1409,22 @@ fn test_e2e_lazy_validate_digest() {
 fn test_e2e_sbom_spdx() {
     let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
         packages: vec![
             Package {
-                name: "app".to_string(), logical_name: None, source_idx: 0,
-                major: 1, minor: 0, patch: 0,
+                name: "app".to_string(),
+                logical_name: None,
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
                 dependencies: vec![Dependency {
                     name: "lodash".to_string(),
                     dep_type: DepType::Runtime,
@@ -1322,8 +1433,12 @@ fn test_e2e_sbom_spdx() {
                 ..Default::default()
             },
             Package {
-                name: "lodash".to_string(), logical_name: None, source_idx: 0,
-                major: 4, minor: 17, patch: 21,
+                name: "lodash".to_string(),
+                logical_name: None,
+                source_idx: 0,
+                major: 4,
+                minor: 17,
+                patch: 21,
                 hashes: vec![IntegrityHash {
                     algo: HashAlgorithm::Sha256,
                     digest: vec![42u8; 32],
@@ -1333,14 +1448,15 @@ fn test_e2e_sbom_spdx() {
             },
         ],
         provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
     };
-    let json_str = hlock::generate_sbom(&lockfile, hlock::SbomFormat::SpdxJson, "my-project").unwrap();
+    let json_str =
+        hlock::generate_sbom(&lockfile, hlock::SbomFormat::SpdxJson, "my-project").unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     assert_eq!(parsed["spdxVersion"], "SPDX-2.3");
     assert_eq!(parsed["name"], "my-project");
@@ -1351,24 +1467,33 @@ fn test_e2e_sbom_spdx() {
 fn test_e2e_sbom_cyclonedx() {
     let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
-        packages: vec![
-            Package {
-                name: "app".to_string(), logical_name: None, source_idx: 0,
-                major: 1, minor: 0, patch: 0, ..Default::default()
-            },
-        ],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        packages: vec![Package {
+            name: "app".to_string(),
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            ..Default::default()
+        }],
         provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
     };
-    let json_str = hlock::generate_sbom(&lockfile, hlock::SbomFormat::CycloneDxJson, "my-project").unwrap();
+    let json_str =
+        hlock::generate_sbom(&lockfile, hlock::SbomFormat::CycloneDxJson, "my-project").unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     assert_eq!(parsed["bomFormat"], "CycloneDX");
     assert_eq!(parsed["specVersion"], "1.5");
@@ -1378,20 +1503,30 @@ fn test_e2e_sbom_cyclonedx() {
 fn test_e2e_lint_default() {
     let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
         packages: vec![Package {
-            name: "pkg".to_string(), logical_name: None, source_idx: 0,
-            major: 1, minor: 0, patch: 0, ..Default::default()
+            name: "pkg".to_string(),
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            ..Default::default()
         }],
         provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
     };
     let report = hlock::lint_default(&lockfile);
     assert!(report.has_errors());
@@ -1401,12 +1536,22 @@ fn test_e2e_lint_default() {
 fn test_e2e_provenance_roundtrip() {
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
         packages: vec![Package {
-            name: "lodash".to_string(), logical_name: None, source_idx: 0,
-            major: 4, minor: 17, patch: 21, ..Default::default()
+            name: "lodash".to_string(),
+            logical_name: None,
+            source_idx: 0,
+            major: 4,
+            minor: 17,
+            patch: 21,
+            ..Default::default()
         }],
         provenance: vec![hlock::provenance::ResolutionProvenance {
             package_name: "lodash".to_string(),
@@ -1416,13 +1561,13 @@ fn test_e2e_provenance_roundtrip() {
             source_type: hlock::ProvenanceSourceType::Registry,
             depth: 1,
         }],
-    };,
         advisories: vec![],
         licenses: vec![],
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
         compat: None,
+    };
     let serialized = serialize(&mut lockfile).unwrap();
     let deserialized = deserialize(&serialized).unwrap();
     assert_eq!(deserialized.provenance.len(), 1);
@@ -1443,15 +1588,21 @@ fn test_v013_reexports_exist() {
     let _ = hlock::validate_digest(content);
     let lockfile = hlock::Lockfile {
         sources: vec![hlock::Source::Registry("r".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         packages: vec![],
     };
     let _ = hlock::runtime_deps(&lockfile, "x");
@@ -1466,18 +1617,29 @@ fn test_v013_reexports_exist() {
 fn test_e2e_diff_serialization_text() {
     let mut v1 = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         packages: vec![Package {
-            name: "core".to_string(), logical_name: None, source_idx: 0,
-            major: 1, minor: 0, patch: 0, ..Default::default()
+            name: "core".to_string(),
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            ..Default::default()
         }],
     };
     let serialized_v1 = serialize(&mut v1).unwrap();
@@ -1485,23 +1647,39 @@ fn test_e2e_diff_serialization_text() {
 
     let v2 = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         packages: vec![
             Package {
-                name: "core".to_string(), logical_name: None, source_idx: 0,
-                major: 2, minor: 0, patch: 0, ..Default::default()
+                name: "core".to_string(),
+                logical_name: None,
+                source_idx: 0,
+                major: 2,
+                minor: 0,
+                patch: 0,
+                ..Default::default()
             },
             Package {
-                name: "utils".to_string(), logical_name: None, source_idx: 0,
-                major: 1, minor: 0, patch: 0, ..Default::default()
+                name: "utils".to_string(),
+                logical_name: None,
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
+                ..Default::default()
             },
         ],
     };
@@ -1517,18 +1695,29 @@ fn test_e2e_diff_serialization_text() {
 fn test_e2e_diff_serialization_json() {
     let mut v1 = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         packages: vec![Package {
-            name: "core".to_string(), logical_name: None, source_idx: 0,
-            major: 1, minor: 0, patch: 0, ..Default::default()
+            name: "core".to_string(),
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            ..Default::default()
         }],
     };
     let serialized_v1 = serialize(&mut v1).unwrap();
@@ -1536,23 +1725,39 @@ fn test_e2e_diff_serialization_json() {
 
     let v2 = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         packages: vec![
             Package {
-                name: "core".to_string(), logical_name: None, source_idx: 0,
-                major: 2, minor: 0, patch: 0, ..Default::default()
+                name: "core".to_string(),
+                logical_name: None,
+                source_idx: 0,
+                major: 2,
+                minor: 0,
+                patch: 0,
+                ..Default::default()
             },
             Package {
-                name: "utils".to_string(), logical_name: None, source_idx: 0,
-                major: 1, minor: 0, patch: 0, ..Default::default()
+                name: "utils".to_string(),
+                logical_name: None,
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
+                ..Default::default()
             },
         ],
     };
@@ -1568,18 +1773,28 @@ fn test_e2e_digest_roundtrip() {
     let temp_path = std::path::PathBuf::from("target/test_digest_v13.hlock");
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         packages: vec![Package {
-            name: "pkg".to_string(), logical_name: None, source_idx: 0,
-            major: 1, minor: 0, patch: 0,
+            name: "pkg".to_string(),
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
             hashes: vec![IntegrityHash {
                 algo: HashAlgorithm::Blake3,
                 digest: vec![42u8; 32],
@@ -1595,7 +1810,10 @@ fn test_e2e_digest_roundtrip() {
     let read_back = read_lockfile(&temp_path).unwrap();
     assert_eq!(read_back.packages.len(), 1);
     let tampered = content.replace("pkg", "pkx");
-    assert!(matches!(validate_digest(&tampered), Err(Error::DigestMismatch { .. })));
+    assert!(matches!(
+        validate_digest(&tampered),
+        Err(Error::DigestMismatch { .. })
+    ));
     std::fs::remove_file(&temp_path).ok();
 }
 
@@ -1607,18 +1825,29 @@ fn test_e2e_ml_dsa65_signed_lockfile() {
 
     let mut lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         packages: vec![Package {
-            name: "app".to_string(), logical_name: None, source_idx: 0,
-            major: 1, minor: 0, patch: 0, ..Default::default()
+            name: "app".to_string(),
+            logical_name: None,
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            ..Default::default()
         }],
     };
     let serialized = serialize(&mut lockfile).unwrap();
@@ -1629,12 +1858,16 @@ fn test_e2e_ml_dsa65_signed_lockfile() {
         SignatureAlgorithm::MlDsa65,
         &sk_bytes,
         0,
-    ).unwrap();
+    )
+    .unwrap();
     assert!(signed.contains("@signature pq@company.com 02 0 "));
 
     let leaked: &'static [u8] = Box::leak(Box::new(vk_bytes) as Box<[u8]>);
     let mut trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
-    trusted.insert("pq@company.com".to_string(), (leaked, SignatureAlgorithm::MlDsa65));
+    trusted.insert(
+        "pq@company.com".to_string(),
+        (leaked, SignatureAlgorithm::MlDsa65),
+    );
 
     assert!(verify_signature(&signed, &trusted).is_ok());
 
@@ -1646,37 +1879,65 @@ fn test_e2e_ml_dsa65_signed_lockfile() {
 fn test_e2e_typed_graph_queries() {
     let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
-        overrides: vec![], features: vec![], metadata: vec![],
-        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
-        artifacts: vec![], patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![],
+        mirrors: vec![],
+        compat: None,
         packages: vec![
             Package {
-                name: "app".to_string(), logical_name: None, source_idx: 0,
-                major: 1, minor: 0, patch: 0,
+                name: "app".to_string(),
+                logical_name: None,
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
                 dependencies: vec![
-                    Dependency { name: "lodash".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
-                    Dependency { name: "jest".to_string(), dep_type: DepType::Dev, requested_features: vec![] },
+                    Dependency {
+                        name: "lodash".to_string(),
+                        dep_type: DepType::Runtime,
+                        requested_features: vec![],
+                    },
+                    Dependency {
+                        name: "jest".to_string(),
+                        dep_type: DepType::Dev,
+                        requested_features: vec![],
+                    },
                 ],
                 ..Default::default()
             },
             Package {
-                name: "lodash".to_string(), logical_name: None, source_idx: 0,
-                major: 4, minor: 17, patch: 21,
+                name: "lodash".to_string(),
+                logical_name: None,
+                source_idx: 0,
+                major: 4,
+                minor: 17,
+                patch: 21,
                 dependencies: vec![],
                 ..Default::default()
             },
             Package {
-                name: "jest".to_string(), logical_name: None, source_idx: 0,
-                major: 29, minor: 0, patch: 0,
-                dependencies: vec![
-                    Dependency { name: "lodash".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
-                ],
+                name: "jest".to_string(),
+                logical_name: None,
+                source_idx: 0,
+                major: 29,
+                minor: 0,
+                patch: 0,
+                dependencies: vec![Dependency {
+                    name: "lodash".to_string(),
+                    dep_type: DepType::Runtime,
+                    requested_features: vec![],
+                }],
                 ..Default::default()
             },
         ],

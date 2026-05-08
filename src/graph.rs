@@ -707,7 +707,7 @@ mod tests {
                 .iter()
                 .map(|(n, ty)| Dependency {
                     name: n.to_string(),
-                    dep_type: *ty,
+                    dep_type: ty.clone(),
                     requested_features: vec![],
                 })
                 .collect(),

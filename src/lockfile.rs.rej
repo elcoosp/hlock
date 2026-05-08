@@ -1,0 +1,11 @@
+@@ -467,6 +467,10 @@
+                     patches: vec![],
+                     provenance: vec![],
+                     mirrors: vec![],
++                    advisories: vec![],
++                    licenses: vec![],
++                    policies: vec![],
++                    trust_roots: vec![],
+                     compat: None,
+                 },
+                 remaining,
