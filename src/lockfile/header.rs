@@ -1,7 +1,7 @@
 //! Header parsing and formatting
 
 use crate::error::Error;
-use super::types::{
+use super::types::{Mirror, 
     Source, Override, WorkspacePkg, HoistBoundary, Lockfile, DepType,
 };
 
@@ -34,6 +34,9 @@ pub fn format_header(lockfile: &Lockfile) -> Result<String, Error> {
         };
         out.push_str(&format!("@source {} {}\n", idx, val));
     }
+    for mirror in &lockfile.mirrors {
+        out.push_str(&format!("@mirror {} {}\n", mirror.scope, mirror.url));
+    }
     for ovr in &lockfile.overrides {
         out.push_str(&format!("@override {} {} -> {}\n", ovr.name, ovr.from_version, ovr.to_version));
     }
@@ -65,6 +68,7 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
     let mut metadata = vec![];
     let mut workspace_root = None;
     let mut workspace_pkgs = Vec::new();
+    let mut mirrors = Vec::new();
     let mut hoist_boundaries = Vec::new();
     let lines = content.lines().enumerate();
 
@@ -84,7 +88,7 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
                     licenses: vec![],
                     policies: vec![],
                     trust_roots: vec![],
-                    mirrors: vec![],
+                    mirrors,
                     compat: None,
                 },
                 remaining,
@@ -113,6 +117,11 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
                 });
             }
             sources.push(source);
+        } else if let Some(rest) = line.strip_prefix("@mirror ") {
+            let mut parts = rest.splitn(2, ' ');
+            let scope = parts.next().unwrap_or("").to_string();
+            let url = parts.next().unwrap_or("").to_string();
+            mirrors.push(Mirror { scope, url });
         } else if let Some(rest) = line.strip_prefix("@override ") {
             let mut parts = rest.split(" -> ");
             let left = parts.next().unwrap_or("");

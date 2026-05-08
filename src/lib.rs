@@ -21,7 +21,7 @@ pub use lockfile::{
 };
 
 // Re-export types from lockfile::types
-pub use lockfile::types::{
+pub use lockfile::types::{Mirror, 
     Attestation, DepType, Dependency, DiffFormat, HashAlgorithm, HoistBoundary,
     IntegrityHash, Lockfile, LockfileDiff, Override, Package, PackageChange,
     PatchDirective, PeerResolution, PeerRequirement, PlatformTag,
@@ -44,7 +44,7 @@ pub use merge::{MergeConflict, MergeResult, ConflictStrategy, merge_lockfiles};
 pub use provenance::{ProvenanceSourceType, ResolutionProvenance};
 pub use policy::{
     Advisory, AdvisorySeverity, AuditReport, DedupOpportunity, LicenseEntry,
-    Mirror, Policy, PolicyDecision, PolicyReport, PolicyType, PolicyViolation,
+    Policy, PolicyDecision, PolicyReport, PolicyType, PolicyViolation,
     TrustRole, TrustRoot, TrustVerification,
 };
 pub use sbom::{SbomFormat, generate_sbom};

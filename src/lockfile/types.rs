@@ -1,6 +1,6 @@
 //! Core type definitions for lockfile
 
-use crate::policy::{Advisory, LicenseEntry, Policy, TrustRoot, Mirror};
+use crate::policy::{Advisory, LicenseEntry, Policy, TrustRoot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
@@ -201,4 +201,10 @@ pub struct Lockfile {
     pub trust_roots: Vec<TrustRoot>,
     pub mirrors: Vec<Mirror>,
     pub compat: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mirror {
+    pub scope: String,
+    pub url: String,
 }

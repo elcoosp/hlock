@@ -158,7 +158,19 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
         };
         out.push_str(&format!("@provenance {} {} {} {} {} {}\n", prov.package_name, prov.constraint, prov.constrained_by, dep_type_id, source_type_id, prov.depth));
     }
+    for adv in &lockfile.advisories {
+        out.push_str(&format!("@advisory {} {} {} {} {}\n", 
+            adv.package, 
+            adv.advisory_id, 
+            adv.severity.as_str(),
+            adv.url,
+            adv.affected_versions
+        ));
+    }
     let digest = blake3::hash(out.as_bytes());
+    for lic in &lockfile.licenses {
+        out.push_str(&format!("@license {} {}\n", lic.package, lic.expression));
+    }
     out.push_str(&format!("@digest {}\n", crate::lockfile::digest::bytes_to_hex(digest.as_bytes())));
     Ok(out)
 }
@@ -175,6 +187,50 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
 
     for (idx, line) in pkg_content.lines().enumerate() {
         if line.trim().is_empty() || line.starts_with("@signature ") || line.starts_with("@digest ") { continue; }
+        if line.starts_with("@license ") {
+            let rest = &line["@license ".len()..];
+            let mut parts = rest.splitn(2, ' ');
+            let package = parts.next().unwrap_or("").to_string();
+            let expression = parts.next().unwrap_or("").to_string();
+            lockfile.licenses.push(crate::policy::LicenseEntry {
+                package,
+                expression,
+            });
+            continue;
+        }
+        if line.starts_with("@advisory ") {
+            let rest = &line["@advisory ".len()..];
+            let mut parts = rest.splitn(5, ' ');
+            let package = parts.next().unwrap_or("").to_string();
+            let advisory_id = parts.next().unwrap_or("").to_string();
+            let severity_str = parts.next().unwrap_or("");
+            let url = parts.next().unwrap_or("").to_string();
+            let affected_versions = parts.next().unwrap_or("").to_string();
+
+            let severity = match severity_str {
+                "critical" => crate::policy::AdvisorySeverity::Critical,
+                "high" => crate::policy::AdvisorySeverity::High,
+                "medium" => crate::policy::AdvisorySeverity::Medium,
+                "low" => crate::policy::AdvisorySeverity::Low,
+                "info" => crate::policy::AdvisorySeverity::Info,
+                _ => {
+                    provenance_parse_errors.push(Error::InvalidAdvisorySeverity {
+                        line_number: idx + 1,
+                        severity: severity_str.to_string(),
+                    });
+                    continue;
+                }
+            };
+
+            lockfile.advisories.push(crate::policy::Advisory {
+                package,
+                advisory_id,
+                severity,
+                url,
+                affected_versions,
+            });
+            continue;
+        }
         if line.starts_with("@artifact ") {
             let rest = &line["@artifact ".len()..];
             let mut parts = rest.splitn(4, ' ');

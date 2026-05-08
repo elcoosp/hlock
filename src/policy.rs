@@ -139,12 +139,6 @@ pub struct TrustRoot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Mirror {
-    pub scope: String,
-    pub url: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuditReport {
     pub critical: Vec<Advisory>,
     pub high: Vec<Advisory>,
@@ -271,7 +265,7 @@ impl crate::lockfile::Lockfile {
             .collect()
     }
 
-        pub fn hook_allowed(&self, package_name: &str, hook_name: &str) -> PolicyDecision {
+    pub fn hook_allowed(&self, package_name: &str, hook_name: &str) -> PolicyDecision {
         let mut specific_allow = false;
         let mut specific_deny = false;
         let mut wildcard_deny = false;
@@ -304,22 +298,18 @@ impl crate::lockfile::Lockfile {
             }
         }
 
-        // Specific deny beats everything
         if specific_deny {
             return PolicyDecision::Denied { reason: deny_reason };
         }
 
-        // Specific allow beats wildcard deny
         if specific_allow {
             return PolicyDecision::Allowed;
         }
 
-        // Wildcard deny applies if no specific rules
         if wildcard_deny {
             return PolicyDecision::Denied { reason: deny_reason };
         }
 
-        // Wildcard allow applies as fallback
         if wildcard_allow {
             return PolicyDecision::Allowed;
         }
@@ -335,16 +325,12 @@ impl crate::lockfile::Lockfile {
         for policy in &self.policies {
             match policy.policy_type {
                 PolicyType::AllowScript => {
-                    if pattern_matches(&policy.package_pattern, package_name)
-                        && policy.value == script_name
-                    {
+                    if pattern_matches(&policy.package_pattern, package_name) && policy.value == script_name {
                         allowed = true;
                     }
                 }
                 PolicyType::DenyScript => {
-                    if pattern_matches(&policy.package_pattern, package_name)
-                        && policy.value == script_name
-                    {
+                    if pattern_matches(&policy.package_pattern, package_name) && policy.value == script_name {
                         denied = true;
                         deny_reason = format!("Script '{}' denied for '{}' by policy", script_name, package_name);
                     }
@@ -598,7 +584,6 @@ mod tests {
             ..empty_lockfile()
         };
         assert!(matches!(lf.hook_allowed("evil", "postinstall"), PolicyDecision::Denied { .. }));
-        // Also test that allow still works for other packages
         assert!(matches!(lf.hook_allowed("good", "postinstall"), PolicyDecision::Allowed));
     }
 
@@ -666,8 +651,8 @@ mod tests {
     fn test_registry_for_mirror() {
         let lf = Lockfile {
             mirrors: vec![
-                Mirror { scope: "@internal".to_string(), url: "https://npm.company.com/".to_string() },
-                Mirror { scope: "*".to_string(), url: "https://registry.npmmirror.org/".to_string() },
+                crate::lockfile::Mirror { scope: "@internal".to_string(), url: "https://npm.company.com/".to_string() },
+                crate::lockfile::Mirror { scope: "*".to_string(), url: "https://registry.npmmirror.org/".to_string() },
             ],
             ..empty_lockfile()
         };
