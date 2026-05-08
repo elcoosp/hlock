@@ -5,7 +5,6 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignatureAlgorithm {
     Ed25519 = 0x00,
-    Ed448 = 0x01,
     MlDsa65 = 0x02,
 }
 
@@ -23,8 +22,6 @@ pub enum SignatureError {
     InvalidBase64(&'static str),
     #[error("Ed25519 verification failed")]
     VerificationFailed,
-    #[error("Ed448 verification failed")]
-    Ed448VerificationFailed,
     #[error("ML-DSA-65 verification failed")]
     MlDsaVerificationFailed,
     #[error("Malformed signature directive: {reason}")]
@@ -62,7 +59,6 @@ pub fn parse_signature_directive(line: &str) -> Result<SignatureDirective, Signa
     })?;
     let algorithm = match algo_id {
         0x00 => SignatureAlgorithm::Ed25519,
-        0x01 => SignatureAlgorithm::Ed448,
         0x02 => SignatureAlgorithm::MlDsa65,
         _ => return Err(SignatureError::UnsupportedSignatureAlgorithm { algo_id }),
     };
@@ -72,7 +68,6 @@ pub fn parse_signature_directive(line: &str) -> Result<SignatureDirective, Signa
     let signature_bytes = base64url::decode(sig_b64.as_bytes()).map_err(SignatureError::InvalidBase64)?;
     let expected_len = match algorithm {
         SignatureAlgorithm::Ed25519 => 64,
-        SignatureAlgorithm::Ed448 => 114,
         SignatureAlgorithm::MlDsa65 => fips204::ml_dsa_65::SIG_LEN,
     };
     if expected_len > 0 && signature_bytes.len() != expected_len {
@@ -111,11 +106,6 @@ pub fn sign_lockfile(
             use ed25519_dalek::Signer;
             let sig = signing_key.sign(serialized_lockfile.as_bytes());
             (0x00u8, base64url::encode(sig.to_bytes().as_ref()))
-        }
-        SignatureAlgorithm::Ed448 => {
-            return Err(SignatureError::MalformedDirective {
-                reason: "Ed448 signing not yet available (pending stable crate release)".to_string(),
-            });
         }
         SignatureAlgorithm::MlDsa65 => {
             if private_key.len() != fips204::ml_dsa_65::SK_LEN {
@@ -200,11 +190,6 @@ pub fn verify_signature(
                 let signature = ed25519_dalek::Signature::from_bytes(&sig_bytes);
                 use ed25519_dalek::Verifier;
                 verifying_key.verify(message, &signature).map_err(|_| SignatureError::VerificationFailed)?;
-            }
-            SignatureAlgorithm::Ed448 => {
-                return Err(SignatureError::MalformedDirective {
-                    reason: "Ed448 verification not yet available (pending stable crate release)".to_string(),
-                });
             }
             SignatureAlgorithm::MlDsa65 => {
                 if expected_pub_key.len() != fips204::ml_dsa_65::PK_LEN {
@@ -381,24 +366,6 @@ mod tests {
         match verify_signature(&signed, &trusted) {
             Err(SignatureError::UntrustedKey { .. }) => {}
             other => panic!("expected UntrustedKey, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_ed448_sign_not_yet_available() {
-        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
-        let result = sign_lockfile(lockfile, "ed448@co.com", SignatureAlgorithm::Ed448, &[42u8; 57], 0);
-        assert!(matches!(result, Err(SignatureError::MalformedDirective { .. })));
-    }
-
-    #[test]
-    fn test_ed448_verify_not_yet_available() {
-        let content = "@source 0 https://r.com/\n\npkg\tAAAA\n@signature ed448@co.com 01 0 AAAA\n";
-        let mut trusted = HashMap::new();
-        trusted.insert("ed448@co.com".to_string(), (&[42u8; 57][..], SignatureAlgorithm::Ed448));
-        match verify_signature(content, &trusted) {
-            Err(SignatureError::MalformedDirective { .. }) => {}
-            other => panic!("expected MalformedDirective, got {:?}", other),
         }
     }
 

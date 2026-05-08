@@ -455,10 +455,14 @@ impl crate::lockfile::Lockfile {
                 let ver_strings: Vec<String> = versions.iter()
                     .map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch))
                     .collect();
+                let ver_count = ver_strings.len();
+                let estimated_size: usize = ver_strings.iter()
+                    .map(|v| v.len() + 120 + 80 + 30)
+                    .sum::<usize>() / ver_count.max(1);
                 opportunities.push(DedupOpportunity {
                     package_name: name.to_string(),
                     versions: ver_strings,
-                    potential_saving_bytes: 0,
+                    potential_saving_bytes: estimated_size.saturating_sub(232) * ver_count.saturating_sub(1),
                 });
             }
         }

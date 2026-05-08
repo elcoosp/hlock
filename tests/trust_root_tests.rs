@@ -53,17 +53,14 @@ fn test_trust_root_validation() {
                 key_id: "valid@key".to_string(),
                 algorithm: SignatureAlgorithm::Ed25519,
                 public_key: vec![42u8; 32],
-                expires_epoch: 1735689600, // Future date
+                expires_epoch: 1735689600,
                 role: TrustRole::Root,
             },
         ],
         ..Lockfile::default()
     };
 
-    // Should validate successfully (not expired)
     assert!(lockfile.validate_trust_chain(1735689500).is_ok());
-
-    // Should fail if expired
     assert!(lockfile.validate_trust_chain(1735689700).is_err());
 }
 
@@ -121,4 +118,20 @@ fn test_trust_roots_for_role() {
 
     let targets = lockfile.trust_roots_for_role(TrustRole::Targets);
     assert_eq!(targets.len(), 1);
+}
+
+#[test]
+fn test_ed448_algo_id_rejected_in_trust_root() {
+    let content = "@source 0 https://registry.npmjs.org/
+@trust-root bad@key 01 2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a 0 root
+
+";
+    let result = lockfile::parse_header(content);
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        hlock::Error::InvalidHeader { reason, .. } => {
+            assert!(reason.contains("Unknown algorithm: 01"), "Expected unknown algorithm error, got: {}", reason);
+        }
+        other => panic!("Expected InvalidHeader, got: {:?}", other),
+    }
 }

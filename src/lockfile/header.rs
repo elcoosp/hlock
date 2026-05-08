@@ -50,7 +50,6 @@ pub fn format_header(lockfile: &Lockfile) -> Result<String, Error> {
     for tr in &lockfile.trust_roots {
         let algo_str = match tr.algorithm {
             crate::signature::SignatureAlgorithm::Ed25519 => "00",
-            crate::signature::SignatureAlgorithm::Ed448 => "01",
             crate::signature::SignatureAlgorithm::MlDsa65 => "02",
         };
         let role_str = match tr.role {
@@ -154,7 +153,6 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
 
             let algorithm = match algo_str {
                 "00" => crate::signature::SignatureAlgorithm::Ed25519,
-                "01" => crate::signature::SignatureAlgorithm::Ed448,
                 "02" => crate::signature::SignatureAlgorithm::MlDsa65,
                 _ => return Err(Error::InvalidHeader {
                     line_number: line_num,
