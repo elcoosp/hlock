@@ -1,4 +1,5 @@
 use crate::base64url;
+use fips204::traits::{SerDes as FipsSerDes, Signer as FipsSigner, Verifier as FipsVerifier};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +73,7 @@ pub fn parse_signature_directive(line: &str) -> Result<SignatureDirective, Signa
     let expected_len = match algorithm {
         SignatureAlgorithm::Ed25519 => 64,
         SignatureAlgorithm::Ed448 => 114,
-        SignatureAlgorithm::MlDsa65 => 0,
+        SignatureAlgorithm::MlDsa65 => fips204::ml_dsa_65::SIG_LEN,
     };
     if expected_len > 0 && signature_bytes.len() != expected_len {
         return Err(SignatureError::MalformedDirective {
@@ -117,9 +118,25 @@ pub fn sign_lockfile(
             });
         }
         SignatureAlgorithm::MlDsa65 => {
-            return Err(SignatureError::MalformedDirective {
-                reason: "ML-DSA-65 signing not yet available (pending stable crate release)".to_string(),
-            });
+            if private_key.len() != fips204::ml_dsa_65::SK_LEN {
+                return Err(SignatureError::MalformedDirective {
+                    reason: format!("ML-DSA-65 private key must be {} bytes", fips204::ml_dsa_65::SK_LEN),
+                });
+            }
+            let key_bytes: <fips204::ml_dsa_65::PrivateKey as FipsSerDes>::ByteArray = private_key.try_into().map_err(|_| {
+                SignatureError::MalformedDirective {
+                    reason: "invalid ML-DSA-65 private key".to_string(),
+                }
+            })?;
+            let sk: fips204::ml_dsa_65::PrivateKey = FipsSerDes::try_from_bytes(key_bytes)
+                .map_err(|e| SignatureError::MalformedDirective {
+                    reason: format!("invalid ML-DSA-65 private key: {}", e),
+                })?;
+            let sig: <fips204::ml_dsa_65::PrivateKey as FipsSigner>::Signature = FipsSigner::try_sign(&sk, serialized_lockfile.as_bytes(), &[])
+                .map_err(|e| SignatureError::MalformedDirective {
+                    reason: format!("ML-DSA-65 signing failed: {}", e),
+                })?;
+            (0x02u8, base64url::encode(&sig[..]))
         }
     };
     Ok(format!("{}@signature {} {:02x} {} {}\n", serialized_lockfile, key_id, algo_id, expires_epoch, encoded_sig))
@@ -190,9 +207,28 @@ pub fn verify_signature(
                 });
             }
             SignatureAlgorithm::MlDsa65 => {
-                return Err(SignatureError::MalformedDirective {
-                    reason: "ML-DSA-65 verification not yet available (pending stable crate release)".to_string(),
-                });
+                if expected_pub_key.len() != fips204::ml_dsa_65::PK_LEN {
+                    return Err(SignatureError::MalformedDirective {
+                        reason: format!("ML-DSA-65 public key must be {} bytes", fips204::ml_dsa_65::PK_LEN),
+                    });
+                }
+                let pk_bytes: <fips204::ml_dsa_65::PublicKey as FipsSerDes>::ByteArray = (*expected_pub_key).try_into().map_err(|_| {
+                    SignatureError::MalformedDirective {
+                        reason: "invalid ML-DSA-65 public key".to_string(),
+                    }
+                })?;
+                let vk: fips204::ml_dsa_65::PublicKey = FipsSerDes::try_from_bytes(pk_bytes)
+                    .map_err(|e| SignatureError::MalformedDirective {
+                        reason: format!("invalid ML-DSA-65 public key: {}", e),
+                    })?;
+                let sig_bytes: <fips204::ml_dsa_65::PublicKey as FipsVerifier>::Signature = directive.signature_bytes.as_slice().try_into().map_err(|_| {
+                    SignatureError::MalformedDirective {
+                        reason: "invalid ML-DSA-65 signature".to_string(),
+                    }
+                })?;
+                if !FipsVerifier::verify(&vk, message, &sig_bytes, &[]) {
+                    return Err(SignatureError::MlDsaVerificationFailed);
+                }
             }
         }
     }
@@ -367,27 +403,66 @@ mod tests {
     }
 
     #[test]
-    fn test_ml_dsa65_sign_not_yet_available() {
+    fn test_ml_dsa65_sign_produces_directive() {
         let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
-        let result = sign_lockfile(lockfile, "pq@co.com", SignatureAlgorithm::MlDsa65, &[42u8; 2560], 0);
-        assert!(matches!(result, Err(SignatureError::MalformedDirective { .. })));
+        let (_pk, sk) = fips204::ml_dsa_65::try_keygen().unwrap();
+        let sk_bytes = FipsSerDes::into_bytes(sk);
+        let result = sign_lockfile(lockfile, "pq@co.com", SignatureAlgorithm::MlDsa65, &sk_bytes, 0);
+        assert!(result.is_ok(), "sign_lockfile MlDsa65 failed: {:?}", result);
+        let signed = result.unwrap();
+        assert!(signed.contains("@signature pq@co.com 02 0 "));
     }
 
     #[test]
-    fn test_ml_dsa65_verify_not_yet_available() {
-        let content = "@source 0 https://r.com/\n\npkg\tAAAA\n@signature pq@co.com 02 0 AAAA\n";
-        let mut trusted = HashMap::new();
-        trusted.insert("pq@co.com".to_string(), (&[42u8; 1952][..], SignatureAlgorithm::MlDsa65));
-        match verify_signature(content, &trusted) {
-            Err(SignatureError::MalformedDirective { .. }) => {}
-            other => panic!("expected MalformedDirective, got {:?}", other),
+    fn test_ml_dsa65_sign_and_verify_roundtrip() {
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let (pk, sk) = fips204::ml_dsa_65::try_keygen().unwrap();
+        let sk_bytes = FipsSerDes::into_bytes(sk);
+        let vk_bytes = FipsSerDes::into_bytes(pk);
+
+        let signed = sign_lockfile(lockfile, "pq@test.com", SignatureAlgorithm::MlDsa65, &sk_bytes, 0).unwrap();
+
+        let leaked: &'static [u8] = Box::leak(Box::new(vk_bytes) as Box<[u8]>);
+        let mut trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+        trusted.insert("pq@test.com".to_string(), (leaked, SignatureAlgorithm::MlDsa65));
+
+        let result = verify_signature(&signed, &trusted);
+        assert!(result.is_ok(), "ML-DSA-65 verify failed: {:?}", result);
+    }
+
+    #[test]
+    fn test_ml_dsa65_verify_tampered() {
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let (pk, sk) = fips204::ml_dsa_65::try_keygen().unwrap();
+        let sk_bytes = FipsSerDes::into_bytes(sk);
+        let vk_bytes = FipsSerDes::into_bytes(pk);
+
+        let signed = sign_lockfile(lockfile, "pq@test.com", SignatureAlgorithm::MlDsa65, &sk_bytes, 0).unwrap();
+
+        let tampered = signed.replace("r.com", "r.org");
+        let leaked: &'static [u8] = Box::leak(Box::new(vk_bytes) as Box<[u8]>);
+        let mut trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+        trusted.insert("pq@test.com".to_string(), (leaked, SignatureAlgorithm::MlDsa65));
+
+        match verify_signature(&tampered, &trusted) {
+            Err(SignatureError::MlDsaVerificationFailed) => {}
+            other => panic!("expected MlDsaVerificationFailed, got {:?}", other),
         }
     }
 
     #[test]
+    fn test_ml_dsa65_sign_rejects_wrong_key_length() {
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let result = sign_lockfile(lockfile, "pq@co.com", SignatureAlgorithm::MlDsa65, &[42u8; 100], 0);
+        assert!(matches!(result, Err(SignatureError::MalformedDirective { .. })));
+    }
+
+    #[test]
     fn test_parse_signature_directive_accepts_ml_dsa65_algo_id() {
-        let line = "@signature pq@co.com 02 0 AAAA";
-        let directive = parse_signature_directive(line).unwrap();
+        let sig_bytes = vec![0u8; fips204::ml_dsa_65::SIG_LEN];
+        let sig_b64 = base64url::encode(&sig_bytes);
+        let line = format!("@signature pq@co.com 02 0 {}", sig_b64);
+        let directive = parse_signature_directive(&line).unwrap();
         assert_eq!(directive.algorithm, SignatureAlgorithm::MlDsa65);
         assert_eq!(directive.key_id, "pq@co.com");
     }

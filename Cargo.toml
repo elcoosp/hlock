@@ -8,4 +8,4 @@ thiserror = "2"
 ed25519-dalek = "2.2"
 blake3 = "1"
 serde_json = "1"
-fips204 = "0.4"
+fips204 = { version = "0.4", features = ["ml-dsa-65", "default-rng"] }
