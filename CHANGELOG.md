@@ -1,4 +1,44 @@
 # Changelog
+## [0.15.0] — The Audit, Trust & Interop Release
+
+### Added
+
+**Security & Trust**
+- **@trust-root directive** — TUF-style trust delegation with key rotation. Supports roles: `root`, `targets`, `snapshot`, `delegation`. Algorithms: Ed25519, Ed448, ML-DSA-65.
+- **@policy directive** — Security policy enforcement. Types: `allow-hook`, `deny-hook`, `allow-script`, `deny-script`, `build-env`, `engine`. Pattern matching with `*` wildcard and scope globs (`@scope/*`).
+- **@advisory directive** — Vulnerability tracking with severity levels: `critical`, `high`, `medium`, `low`, `info`.
+- **@license directive** — SPDX license expression tracking for compliance.
+- **@mirror directive** — Registry mirroring with scope-based resolution.
+
+**New API Methods**
+- `registry_for()` — Package scope to registry mirror resolution.
+- `audit()`, `advisories_for()`, `has_critical_advisory()` — Vulnerability management.
+- `license_for()`, `unlicensed_packages()` — License compliance.
+- `hook_allowed()`, `script_allowed()`, `build_env_for()`, `engine_for()` — Policy evaluation.
+- `evaluate_policies()` — Combined policy report.
+- `trust_roots_for_role()`, `validate_trust_chain()`, `has_expired_root_key()` — Trust verification.
+
+**Security Lint Rules (6 new, 12 total)**
+- `NoKnownVulnerabilities` — Error on critical/high CVEs.
+- `RequireLicense` — Error on missing license declarations.
+- `DenyCopyleft` — Warning on copyleft licenses (GPL, AGPL, LGPL, CC-BY-SA).
+- `RequireTrustRoot` — Error on missing trust root keys.
+- `NoExpiredKeys` — Error on expired trust keys.
+- `DenyPostinstall` — Warning on postinstall hooks.
+
+**SBOM Enhancements**
+- License data added to SPDX output (`licenseConcluded` field).
+- License data added to CycloneDX output (`licenses` array).
+
+### Changed
+- **Lockfile module refactored** — Split into clean submodules: `types`, `diff`, `digest`, `header`.
+- **Policy engine precedence** — Specific allow beats wildcard deny, specific deny beats everything.
+
+### Migration Guide (v0.14 → v0.15)
+- No payload format changes. v0.15 can read v0.14 lockfiles.
+- New directives are optional. v0.14 parsers that don't recognize them will produce `Error::InvalidHeader`.
+- Trust verification is optional; lockfiles without `@trust-root` pass `validate_trust_chain()` by default.
+
 
 All notable changes to this project will be documented in this file.
 
@@ -133,3 +173,5 @@ All notable changes to this project will be documented in this file.
 - Base64URL transport encoding.
 - Header directives, source types, hash algorithms, dependency types.
 - Sparse subgraph extraction and sorted merge-based diffing.
+Updating CHANGELOG.md, README.md, bumping version to 0.15.0, and creating git tag
+

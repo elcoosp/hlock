@@ -201,3 +201,222 @@ match verify_signature(&content, &trusted_keys) {
 ## License
 
 MIT
+
+## Trust Delegation
+
+<<<
+use hlock::*;
+use hlock::policy::{TrustRole, TrustRoot};
+use hlock::signature::SignatureAlgorithm;
+
+let trust_root = TrustRoot {
+    key_id: "ci@company.com".to_string(),
+    algorithm: SignatureAlgorithm::Ed25519,
+    public_key: vec![42u8; 32],
+    expires_epoch: 1735689600,
+    role: TrustRole::Root,
+};
+
+lockfile.trust_roots.push(trust_root);
+lockfile.validate_trust_chain(now_epoch)?;
+>>>
+
+## Vulnerability Auditing
+
+<<<
+use hlock::*;
+
+let report = lockfile.audit();
+if report.has_critical_or_high() {
+    println!("Vulnerabilities detected!");
+    for adv in report.critical {
+        println!("CRITICAL: {}", adv.advisory_id);
+    }
+}
+>>>
+
+## License Compliance
+
+<<<
+use hlock::*;
+
+match lockfile.license_for("lodash") {
+    Some("MIT") => println!("✓ MIT license"),
+    Some(other) => println!("License: {}", other),
+    None => println!("Missing license declaration"),
+}
+
+let unlicensed = lockfile.unlicensed_packages();
+>>>
+
+## Policy Enforcement
+
+<<<
+use hlock::*;
+
+match lockfile.hook_allowed("lodash", "postinstall") {
+    PolicyDecision::Allowed => println!("Hook permitted"),
+    PolicyDecision::Denied { reason } => println!("Denied: {}", reason),
+    PolicyDecision::NoPolicy => println!("No policy defined"),
+}
+>>>
+
+## Registry Mirror Resolution
+
+<<<
+use hlock::*;
+
+// Scoped packages resolve to specific mirror
+let url = lockfile.registry_for("@internal/foo");
+assert_eq!(url, "https://npm.company.com/");
+
+// Unscoped packages use default mirror
+let url = lockfile.registry_for("lodash");
+assert_eq!(url, "https://registry.npmmirror.org/");
+>>>
+
+## Trust Delegation
+
+<<<
+use hlock::*;
+use hlock::policy::{TrustRole, TrustRoot};
+use hlock::signature::SignatureAlgorithm;
+
+let trust_root = TrustRoot {
+    key_id: "ci@company.com".to_string(),
+    algorithm: SignatureAlgorithm::Ed25519,
+    public_key: vec![42u8; 32],
+    expires_epoch: 1735689600,
+    role: TrustRole::Root,
+};
+
+lockfile.trust_roots.push(trust_root);
+lockfile.validate_trust_chain(now_epoch)?;
+>>>
+
+## Vulnerability Auditing
+
+<<<
+use hlock::*;
+
+let report = lockfile.audit();
+if report.has_critical_or_high() {
+    println!("Vulnerabilities detected!");
+    for adv in report.critical {
+        println!("CRITICAL: {}", adv.advisory_id);
+    }
+}
+>>>
+
+## License Compliance
+
+<<<
+use hlock::*;
+
+match lockfile.license_for("lodash") {
+    Some("MIT") => println!("✓ MIT license"),
+    Some(other) => println!("License: {}", other),
+    None => println!("Missing license declaration"),
+}
+
+let unlicensed = lockfile.unlicensed_packages();
+>>>
+
+## Policy Enforcement
+
+<<<
+use hlock::*;
+
+match lockfile.hook_allowed("lodash", "postinstall") {
+    PolicyDecision::Allowed => println!("Hook permitted"),
+    PolicyDecision::Denied { reason } => println!("Denied: {}", reason),
+    PolicyDecision::NoPolicy => println!("No policy defined"),
+}
+>>>
+
+## Registry Mirror Resolution
+
+<<<
+use hlock::*;
+
+// Scoped packages resolve to specific mirror
+let url = lockfile.registry_for("@internal/foo");
+assert_eq!(url, "https://npm.company.com/");
+
+// Unscoped packages use default mirror
+let url = lockfile.registry_for("lodash");
+assert_eq!(url, "https://registry.npmmirror.org/");
+>>>
+
+## Trust Delegation
+
+<<<
+use hlock::*;
+use hlock::policy::{TrustRole, TrustRoot};
+use hlock::signature::SignatureAlgorithm;
+
+let trust_root = TrustRoot {
+    key_id: "ci@company.com".to_string(),
+    algorithm: SignatureAlgorithm::Ed25519,
+    public_key: vec![42u8; 32],
+    expires_epoch: 1735689600,
+    role: TrustRole::Root,
+};
+
+lockfile.trust_roots.push(trust_root);
+lockfile.validate_trust_chain(now_epoch)?;
+>>>
+
+## Vulnerability Auditing
+
+<<<
+use hlock::*;
+
+let report = lockfile.audit();
+if report.has_critical_or_high() {
+    println!("Vulnerabilities detected!");
+    for adv in report.critical {
+        println!("CRITICAL: {}", adv.advisory_id);
+    }
+}
+>>>
+
+## License Compliance
+
+<<<
+use hlock::*;
+
+match lockfile.license_for("lodash") {
+    Some("MIT") => println!("✓ MIT license"),
+    Some(other) => println!("License: {}", other),
+    None => println!("Missing license declaration"),
+}
+
+let unlicensed = lockfile.unlicensed_packages();
+>>>
+
+## Policy Enforcement
+
+<<<
+use hlock::*;
+
+match lockfile.hook_allowed("lodash", "postinstall") {
+    PolicyDecision::Allowed => println!("Hook permitted"),
+    PolicyDecision::Denied { reason } => println!("Denied: {}", reason),
+    PolicyDecision::NoPolicy => println!("No policy defined"),
+}
+>>>
+
+## Registry Mirror Resolution
+
+<<<
+use hlock::*;
+
+// Scoped packages resolve to specific mirror
+let url = lockfile.registry_for("@internal/foo");
+assert_eq!(url, "https://npm.company.com/");
+
+// Unscoped packages use default mirror
+let url = lockfile.registry_for("lodash");
+assert_eq!(url, "https://registry.npmmirror.org/");
+>>>
