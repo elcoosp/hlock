@@ -1,6 +1,7 @@
 pub mod base64url;
 pub mod error;
 pub mod lazy;
+pub mod lint;
 pub mod fnv;
 pub mod graph;
 pub mod lockfile;
@@ -37,3 +38,4 @@ pub use signature::{sign_lockfile, verify_signature, SignatureAlgorithm, Signatu
 pub use merge::{MergeConflict, MergeResult, ConflictStrategy, merge_lockfiles};
 pub use sbom::{SbomFormat, generate_sbom};
 pub use lazy::{LazyLockfile, LockfileHeader};
+pub use lint::{LintFinding, LintReport, LintRule, LintSeverity, lint_default};
