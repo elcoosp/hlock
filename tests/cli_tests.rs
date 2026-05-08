@@ -14,9 +14,11 @@ fn write_temp_file(name: &str, content: &str) -> PathBuf {
 }
 
 fn make_simple_lockfile() -> String {
-    let mut lf = hlock::Lockfile::default();
-    lf.sources = vec![hlock::Source::Registry("https://registry.npmjs.org/".to_string())];
-    hlock::serialize(&mut lf).unwrap()
+    let lf = hlock::Lockfile {
+        sources: vec![hlock::Source::Registry("https://registry.npmjs.org/".to_string())],
+        ..Default::default()
+    };
+    hlock::serialize(&mut lf.clone()).unwrap()
 }
 
 #[test]
@@ -51,14 +53,17 @@ fn test_cli_verify_tampered() {
 
 #[test]
 fn test_cli_lint_errors() {
-    let mut lf = hlock::Lockfile::default();
-    lf.sources = vec![hlock::Source::Git("git+https://github.com/pkg.git".to_string())];
-    lf.packages = vec![hlock::Package {
-        name: "pkg-git".to_string(),
-        source_idx: 0,
+    let lf = hlock::Lockfile {
+        sources: vec![hlock::Source::Git("git+https://github.com/pkg.git".to_string())],
+        packages: vec![hlock::Package {
+            name: "pkg-git".to_string(),
+            source_idx: 0,
+            ..Default::default()
+        }],
         ..Default::default()
-    }];
-    let serialized = hlock::serialize(&mut lf).unwrap();
+    };
+    let mut lf_mut = lf;
+    let serialized = hlock::serialize(&mut lf_mut).unwrap();
     let path = write_temp_file("lint_errors.hlock", &serialized);
     let output = Command::new(hlock_bin())
         .arg("lint")
@@ -73,14 +78,17 @@ fn test_cli_lint_errors() {
 #[test]
 fn test_cli_diff_text() {
     let s1 = make_simple_lockfile();
-    let mut lf2 = hlock::Lockfile::default();
-    lf2.sources = vec![hlock::Source::Registry("https://registry.npmjs.org/".to_string())];
-    lf2.packages = vec![hlock::Package {
-        name: "added-pkg".to_string(),
-        source_idx: 0,
+    let lf2 = hlock::Lockfile {
+        sources: vec![hlock::Source::Registry("https://registry.npmjs.org/".to_string())],
+        packages: vec![hlock::Package {
+            name: "added-pkg".to_string(),
+            source_idx: 0,
+            ..Default::default()
+        }],
         ..Default::default()
-    }];
-    let s2 = hlock::serialize(&mut lf2).unwrap();
+    };
+    let mut lf2_mut = lf2;
+    let s2 = hlock::serialize(&mut lf2_mut).unwrap();
 
     let path1 = write_temp_file("diff_old.hlock", &s1);
     let path2 = write_temp_file("diff_new.hlock", &s2);

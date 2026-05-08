@@ -104,6 +104,7 @@ pub fn merge_lockfiles(
     })
 }
 
+#[allow(clippy::type_complexity)]
 fn merge_sources(
     base: &Lockfile,
     ours: &Lockfile,

@@ -164,6 +164,7 @@ pub struct Package {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 pub enum PackageChange {
     Added(Package),
     Removed(Package),
@@ -220,6 +221,7 @@ pub enum VexStatus {
 }
 
 impl VexStatus {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "not_affected" => Some(VexStatus::NotAffected),

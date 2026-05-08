@@ -346,8 +346,8 @@ fn main() {
                 _ => signature::SignatureAlgorithm::Ed25519,
             };
 
-            let key_hex = if private_key.starts_with('@') {
-                match std::fs::read_to_string(&private_key[1..]) {
+            let key_hex = if let Some(path) = private_key.strip_prefix('@') {
+                match std::fs::read_to_string(path) {
                     Ok(h) => h.trim().to_string(),
                     Err(e) => { eprintln!("Error reading key file: {}", e); std::process::exit(2); }
                 }

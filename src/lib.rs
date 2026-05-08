@@ -3,6 +3,7 @@ pub mod error;
 pub mod lazy;
 pub mod lint;
 pub mod fnv;
+#[allow(clippy::collapsible_if, clippy::needless_range_loop, clippy::unused_enumerate_index)]
 pub mod graph;
 pub mod lockfile;
 pub mod payload;

@@ -192,8 +192,7 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
 
     for (idx, line) in pkg_content.lines().enumerate() {
         if line.trim().is_empty() || line.starts_with("@signature ") || line.starts_with("@digest ") { continue; }
-        if line.starts_with("@vex ") {
-            let rest = &line["@vex ".len()..];
+        if let Some(rest) = line.strip_prefix("@vex ") {
             let mut parts = rest.splitn(5, ' ');
             let package = parts.next().unwrap_or("").to_string();
             let advisory_id = parts.next().unwrap_or("").to_string();
@@ -221,8 +220,7 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
             });
             continue;
         }
-        if line.starts_with("@license ") {
-            let rest = &line["@license ".len()..];
+        if let Some(rest) = line.strip_prefix("@license ") {
             let mut parts = rest.splitn(2, ' ');
             let package = parts.next().unwrap_or("").to_string();
             let expression = parts.next().unwrap_or("").to_string();
@@ -232,8 +230,7 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
             });
             continue;
         }
-        if line.starts_with("@advisory ") {
-            let rest = &line["@advisory ".len()..];
+        if let Some(rest) = line.strip_prefix("@advisory ") {
             let mut parts = rest.splitn(5, ' ');
             let package = parts.next().unwrap_or("").to_string();
             let advisory_id = parts.next().unwrap_or("").to_string();
@@ -265,8 +262,7 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
             });
             continue;
         }
-        if line.starts_with("@artifact ") {
-            let rest = &line["@artifact ".len()..];
+        if let Some(rest) = line.strip_prefix("@artifact ") {
             let mut parts = rest.splitn(4, ' ');
             let content_id = u64::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
             let os_id = u8::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
@@ -275,8 +271,7 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
             artifacts.push(ArtifactDirective { content_id, os_id, arch_id, relative_path: rel_path.to_string() });
             continue;
         }
-        if line.starts_with("@patch ") {
-            let rest = &line["@patch ".len()..];
+        if let Some(rest) = line.strip_prefix("@patch ") {
             let mut parts = rest.splitn(3, ' ');
             let content_id = u64::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
             let patch_type = u8::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
@@ -284,8 +279,7 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
             patches.push(PatchDirective { content_id, patch_type, relative_path: rel_path.to_string() });
             continue;
         }
-        if line.starts_with("@provenance ") {
-            let rest = &line["@provenance ".len()..];
+        if let Some(rest) = line.strip_prefix("@provenance ") {
             let mut parts = rest.splitn(6, ' ');
             let pkg_name = parts.next().unwrap_or("").to_string();
             let constraint = parts.next().unwrap_or("").to_string();
@@ -337,7 +331,7 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
             };
             dependencies.push(Dependency { name: dep_name.clone(), dep_type: ty, requested_features: req_feats });
         }
-        packages.push(Package { name, logical_name: payload.logical_name, source_idx: payload.source_idx, major: payload.major, minor: payload.minor, patch: payload.patch, hashes, features: payload.features, resolved_peers: payload.resolved_peers, dependencies, peer_requirements: payload.peer_requirements.iter().map(|r| PeerRequirement { peer_name: r.peer_name.clone(), version_range: r.version_range.clone(), is_optional: r.is_optional }).collect(), platform_tags: payload.platform_tags.iter().map(|t| { let os = match t.os_id { 0x00 => TargetOS::Any, 0x01 => TargetOS::Linux, 0x02 => TargetOS::MacOS, 0x03 => TargetOS::Windows, 0x04 => TargetOS::FreeBSD, 0x05 => TargetOS::Android, 0x06 => TargetOS::IOS, _ => TargetOS::Unknown }; let arch = match t.arch_id { 0x00 => TargetArch::Any, 0x01 => TargetArch::X86_64, 0x02 => TargetArch::Aarch64, 0x03 => TargetArch::Wasm32, 0x04 => TargetArch::Arm, 0x05 => TargetArch::S390x, 0x06 => TargetArch::Ppc64le, _ => TargetArch::Unknown }; PlatformTag { os, arch } }).collect(), exports: payload.exports.iter().map(|ex| { let algo = match ex.hash_algo { 0x00 => HashAlgorithm::Sha1, 0x01 => HashAlgorithm::Sha256, 0x02 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 }; Export { identifier: ex.identifier.clone(), hash_algo: algo, digest: ex.digest.clone() } }).collect(), artifacts: payload.artifacts.iter().map(|art| { let algo = match art.hash_algo { 0x00 => HashAlgorithm::Sha1, 0x01 => HashAlgorithm::Sha256, 0x02 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 }; Artifact { os_id: art.os_id, arch_id: art.arch_id, hash_algo: algo, digest: art.digest.clone() } }).collect(), hook_hashes: payload.hook_hashes.iter().map(|sh| { let algo = match sh.hash_algo { 0x00 => HashAlgorithm::Sha1, 0x01 => HashAlgorithm::Sha256, 0x02 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 }; HookHash { hook_type: sh.hook_type.clone(), hash_algo: algo, digest: sh.digest.clone() } }).collect(), patch_hash: payload.patch_hash.as_ref().map(|(algo, digest)| { let a = match algo { 0x00 => HashAlgorithm::Sha1, 0x01 => HashAlgorithm::Sha256, 0x02 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 }; (a, digest.clone()) }), ..Package::default() });
+        packages.push(Package { name, logical_name: payload.logical_name, source_idx: payload.source_idx, major: payload.major, minor: payload.minor, patch: payload.patch, hashes, features: payload.features, resolved_peers: payload.resolved_peers, dependencies, peer_requirements: payload.peer_requirements.iter().map(|r| PeerRequirement { peer_name: r.peer_name.clone(), version_range: r.version_range.clone(), is_optional: r.is_optional }).collect(), platform_tags: payload.platform_tags.iter().map(|t| { let os = match t.os_id { 0x00 => TargetOS::Any, 0x01 => TargetOS::Linux, 0x02 => TargetOS::MacOS, 0x03 => TargetOS::Windows, 0x04 => TargetOS::FreeBSD, 0x05 => TargetOS::Android, 0x06 => TargetOS::IOS, _ => TargetOS::Unknown }; let arch = match t.arch_id { 0x00 => TargetArch::Any, 0x01 => TargetArch::X86_64, 0x02 => TargetArch::Aarch64, 0x03 => TargetArch::Wasm32, 0x04 => TargetArch::Arm, 0x05 => TargetArch::S390x, 0x06 => TargetArch::Ppc64le, _ => TargetArch::Unknown }; PlatformTag { os, arch } }).collect(), exports: payload.exports.iter().map(|ex| { let algo = match ex.hash_algo { 0x00 => HashAlgorithm::Sha1, 0x01 => HashAlgorithm::Sha256, 0x02 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 }; Export { identifier: ex.identifier.clone(), hash_algo: algo, digest: ex.digest.clone() } }).collect(), artifacts: payload.artifacts.iter().map(|art| { let algo = match art.hash_algo { 0x00 => HashAlgorithm::Sha1, 0x01 => HashAlgorithm::Sha256, 0x02 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 }; Artifact { os_id: art.os_id, arch_id: art.arch_id, hash_algo: algo, digest: art.digest.clone() } }).collect(), hook_hashes: payload.hook_hashes.iter().map(|sh| { let algo = match sh.hash_algo { 0x00 => HashAlgorithm::Sha1, 0x01 => HashAlgorithm::Sha256, 0x02 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 }; HookHash { hook_type: sh.hook_type.clone(), hash_algo: algo, digest: sh.digest.clone() } }).collect(), patch_hash: payload.patch_hash.as_ref().map(|(algo, digest)| { let a = match algo { 0x00 => HashAlgorithm::Sha1, 0x01 => HashAlgorithm::Sha256, 0x02 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 }; (a, digest.clone()) }) });
     }
     lockfile.packages = packages;
     lockfile.artifacts = artifacts;

@@ -1,10 +1,10 @@
-use hlock::lockfile::{self, Lockfile, Source};
+use hlock::lockfile::{Lockfile, Source};
 use hlock::policy::LicenseEntry;
 use hlock::sbom::{SbomFormat, generate_sbom};
 
 #[test]
 fn test_sbom_spdx_includes_license() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
         packages: vec![
             hlock::lockfile::Package {
@@ -32,7 +32,7 @@ fn test_sbom_spdx_includes_license() {
 
 #[test]
 fn test_sbom_cyclonedx_includes_license() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
         packages: vec![
             hlock::lockfile::Package {

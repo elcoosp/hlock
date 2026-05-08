@@ -126,16 +126,16 @@ fn generate_spdx(lockfile: &Lockfile, namespace: &str) -> Result<String, Error> 
         packages_json.push(pkg_obj);
 
         for dep in &pkg.dependencies {
-            if matches!(dep.dep_type, DepType::Runtime | DepType::Peer) {
-                if let Some(dep_pkg) = lockfile.packages.iter().find(|p| p.name == dep.name) {
-                    let dep_ver = version_string(dep_pkg.major, dep_pkg.minor, dep_pkg.patch);
-                    let dep_spdx_id = format!("SPDXRef-Package-{}-{}", dep_pkg.name, dep_ver);
-                    relationships_json.push(serde_json::json!({
-                        "spdxElementId": spdx_id,
-                        "relationshipType": "DEPENDS_ON",
-                        "relatedSpdxElement": dep_spdx_id,
-                    }));
-                }
+            if matches!(dep.dep_type, DepType::Runtime | DepType::Peer)
+                && let Some(dep_pkg) = lockfile.packages.iter().find(|p| p.name == dep.name)
+            {
+                let dep_ver = version_string(dep_pkg.major, dep_pkg.minor, dep_pkg.patch);
+                let dep_spdx_id = format!("SPDXRef-Package-{}-{}", dep_pkg.name, dep_ver);
+                relationships_json.push(serde_json::json!({
+                    "spdxElementId": spdx_id,
+                    "relationshipType": "DEPENDS_ON",
+                    "relatedSpdxElement": dep_spdx_id,
+                }));
             }
         }
     }
@@ -194,11 +194,11 @@ fn generate_cyclonedx(lockfile: &Lockfile, _namespace: &str) -> Result<String, E
 
         let mut dep_refs = Vec::new();
         for dep in &pkg.dependencies {
-            if matches!(dep.dep_type, DepType::Runtime | DepType::Peer) {
-                if let Some(dep_pkg) = lockfile.packages.iter().find(|p| p.name == dep.name) {
-                    let dep_ver = version_string(dep_pkg.major, dep_pkg.minor, dep_pkg.patch);
-                    dep_refs.push(purl(&dep_pkg.name, &dep_ver));
-                }
+            if matches!(dep.dep_type, DepType::Runtime | DepType::Peer)
+                && let Some(dep_pkg) = lockfile.packages.iter().find(|p| p.name == dep.name)
+            {
+                let dep_ver = version_string(dep_pkg.major, dep_pkg.minor, dep_pkg.patch);
+                dep_refs.push(purl(&dep_pkg.name, &dep_ver));
             }
         }
         if !dep_refs.is_empty() {

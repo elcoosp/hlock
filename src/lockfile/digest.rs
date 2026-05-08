@@ -29,7 +29,7 @@ pub fn whole_lockfile_digest(content: &str) -> [u8; 32] {
 }
 
 fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
-    if hex.len() % 2 != 0 { return None; }
+    if !hex.len().is_multiple_of(2) { return None; }
     (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i+2], 16).ok()).collect()
 }
 

@@ -123,7 +123,7 @@ impl LazyLockfile {
         let entry = &self.index[idx];
         let line = &self.content[entry.line_start..entry.line_end];
         let (_name_str, encoded) = line.split_once('\t')
-            .ok_or_else(|| Error::MissingDelimiter { line_number: 0 })?;
+            .ok_or(Error::MissingDelimiter { line_number: 0 })?;
         let binary = crate::base64url::decode(encoded.as_bytes())
             .map_err(|_| Error::InvalidBase64 { line_number: 0 })?;
         let payload = crate::payload::unpack_payload(&binary, 0)?;
@@ -131,13 +131,12 @@ impl LazyLockfile {
         let mut id_map: std::collections::HashMap<u64, (String, Vec<String>)> = std::collections::HashMap::new();
         for entry in &self.index {
             let line = &self.content[entry.line_start..entry.line_end];
-            if let Some((_name_str, encoded)) = line.split_once('\t') {
-                if let Ok(binary) = crate::base64url::decode(encoded.as_bytes()) {
-                    if let Ok(pl) = crate::payload::unpack_payload(&binary, 0) {
-                        let cid = crate::fnv::calculate(&format!("{}@{}.{}.{}", entry.name, pl.major, pl.minor, pl.patch));
-                        id_map.insert(cid, (entry.name.clone(), pl.features.clone()));
-                    }
-                }
+            if let Some((_name_str, encoded)) = line.split_once('\t')
+                && let Ok(binary) = crate::base64url::decode(encoded.as_bytes())
+                && let Ok(pl) = crate::payload::unpack_payload(&binary, 0)
+            {
+                let cid = crate::fnv::calculate(&format!("{}@{}.{}.{}", entry.name, pl.major, pl.minor, pl.patch));
+                id_map.insert(cid, (entry.name.clone(), pl.features.clone()));
             }
         }
 
@@ -149,10 +148,10 @@ impl LazyLockfile {
     pub fn get_packages_by_source(&self, source_idx: usize) -> Result<Vec<Package>, Error> {
         let mut result = Vec::new();
         for entry in &self.index {
-            if let Some(pkg) = self.get_package(&entry.name)? {
-                if pkg.source_idx == source_idx {
-                    result.push(pkg);
-                }
+            if let Some(pkg) = self.get_package(&entry.name)?
+                && pkg.source_idx == source_idx
+            {
+                result.push(pkg);
             }
         }
         Ok(result)
@@ -164,10 +163,10 @@ impl LazyLockfile {
     ) -> Result<Vec<Package>, Error> {
         let mut result = Vec::new();
         for entry in &self.index {
-            if predicate(&entry.name) {
-                if let Some(pkg) = self.get_package(&entry.name)? {
-                    result.push(pkg);
-                }
+            if predicate(&entry.name)
+                && let Some(pkg) = self.get_package(&entry.name)?
+            {
+                result.push(pkg);
             }
         }
         Ok(result)
@@ -310,7 +309,6 @@ fn payload_to_package(
             };
             (a, digest.clone())
         }),
-        ..Package::default()
     })
 }
 

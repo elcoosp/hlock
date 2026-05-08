@@ -46,7 +46,7 @@ fn test_policy_parse_in_header() {
 
 #[test]
 fn test_policy_hook_allowed_with_directives() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
         policies: vec![
             Policy {

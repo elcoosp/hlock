@@ -11,6 +11,7 @@ pub enum AdvisorySeverity {
 }
 
 impl AdvisorySeverity {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "critical" => Some(AdvisorySeverity::Critical),
@@ -69,6 +70,7 @@ pub enum PolicyType {
 }
 
 impl PolicyType {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "allow-hook" => Some(PolicyType::AllowHook),
@@ -109,6 +111,7 @@ pub enum TrustRole {
 }
 
 impl TrustRole {
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "root" => Some(TrustRole::Root),
@@ -211,8 +214,7 @@ fn pattern_matches(pattern: &str, name: &str) -> bool {
     if pattern == "*" {
         return true;
     }
-    if pattern.ends_with("/*") {
-        let prefix = &pattern[..pattern.len() - 2];
+    if let Some(prefix) = pattern.strip_suffix("/*") {
         return name.starts_with(prefix);
     }
     pattern == name
