@@ -1,5 +1,6 @@
 pub mod base64url;
 pub mod error;
+pub mod lazy;
 pub mod fnv;
 pub mod graph;
 pub mod lockfile;
@@ -33,3 +34,4 @@ pub use payload::{
 };
 pub use signature::{sign_lockfile, verify_signature, SignatureAlgorithm, SignatureDirective};
 pub use merge::{MergeConflict, MergeResult, ConflictStrategy, merge_lockfiles};
+pub use lazy::{LazyLockfile, LockfileHeader};

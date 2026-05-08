@@ -83,7 +83,7 @@ fn version_string(pkg: &Package) -> String {
     format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Override {
     pub name: String,
     pub from_version: String,
