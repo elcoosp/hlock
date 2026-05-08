@@ -1,10 +1,14 @@
 //! Generate a demo lockfile for testing the hlock CLI.
 //!
 //! Run: cargo run --example generate_demo > demo.hlock
+//! Variant: cargo run --example generate_demo v2 > demo_v2.hlock
 
 use hlock::*;
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let variant = args.get(1).map(|s| s.as_str()) == Some("v2");
+
     let seed: [u8; 32] = [
         0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
         0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
@@ -16,6 +20,100 @@ fn main() {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
         (*signing_key.verifying_key().as_bytes()).to_vec()
     };
+
+    let mut packages = vec![
+        Package {
+            name: "lodash".to_string(),
+            source_idx: 0,
+            major: 4, minor: 17, patch: if variant { 22 } else { 21 },
+            hashes: vec![IntegrityHash {
+                algo: HashAlgorithm::Sha256,
+                digest: vec![42u8; 32],
+                attestation: Attestation::None,
+            }],
+            features: vec!["esm".to_string()],
+            dependencies: vec![],
+            ..Default::default()
+        },
+        Package {
+            name: "react".to_string(),
+            source_idx: 0,
+            major: 18, minor: 3, patch: 1,
+            hashes: vec![IntegrityHash {
+                algo: HashAlgorithm::Sha256,
+                digest: vec![43u8; 32],
+                attestation: Attestation::InlineSlsa(SlsaPredicate {
+                    builder: "github.com/actions".to_string(),
+                    source: "git+https://github.com/facebook/react".to_string(),
+                }),
+            }],
+            dependencies: vec![Dependency {
+                name: "lodash".to_string(),
+                dep_type: DepType::Runtime,
+                requested_features: vec![],
+            }],
+            ..Default::default()
+        },
+        Package {
+            name: "express".to_string(),
+            source_idx: 0,
+            major: 4, minor: 21, patch: 0,
+            hashes: vec![IntegrityHash {
+                algo: HashAlgorithm::Sha256,
+                digest: vec![44u8; 32],
+                attestation: Attestation::None,
+            }],
+            dependencies: vec![],
+            ..Default::default()
+        },
+        Package {
+            name: "old-dep".to_string(),
+            source_idx: 0,
+            major: 1, minor: 0, patch: 0,
+            hashes: vec![IntegrityHash {
+                algo: HashAlgorithm::Sha1,
+                digest: vec![0xAA; 20],
+                attestation: Attestation::None,
+            }],
+            ..Default::default()
+        },
+        Package {
+            name: "pkg-git".to_string(),
+            source_idx: 1,
+            major: 2, minor: 0, patch: 0,
+            ..Default::default()
+        },
+        Package {
+            name: "my-app".to_string(),
+            source_idx: 2,
+            major: 1, minor: 0, patch: 0,
+            dependencies: vec![
+                Dependency { name: "react".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
+                Dependency { name: "express".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
+                Dependency { name: "old-dep".to_string(), dep_type: DepType::Dev, requested_features: vec![] },
+            ],
+            hook_hashes: vec![HookHash {
+                hook_type: "postinstall".to_string(),
+                hash_algo: HashAlgorithm::Blake3,
+                digest: vec![0xBB; 32],
+            }],
+            ..Default::default()
+        },
+    ];
+
+    if variant {
+        packages.push(Package {
+            name: "axios".to_string(),
+            source_idx: 0,
+            major: 1, minor: 7, patch: 0,
+            hashes: vec![IntegrityHash {
+                algo: HashAlgorithm::Sha256,
+                digest: vec![55u8; 32],
+                attestation: Attestation::None,
+            }],
+            ..Default::default()
+        });
+    }
 
     let mut lockfile = Lockfile {
         sources: vec![
@@ -58,85 +156,7 @@ fn main() {
         hoist_boundaries: vec![
             HoistBoundary { cosine: "my-app".to_string(), allowed_deps: vec!["lodash".to_string(), "react".to_string()] },
         ],
-        packages: vec![
-            Package {
-                name: "lodash".to_string(),
-                source_idx: 0,
-                major: 4, minor: 17, patch: 21,
-                hashes: vec![IntegrityHash {
-                    algo: HashAlgorithm::Sha256,
-                    digest: vec![42u8; 32],
-                    attestation: Attestation::None,
-                }],
-                features: vec!["esm".to_string()],
-                dependencies: vec![],
-                ..Default::default()
-            },
-            Package {
-                name: "react".to_string(),
-                source_idx: 0,
-                major: 18, minor: 3, patch: 1,
-                hashes: vec![IntegrityHash {
-                    algo: HashAlgorithm::Sha256,
-                    digest: vec![43u8; 32],
-                    attestation: Attestation::InlineSlsa(SlsaPredicate {
-                        builder: "github.com/actions".to_string(),
-                        source: "git+https://github.com/facebook/react".to_string(),
-                    }),
-                }],
-                dependencies: vec![Dependency {
-                    name: "lodash".to_string(),
-                    dep_type: DepType::Runtime,
-                    requested_features: vec![],
-                }],
-                ..Default::default()
-            },
-            Package {
-                name: "express".to_string(),
-                source_idx: 0,
-                major: 4, minor: 21, patch: 0,
-                hashes: vec![IntegrityHash {
-                    algo: HashAlgorithm::Sha256,
-                    digest: vec![44u8; 32],
-                    attestation: Attestation::None,
-                }],
-                dependencies: vec![],
-                ..Default::default()
-            },
-            Package {
-                name: "old-dep".to_string(),
-                source_idx: 0,
-                major: 1, minor: 0, patch: 0,
-                hashes: vec![IntegrityHash {
-                    algo: HashAlgorithm::Sha1,
-                    digest: vec![0xAA; 20],
-                    attestation: Attestation::None,
-                }],
-                ..Default::default()
-            },
-            Package {
-                name: "pkg-git".to_string(),
-                source_idx: 1,
-                major: 2, minor: 0, patch: 0,
-                ..Default::default()
-            },
-            Package {
-                name: "my-app".to_string(),
-                source_idx: 2,
-                major: 1, minor: 0, patch: 0,
-                dependencies: vec![
-                    Dependency { name: "react".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
-                    Dependency { name: "express".to_string(), dep_type: DepType::Runtime, requested_features: vec![] },
-                    Dependency { name: "old-dep".to_string(), dep_type: DepType::Dev, requested_features: vec![] },
-                ],
-                hook_hashes: vec![HookHash {
-                    hook_type: "postinstall".to_string(),
-                    hash_algo: HashAlgorithm::Blake3,
-                    digest: vec![0xBB; 32],
-                }],
-                ..Default::default()
-            },
-        ],
+        packages,
         artifacts: vec![],
         patches: vec![],
         provenance: vec![
