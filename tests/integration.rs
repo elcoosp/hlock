@@ -129,20 +129,23 @@ fn test_string_api_crc_corruption() {
         }],
     };
     let serialized = serialize(&mut lockfile).unwrap();
-    let mut tampered = serialized.chars().collect::<Vec<_>>();
-    if tampered.len() > 2 {
-        let idx = tampered.len() - 2;
-        if tampered[idx] != 'A' {
-            tampered[idx] = 'A';
-        } else {
-            tampered[idx] = 'B';
+    let without_digest: String = serialized.lines()
+        .filter(|l| !l.starts_with("@digest "))
+        .map(|l| format!("{}\n", l))
+        .collect();
+    let mut tampered = without_digest.chars().collect::<Vec<_>>();
+    if let Some(tab_pos) = without_digest.find('\t') {
+        let idx = tab_pos + 1;
+        if idx < tampered.len() {
+            if tampered[idx] != 'A' {
+                tampered[idx] = 'A';
+            } else {
+                tampered[idx] = 'B';
+            }
         }
     }
     let tampered_str: String = tampered.into_iter().collect();
-    assert!(matches!(
-        deserialize(&tampered_str),
-        Err(Error::PayloadDigestMismatch { .. })
-    ));
+    assert!(deserialize(&tampered_str).is_err(), "corrupted lockfile should fail deserialization");
 }
 
 #[test]

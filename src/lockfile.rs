@@ -272,6 +272,82 @@ fn serialize_diff_json(diff: &LockfileDiff) -> String {
     serde_json::to_string(&obj).unwrap()
 }
 
+fn find_digest_or_signature_boundary(content: &str) -> usize {
+    let mut offset = 0;
+    for line in content.lines() {
+        if line.starts_with("@digest ") || line.starts_with("@signature ") {
+            return offset;
+        }
+        offset += line.len();
+        if offset < content.len() {
+            offset += 1;
+        }
+    }
+    content.len()
+}
+
+pub fn whole_lockfile_digest(content: &str) -> [u8; 32] {
+    let boundary = find_digest_or_signature_boundary(content);
+    let hash = blake3::hash(&content.as_bytes()[..boundary]);
+    let mut result = [0u8; 32];
+    result.copy_from_slice(hash.as_bytes());
+    result
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
+    if hex.len() % 2 != 0 { return None; }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
+}
+
+pub fn validate_digest(content: &str) -> Result<(), Error> {
+    let mut digest_lines = Vec::new();
+    for line in content.lines() {
+        if line.starts_with("@digest ") {
+            digest_lines.push(line);
+        }
+    }
+
+    if digest_lines.is_empty() {
+        return Ok(());
+    }
+
+    if digest_lines.len() > 1 {
+        return Err(Error::DuplicateDigestDirective);
+    }
+
+    let hex_str = digest_lines[0].strip_prefix("@digest ").unwrap().trim();
+    let expected = hex_to_bytes(hex_str).ok_or_else(|| Error::DigestMismatch {
+        expected: String::new(),
+        actual: String::new(),
+    })?;
+
+    if expected.len() != 32 {
+        return Err(Error::DigestMismatch {
+            expected: hex_str.to_string(),
+            actual: String::new(),
+        });
+    }
+
+    let boundary = find_digest_or_signature_boundary(content);
+    let computed = blake3::hash(&content.as_bytes()[..boundary]);
+
+    if computed.as_bytes() != expected.as_slice() {
+        return Err(Error::DigestMismatch {
+            expected: hex_str.to_string(),
+            actual: bytes_to_hex(computed.as_bytes()),
+        });
+    }
+
+    Ok(())
+}
+
 fn format_header(lockfile: &Lockfile) -> Result<String, Error> {
     let mut out = String::new();
     for (idx, source) in lockfile.sources.iter().enumerate() {
@@ -523,6 +599,8 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
     for p in &lockfile.patches {
         out.push_str(&format!("@patch {:016x} {:02x} {}\n", p.content_id, p.patch_type, p.relative_path));
     }
+    let digest = blake3::hash(out.as_bytes());
+    out.push_str(&format!("@digest {}\n", bytes_to_hex(digest.as_bytes())));
     Ok(out)
 }
 
@@ -537,6 +615,7 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
     for (idx, line) in pkg_content.lines().enumerate() {
         if line.trim().is_empty() { continue; }
         if line.starts_with("@signature ") { continue; }
+        if line.starts_with("@digest ") { continue; }
         if line.starts_with("@artifact ") {
             let rest = &line["@artifact ".len()..];
             let mut parts = rest.splitn(4, ' ');
@@ -1009,5 +1088,124 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["unchanged_count"], 0);
         assert_eq!(parsed["changes"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_whole_lockfile_digest_no_digest_or_signature() {
+        let content = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let digest = whole_lockfile_digest(content);
+        let expected = blake3::hash(content.as_bytes());
+        assert_eq!(digest.as_slice(), expected.as_bytes());
+    }
+
+    #[test]
+    fn test_whole_lockfile_digest_with_signature() {
+        let content = "@source 0 https://r.com/\n\npkg\tAAAA\n@signature key 00 0 AAAA\n";
+        let digest = whole_lockfile_digest(content);
+        let expected_content = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let expected = blake3::hash(expected_content.as_bytes());
+        assert_eq!(digest.as_slice(), expected.as_bytes());
+    }
+
+    #[test]
+    fn test_whole_lockfile_digest_with_digest() {
+        let content = "@source 0 https://r.com/\n\npkg\tAAAA\n@digest abc123\n";
+        let digest = whole_lockfile_digest(content);
+        let expected_content = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let expected = blake3::hash(expected_content.as_bytes());
+        assert_eq!(digest.as_slice(), expected.as_bytes());
+    }
+
+    #[test]
+    fn test_whole_lockfile_digest_digest_before_signature() {
+        let content = "@source 0 https://r.com/\n\npkg\tAAAA\n@digest abc123\n@signature key 00 0 AAAA\n";
+        let digest = whole_lockfile_digest(content);
+        let expected_content = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let expected = blake3::hash(expected_content.as_bytes());
+        assert_eq!(digest.as_slice(), expected.as_bytes());
+    }
+
+    #[test]
+    fn test_validate_digest_valid() {
+        let mut lockfile = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            overrides: vec![], features: vec![], metadata: vec![],
+            workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+            artifacts: vec![], patches: vec![],
+            packages: vec![Package {
+                name: "pkg".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0, ..Default::default()
+            }],
+        };
+        let serialized = serialize(&mut lockfile).unwrap();
+        assert!(validate_digest(&serialized).is_ok());
+    }
+
+    #[test]
+    fn test_validate_digest_mismatch() {
+        let mut lockfile = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            overrides: vec![], features: vec![], metadata: vec![],
+            workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+            artifacts: vec![], patches: vec![],
+            packages: vec![Package {
+                name: "pkg".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0, ..Default::default()
+            }],
+        };
+        let serialized = serialize(&mut lockfile).unwrap();
+        let without_digest: String = serialized.lines()
+            .filter(|l| !l.starts_with("@digest "))
+            .map(|l| format!("{}\n", l))
+            .collect();
+        let with_bad_digest = format!("{}@digest {}\n", without_digest, "00".repeat(32));
+        assert!(matches!(validate_digest(&with_bad_digest), Err(Error::DigestMismatch { .. })));
+    }
+
+    #[test]
+    fn test_validate_digest_missing_is_ok() {
+        let content = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        assert!(validate_digest(content).is_ok());
+    }
+
+    #[test]
+    fn test_validate_digest_duplicate() {
+        let content = "@source 0 https://r.com/\n\npkg\tAAAA\n@digest abc\n@digest def\n";
+        assert!(matches!(validate_digest(content), Err(Error::DuplicateDigestDirective)));
+    }
+
+    #[test]
+    fn test_serialize_includes_digest() {
+        let mut lockfile = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            overrides: vec![], features: vec![], metadata: vec![],
+            workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+            artifacts: vec![], patches: vec![],
+            packages: vec![Package {
+                name: "pkg".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0, ..Default::default()
+            }],
+        };
+        let serialized = serialize(&mut lockfile).unwrap();
+        assert!(serialized.contains("@digest "));
+        assert!(validate_digest(&serialized).is_ok());
+    }
+
+    #[test]
+    fn test_deserialize_skips_digest_line() {
+        let mut lockfile = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            overrides: vec![], features: vec![], metadata: vec![],
+            workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+            artifacts: vec![], patches: vec![],
+            packages: vec![Package {
+                name: "pkg".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0, ..Default::default()
+            }],
+        };
+        let serialized = serialize(&mut lockfile).unwrap();
+        let deserialized = deserialize(&serialized).unwrap();
+        assert_eq!(deserialized.packages.len(), 1);
+        assert_eq!(deserialized.packages[0].name, "pkg");
     }
 }
