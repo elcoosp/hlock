@@ -32,12 +32,12 @@ pub struct LazyLockfile {
     header: LockfileHeader,
     index: Vec<IndexEntry>,
     provenance: Vec<ResolutionProvenance>,
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+    advisories: Vec<crate::policy::Advisory>,
+    licenses: Vec<crate::policy::LicenseEntry>,
+    policies: Vec<crate::policy::Policy>,
+    trust_roots: Vec<crate::policy::TrustRoot>,
+    mirrors: Vec<crate::policy::Mirror>,
+    compat: Option<serde_json::Value>,
 }
 
 impl LazyLockfile {
@@ -99,6 +99,12 @@ impl LazyLockfile {
             header,
             index,
             provenance,
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
         })
     }
 
@@ -196,14 +202,14 @@ impl LazyLockfile {
             artifacts: self.header.artifacts,
             patches: self.header.patches,
             provenance: self.provenance,
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
         })
-    },
-                        advisories: vec![],
-                        licenses: vec![],
-                        policies: vec![],
-                        trust_roots: vec![],
-                        mirrors: vec![],
-                        compat: None,
+    }
 }
 
 fn payload_to_package(

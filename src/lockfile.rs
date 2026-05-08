@@ -406,13 +406,25 @@ fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
         if line.is_empty() {
             let header_end = content.find("\n\n").map(|i| i + 2).unwrap_or(content.len());
             let remaining = &content[header_end..];
-            return Ok((Lockfile { sources, overrides, features, metadata, workspace_root, workspace_pkgs, hoist_boundaries, packages: vec![], artifacts: vec![], patches: vec![], provenance: vec![] }, remaining));,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+            return Ok((Lockfile {
+                sources,
+                overrides,
+                features,
+                metadata,
+                workspace_root,
+                workspace_pkgs,
+                hoist_boundaries,
+                packages: vec![],
+                artifacts: vec![],
+                patches: vec![],
+                provenance: vec![],
+                advisories: vec![],
+                licenses: vec![],
+                policies: vec![],
+                trust_roots: vec![],
+                mirrors: vec![],
+                compat: None,
+            }, remaining));
         }
 
         if let Some(rest) = line.strip_prefix("@source ") {
@@ -1367,11 +1379,7 @@ mod tests {
                 patch: 0,
                 ..Default::default()
             }],
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
+        };
             mirrors: vec![],
             compat: None,
         let serialized = serialize(&mut lockfile).unwrap();

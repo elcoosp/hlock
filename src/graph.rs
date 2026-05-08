@@ -150,13 +150,13 @@ pub fn extract_subgraph(lockfile: &Lockfile, root_content_ids: &[u64]) -> Result
         artifacts: vec![],
         patches: lockfile.patches.clone(),
         provenance: filtered_provenance,
-    }),
         advisories: vec![],
         licenses: vec![],
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
         compat: None,
+    })
 }
 
 fn platform_matches(tag: &PlatformTag, target_os: &TargetOS, target_arch: &TargetArch) -> bool {
@@ -289,13 +289,13 @@ pub fn extract_subgraph_platform(
         artifacts: vec![],
         patches: lockfile.patches.clone(),
         provenance: lockfile.provenance.clone(),
-    }),
         advisories: vec![],
         licenses: vec![],
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
         compat: None,
+    })
 }
 
 pub fn topological_sort(lockfile: &Lockfile) -> Result<Vec<usize>, Vec<String>> {
@@ -448,7 +448,7 @@ pub fn leaf_packages(lockfile: &Lockfile) -> Vec<&Package> {
     leaves
 }
 
-fn follows_edge(dep: &Dependency, query_type: DepType) -> bool {
+fn follows_edge(dep: &Dependency, query_type: &DepType) -> bool {
     match query_type {
         DepType::Runtime => dep.dep_type == DepType::Runtime,
         DepType::Dev => dep.dep_type == DepType::Dev,
@@ -473,7 +473,7 @@ fn typed_transitive_deps(lockfile: &Lockfile, package_name: &str, query_type: De
 
     while let Some(idx) = queue.pop() {
         for dep in &lockfile.packages[idx].dependencies {
-            if follows_edge(dep, query_type.clone()) {
+            if follows_edge(dep, &query_type) {
                 if let Some(&dep_idx) = name_to_idx.get(dep.name.as_str()) {
                     if visited.insert(dep_idx) {
                         queue.push(dep_idx);
@@ -511,7 +511,7 @@ fn typed_dependents_of(lockfile: &Lockfile, package_name: &str, query_type: DepT
     let mut reverse_adj: HashMap<usize, Vec<usize>> = HashMap::new();
     for (i, pkg) in lockfile.packages.iter().enumerate() {
         for dep in &pkg.dependencies {
-            if follows_edge(dep, query_type.clone()) {
+            if follows_edge(dep, &query_type) {
                 if let Some(&dep_idx) = name_to_idx.get(dep.name.as_str()) {
                     reverse_adj.entry(dep_idx).or_default().push(i);
                 }
@@ -707,7 +707,7 @@ mod tests {
                 .iter()
                 .map(|(n, ty)| Dependency {
                     name: n.to_string(),
-                    dep_type: ty.clone(),
+                    dep_type: *ty,
                     requested_features: vec![],
                 })
                 .collect(),
@@ -731,13 +731,14 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+            patches: vec![],
+            provenance: vec![],
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
             packages: vec![
                 mock_pkg(
                     "app",
@@ -793,13 +794,14 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+            patches: vec![],
+            provenance: vec![],
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("pure-lib", DepType::Runtime)], vec![]),
                 mock_pkg("pure-lib", 1, 0, 0, vec![], vec![]),
@@ -823,13 +825,14 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+            patches: vec![],
+            provenance: vec![],
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("napi", DepType::Runtime)], vec![]),
                 mock_pkg(
@@ -863,13 +866,14 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+            patches: vec![],
+            provenance: vec![],
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("multi", DepType::Runtime)], vec![]),
                 mock_pkg(
@@ -917,13 +921,14 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+            patches: vec![],
+            provenance: vec![],
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("mid", DepType::Runtime)], vec![]),
                 mock_pkg("mid", 1, 0, 0, vec![("leaf", DepType::Runtime)], vec![]),
@@ -962,13 +967,14 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+            patches: vec![],
+            provenance: vec![],
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
             packages: vec![mock_pkg(
                 "app",
                 1,
@@ -997,13 +1003,14 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             artifacts: vec![],
-            patches: vec![], provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+            patches: vec![],
+            provenance: vec![],
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
             packages,
         }
     }
@@ -1314,13 +1321,13 @@ mod tests {
                 mock_pkg("lib", 1, 0, 0, vec![], vec![]),
                 mock_pkg("unused", 1, 0, 0, vec![], vec![]),
             ],
-        };,
             advisories: vec![],
             licenses: vec![],
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
             compat: None,
+        };
         let app_cid = fnv::calculate("app@1.0.0");
         let sub = extract_subgraph(&lockfile, &[app_cid]).unwrap();
         let prov_names: Vec<&str> = sub.provenance.iter().map(|p| p.package_name.as_str()).collect();
@@ -1512,5 +1519,4 @@ mod tests {
         ]);
         assert_eq!(dep_count(&lockfile, "nonexistent", DepType::Runtime), 0);
     }
-
 }

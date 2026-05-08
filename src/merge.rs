@@ -91,13 +91,13 @@ pub fn merge_lockfiles(
             artifacts: merged_artifacts,
             patches: merged_patches,
             provenance: merged_provenance,
-        },
             advisories: vec![],
             licenses: vec![],
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
             compat: None,
+        },
         conflicts,
     })
 }
@@ -363,12 +363,12 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
         }
     }
 
@@ -536,13 +536,7 @@ mod tests {
         let ours = Lockfile {
             packages: vec![],
             ..base.clone()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let theirs = base.clone();
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Fail).unwrap();
         assert!(result.conflicts.is_empty());
@@ -555,23 +549,11 @@ mod tests {
         let ours = Lockfile {
             packages: vec![],
             ..base.clone()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let theirs = Lockfile {
             packages: vec![],
             ..base.clone()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Fail).unwrap();
         assert!(result.conflicts.is_empty());
         assert!(result.lockfile.packages.is_empty());
@@ -583,13 +565,7 @@ mod tests {
         let ours = Lockfile {
             packages: vec![],
             ..base.clone()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let mut theirs = base.clone();
         theirs.packages[0].major = 2;
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Ours).unwrap();
@@ -603,13 +579,7 @@ mod tests {
         let ours = Lockfile {
             packages: vec![],
             ..base.clone()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let mut theirs = base.clone();
         theirs.packages[0].major = 2;
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Theirs).unwrap();
@@ -632,13 +602,7 @@ mod tests {
                 depth: 0,
             }],
             ..base.clone()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let theirs = base.clone();
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Ours).unwrap();
         assert!(result.lockfile.provenance.is_empty());

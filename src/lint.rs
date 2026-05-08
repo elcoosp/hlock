@@ -236,13 +236,13 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
-        },
             advisories: vec![],
             licenses: vec![],
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
             compat: None,
+        }
     }
 
     struct AlwaysError;
@@ -317,13 +317,13 @@ mod tests {
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
-        },
             advisories: vec![],
             licenses: vec![],
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
             compat: None,
+        }
     }
 
     #[test]
@@ -358,13 +358,7 @@ mod tests {
                 ..Package::default()
             }],
             ..empty_lockfile()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let rule = RequireIntegrity;
         assert!(rule.check(&lf).is_empty());
     }
@@ -381,13 +375,7 @@ mod tests {
                 ..Package::default()
             }],
             ..empty_lockfile()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let rule = RequireIntegrity;
         let findings = rule.check(&lf);
         assert_eq!(findings.len(), 1);
@@ -406,13 +394,7 @@ mod tests {
                 ..Package::default()
             }],
             ..empty_lockfile()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let rule = RequireIntegrity;
         assert!(rule.check(&lf).is_empty());
     }
@@ -432,13 +414,7 @@ mod tests {
                 ..Package::default()
             }],
             ..empty_lockfile()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let rule = NoSha1;
         assert!(rule.check(&lf).is_empty());
     }
@@ -458,13 +434,7 @@ mod tests {
                 ..Package::default()
             }],
             ..empty_lockfile()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let rule = NoSha1;
         let findings = rule.check(&lf);
         assert_eq!(findings.len(), 1);
@@ -483,13 +453,7 @@ mod tests {
                 depth: 3,
             }],
             ..empty_lockfile()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let rule = MaxDepth { max: 5 };
         assert!(rule.check(&lf).is_empty());
     }
@@ -506,13 +470,7 @@ mod tests {
                 depth: 10,
             }],
             ..empty_lockfile()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let rule = MaxDepth { max: 5 };
         let findings = rule.check(&lf);
         assert_eq!(findings.len(), 1);
@@ -534,13 +492,7 @@ mod tests {
                 ..Package::default()
             }],
             ..empty_lockfile()
-        };,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
+        };
         let rule = RequireAttestation;
         let findings = rule.check(&lf);
         assert_eq!(findings.len(), 1);
