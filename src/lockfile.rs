@@ -1787,6 +1787,12 @@ mod tests {
                     depth: 0,
                 },
             ],
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
             packages: vec![Package {
                 name: "app".to_string(),
                 logical_name: None,
