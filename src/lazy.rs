@@ -490,4 +490,28 @@ mod tests {
         };
         assert_eq!(header.sources.len(), 1);
     }
+
+    #[test]
+    fn test_lazy_scan_matches_deserialize_header() {
+        let content = simple_lockfile_content();
+        let lazy = LazyLockfile::scan(&content).unwrap();
+        let full = crate::lockfile::deserialize(&content).unwrap();
+
+        assert_eq!(lazy.header().sources.len(), full.sources.len());
+        for (i, (ls, fs)) in lazy.header().sources.iter().zip(full.sources.iter()).enumerate() {
+            assert_eq!(ls, fs, "source mismatch at index {}", i);
+        }
+        assert_eq!(lazy.header().mirrors.len(), full.mirrors.len());
+        assert_eq!(lazy.header().policies.len(), full.policies.len());
+        assert_eq!(lazy.header().trust_roots.len(), full.trust_roots.len());
+        assert_eq!(lazy.header().overrides.len(), full.overrides.len());
+        assert_eq!(lazy.header().features.len(), full.features.len());
+        assert_eq!(lazy.header().metadata.len(), full.metadata.len());
+        assert_eq!(lazy.header().workspace_root, full.workspace_root);
+        assert_eq!(lazy.header().workspace_pkgs.len(), full.workspace_pkgs.len());
+        assert_eq!(lazy.header().hoist_boundaries.len(), full.hoist_boundaries.len());
+        assert_eq!(lazy.header().artifacts.len(), full.artifacts.len());
+        assert_eq!(lazy.header().patches.len(), full.patches.len());
+        assert_eq!(lazy.header().root_rotations.len(), full.root_rotations.len());
+    }
 }

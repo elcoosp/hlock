@@ -79,3 +79,16 @@ fn test_advisory_audit_report() {
     assert!(report.has_critical_or_high());
     assert_eq!(report.total_count(), 3);
 }
+
+#[test]
+fn test_invalid_vex_status() {
+    let content = "@source 0 https://registry.npmjs.org/\n\n@vex lodash CVE-2024-12345 invalid_status reason impact\n";
+    let result = hlock::lockfile::deserialize(content);
+    assert!(result.is_err(), "expected error for invalid VEX status");
+    match result.unwrap_err() {
+        hlock::Error::InvalidVexStatus { status, .. } => {
+            assert_eq!(status, "invalid_status");
+        }
+        other => panic!("expected InvalidVexStatus, got {:?}", other),
+    }
+}

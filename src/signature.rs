@@ -433,4 +433,14 @@ mod tests {
         assert_eq!(directive.algorithm, SignatureAlgorithm::MlDsa65);
         assert_eq!(directive.key_id, "pq@co.com");
     }
+
+    #[test]
+    fn test_ed448_algo_rejected() {
+        let sig_bytes = vec![0u8; 64];
+        let sig_b64 = base64url::encode(&sig_bytes);
+        let line = format!("@signature test@key 01 0 {}", sig_b64);
+        let result = parse_signature_directive(&line);
+        assert!(matches!(result, Err(SignatureError::UnsupportedSignatureAlgorithm { algo_id: 1 })),
+            "expected UnsupportedSignatureAlgorithm for algo_id 01, got {:?}", result);
+    }
 }

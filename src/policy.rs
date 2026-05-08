@@ -770,4 +770,37 @@ mod tests {
         assert_eq!(opps[0].package_name, "lodash");
         assert_eq!(opps[0].versions.len(), 2);
     }
+
+    #[test]
+    fn test_root_rotation_rejects_non_root() {
+        let lf = Lockfile {
+            trust_roots: vec![TrustRoot {
+                key_id: "targets@key".to_string(),
+                algorithm: SignatureAlgorithm::Ed25519,
+                public_key: vec![0u8; 32],
+                expires_epoch: 0,
+                role: TrustRole::Targets,
+            }],
+            root_rotations: vec![crate::lockfile::TrustRootRotation {
+                old_key_id: "targets@key".to_string(),
+                new_key_id: "new@key".to_string(),
+                threshold: 1,
+                new_algorithm: SignatureAlgorithm::Ed25519,
+                new_public_key: vec![0u8; 32],
+                new_expires_epoch: 0,
+                new_role: TrustRole::Root,
+                rotation_signature_key_id: "targets@key".to_string(),
+                rotation_signature: vec![],
+            }],
+            ..empty_lockfile()
+        };
+        let result = lf.validate_root_rotation(0);
+        assert!(result.is_err(), "expected rotation from non-root key to be rejected");
+        match result.unwrap_err() {
+            crate::error::Error::TrustRootRotationInvalid { reason } => {
+                assert!(reason.contains("targets@key"), "reason should mention the key: {}", reason);
+            }
+            other => panic!("expected TrustRootRotationInvalid, got {:?}", other),
+        }
+    }
 }

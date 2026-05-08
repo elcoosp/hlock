@@ -436,4 +436,18 @@ mod tests {
         assert!(dl.contains("lodash"));
         assert!(dl.ends_with(".tgz"));
     }
+
+    #[test]
+    fn test_sbom_uses_cargo_version() {
+        let lf = sample_lockfile();
+        let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
+        assert!(json_str.contains(env!("CARGO_PKG_VERSION")),
+            "SPDX SBOM should contain CARGO_PKG_VERSION");
+        assert!(!json_str.contains("0.14.0"),
+            "SPDX SBOM should not contain hardcoded 0.14.0");
+
+        let json_str2 = generate_sbom(&lf, SbomFormat::CycloneDxJson, "test-ns").unwrap();
+        assert!(json_str2.contains(env!("CARGO_PKG_VERSION")),
+            "CycloneDX SBOM should contain CARGO_PKG_VERSION");
+    }
 }
