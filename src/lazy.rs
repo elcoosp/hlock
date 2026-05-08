@@ -19,6 +19,10 @@ pub struct LockfileHeader {
     pub hoist_boundaries: Vec<HoistBoundary>,
     pub artifacts: Vec<ArtifactDirective>,
     pub patches: Vec<PatchDirective>,
+    pub policies: Vec<crate::policy::Policy>,
+    pub trust_roots: Vec<crate::policy::TrustRoot>,
+    pub mirrors: Vec<crate::lockfile::Mirror>,
+    pub root_rotations: Vec<crate::lockfile::TrustRootRotation>,
 }
 
 #[derive(Debug, Clone)]
@@ -194,9 +198,11 @@ impl LazyLockfile {
             provenance: self.provenance,
             advisories: vec![],
             licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
+            policies: self.header.policies,
+            trust_roots: self.header.trust_roots,
+            mirrors: self.header.mirrors,
+            root_rotations: self.header.root_rotations,
+            vex_entries: vec![],
             compat: None,
         })
     }
@@ -309,94 +315,28 @@ fn payload_to_package(
 }
 
 fn scan_header(content: &str) -> Result<(LockfileHeader, usize), Error> {
-    let mut sources = Vec::new();
-    let mut overrides = Vec::new();
-    let mut features = Vec::new();
-    let mut metadata = Vec::new();
-    let mut workspace_root = None;
-    let mut workspace_pkgs = Vec::new();
-    let mut hoist_boundaries = Vec::new();
-    let artifacts = Vec::new();
-    let patches = Vec::new();
+    let (lockfile, remaining) = crate::lockfile::header::parse_header(content)?;
 
-    let mut offset = 0;
-    for (line_num, line) in content.lines().enumerate() {
-        if line.is_empty() {
-            let pkg_start = offset + 1;
-            return Ok((
-                LockfileHeader {
-                    sources, overrides, features, metadata,
-                    workspace_root, workspace_pkgs, hoist_boundaries,
-                    artifacts, patches,
-                },
-                pkg_start,
-            ));
-        }
+    let header_end = content.len() - remaining.len();
+    let pkg_start = header_end;
 
-        if let Some(rest) = line.strip_prefix("@source ") {
-            let mut parts = rest.splitn(2, ' ');
-            let idx_str = parts.next().ok_or_else(|| Error::InvalidHeader { line_number: line_num, reason: "Missing source index".to_string() })?;
-            let idx: usize = idx_str.parse().map_err(|_| Error::InvalidHeader { line_number: line_num, reason: "Invalid source index".to_string() })?;
-            let val = parts.next().ok_or_else(|| Error::InvalidHeader { line_number: line_num, reason: "Missing source value".to_string() })?;
-            let source = classify_source(val);
-            if idx != sources.len() {
-                return Err(Error::InvalidHeader { line_number: line_num, reason: format!("Source index {} is out of order", idx) });
-            }
-            sources.push(source);
-        } else if let Some(rest) = line.strip_prefix("@override ") {
-            let mut parts = rest.split(" -> ");
-            let left = parts.next().unwrap_or("");
-            let to_ver = parts.next().ok_or_else(|| Error::InvalidHeader { line_number: line_num, reason: "Missing '->' in override".to_string() })?;
-            let mut left_parts = left.splitn(2, ' ');
-            let name = left_parts.next().unwrap_or("").to_string();
-            let from_ver = left_parts.next().unwrap_or("").to_string();
-            overrides.push(Override { name, from_version: from_ver, ty: DepType::Runtime, to_version: to_ver.to_string() });
-        } else if let Some(rest) = line.strip_prefix("@feature ") {
-            let mut parts = rest.splitn(2, ' ');
-            let name = parts.next().unwrap_or("").to_string();
-            let flags_str = parts.next().unwrap_or("").to_string();
-            let flags = if flags_str.is_empty() { vec![] } else { flags_str.split(',').map(|s| s.trim().to_string()).collect() };
-            features.push((name, flags));
-        } else if let Some(rest) = line.strip_prefix("@workspace-root ") {
-            workspace_root = Some(rest.trim().to_string());
-        } else if let Some(rest) = line.strip_prefix("@workspace-pkg ") {
-            let (name, manifest_path) = rest.split_once(' ').unwrap_or((rest, ""));
-            workspace_pkgs.push(WorkspacePkg { name: name.to_string(), manifest_path: manifest_path.to_string() });
-        } else if let Some(rest) = line.strip_prefix("@hoist-boundary ") {
-            let mut parts = rest.splitn(2, "->");
-            let cosine = parts.next().unwrap_or("").trim().to_string();
-            let deps_str = parts.next().unwrap_or("").trim();
-            let deps_str = deps_str.strip_prefix("[").unwrap_or(deps_str);
-            let deps_str = deps_str.strip_suffix("]").unwrap_or(deps_str);
-            let allowed_deps = if deps_str.is_empty() { vec![] } else { deps_str.split(',').map(|s| s.trim().to_string()).collect() };
-            hoist_boundaries.push(HoistBoundary { cosine, allowed_deps });
-        } else if let Some(rest) = line.strip_prefix("@metadata ") {
-            let (key, value) = rest.split_once(' ').unwrap_or((rest, ""));
-            metadata.push((key.to_string(), value.to_string()));
-        } else {
-            return Err(Error::InvalidHeader { line_number: line_num, reason: format!("Unknown directive: {}", line) });
-        }
+    let header = LockfileHeader {
+        sources: lockfile.sources,
+        overrides: lockfile.overrides,
+        features: lockfile.features,
+        metadata: lockfile.metadata,
+        workspace_root: lockfile.workspace_root,
+        workspace_pkgs: lockfile.workspace_pkgs,
+        hoist_boundaries: lockfile.hoist_boundaries,
+        artifacts: lockfile.artifacts,
+        patches: lockfile.patches,
+        policies: lockfile.policies,
+        trust_roots: lockfile.trust_roots,
+        mirrors: lockfile.mirrors,
+        root_rotations: lockfile.root_rotations,
+    };
 
-        offset += line.len() + 1;
-    }
-
-    Err(Error::InvalidHeader { line_number: 0, reason: "Missing empty line separator after header".to_string() })
-}
-
-fn classify_source(val: &str) -> Source {
-    if val == "workspace" {
-        Source::Workspace
-    } else if val.starts_with("file://") || val.starts_with('/') {
-        Source::Local(val.to_string())
-    } else if val.starts_with("git://") || (val.starts_with("https://") && val.contains(".git")) {
-        Source::Git(val.to_string())
-    } else if val.starts_with("cas+http://") || val.starts_with("cas+https://") {
-        Source::CasHttp(val.strip_prefix("cas+").unwrap_or(val).to_string())
-    } else if val.starts_with("ipfs://") {
-        Source::Ipfs(val.to_string())
-    } else {
-        Source::Registry(val.to_string())
-    }
+    Ok((header, pkg_start))
 }
 
 fn parse_provenance_line(line: &str) -> Result<ResolutionProvenance, Error> {
@@ -471,6 +411,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
         };
         crate::lockfile::serialize(&mut lf).unwrap()
@@ -541,6 +483,10 @@ mod tests {
             hoist_boundaries: vec![],
             artifacts: vec![],
             patches: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            root_rotations: vec![],
         };
         assert_eq!(header.sources.len(), 1);
     }

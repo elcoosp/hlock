@@ -155,6 +155,8 @@ pub fn extract_subgraph(lockfile: &Lockfile, root_content_ids: &[u64]) -> Result
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
     })
 }
@@ -294,6 +296,8 @@ pub fn extract_subgraph_platform(
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
     })
 }
@@ -738,6 +742,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
             packages: vec![
                 mock_pkg(
@@ -801,6 +807,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("pure-lib", DepType::Runtime)], vec![]),
@@ -832,6 +840,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("napi", DepType::Runtime)], vec![]),
@@ -873,6 +883,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("multi", DepType::Runtime)], vec![]),
@@ -928,6 +940,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
             packages: vec![
                 mock_pkg("app", 1, 0, 0, vec![("mid", DepType::Runtime)], vec![]),
@@ -974,6 +988,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
             packages: vec![mock_pkg(
                 "app",
@@ -1010,6 +1026,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
             packages,
         }
@@ -1326,6 +1344,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
         };
         let app_cid = fnv::calculate("app@1.0.0");

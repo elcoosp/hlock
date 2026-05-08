@@ -200,6 +200,8 @@ pub struct Lockfile {
     pub policies: Vec<Policy>,
     pub trust_roots: Vec<TrustRoot>,
     pub mirrors: Vec<Mirror>,
+    pub root_rotations: Vec<TrustRootRotation>,
+    pub vex_entries: Vec<VexEntry>,
     pub compat: Option<String>,
 }
 
@@ -207,4 +209,55 @@ pub struct Lockfile {
 pub struct Mirror {
     pub scope: String,
     pub url: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VexStatus {
+    NotAffected,
+    Affected,
+    Fixed,
+    UnderInvestigation,
+}
+
+impl VexStatus {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "not_affected" => Some(VexStatus::NotAffected),
+            "affected" => Some(VexStatus::Affected),
+            "fixed" => Some(VexStatus::Fixed),
+            "under_investigation" => Some(VexStatus::UnderInvestigation),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            VexStatus::NotAffected => "not_affected",
+            VexStatus::Affected => "affected",
+            VexStatus::Fixed => "fixed",
+            VexStatus::UnderInvestigation => "under_investigation",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VexEntry {
+    pub package: String,
+    pub advisory_id: String,
+    pub status: VexStatus,
+    pub justification: String,
+    pub impact_statement: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrustRootRotation {
+    pub old_key_id: String,
+    pub new_key_id: String,
+    pub threshold: u8,
+    pub new_algorithm: crate::signature::SignatureAlgorithm,
+    pub new_public_key: Vec<u8>,
+    pub new_expires_epoch: u64,
+    pub new_role: crate::policy::TrustRole,
+    pub rotation_signature_key_id: String,
+    pub rotation_signature: Vec<u8>,
 }

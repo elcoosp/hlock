@@ -75,6 +75,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
             provenance: vec![
                 ResolutionProvenance {

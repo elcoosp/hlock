@@ -96,6 +96,8 @@ pub fn merge_lockfiles(
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
         },
         conflicts,
@@ -368,6 +370,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
         }
     }

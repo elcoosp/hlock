@@ -115,6 +115,8 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
                     policies,
                     trust_roots,
                     mirrors,
+                    root_rotations: vec![],
+                    vex_entries: vec![],
                     compat: None,
                 },
                 remaining,

@@ -49,4 +49,5 @@ pub use policy::{
 };
 pub use sbom::{SbomFormat, generate_sbom};
 pub use lazy::{LazyLockfile, LockfileHeader};
+pub use lockfile::types::{TrustRootRotation, VexEntry, VexStatus};
 pub use lint::{LintFinding, LintReport, LintRule, LintSeverity, lint_default};

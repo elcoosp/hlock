@@ -21,6 +21,8 @@ fn test_e2e_write_and_read_v5() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![
@@ -94,6 +96,8 @@ fn test_e2e_workspace_roundtrip() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![Package {
@@ -134,6 +138,8 @@ fn test_string_api_crc_corruption() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![Package {
@@ -195,6 +201,8 @@ fn test_e2e_features_roundtrip() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![
@@ -258,6 +266,8 @@ fn test_e2e_optional_target_roundtrip() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![
@@ -319,6 +329,8 @@ fn test_e2e_diff_after_adding_package() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![Package {
@@ -352,6 +364,8 @@ fn test_e2e_diff_after_adding_package() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![
@@ -412,6 +426,8 @@ fn test_e2e_extract_and_serialize_is_valid() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![
@@ -497,6 +513,8 @@ fn test_e2e_v7_provenance_roundtrip() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![Package {
@@ -544,6 +562,8 @@ fn test_e2e_graph_manipulation_ignores_provenance() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![Package {
@@ -592,6 +612,8 @@ fn test_e2e_v8_peer_resolution_topology() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![
@@ -650,6 +672,8 @@ fn test_e2e_graph_extract_preserves_peers() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![Package {
@@ -691,6 +715,8 @@ fn test_e2e_v8_alias_and_cas_roundtrip() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![Package {
@@ -739,6 +765,8 @@ fn test_e2e_ipfs_source_roundtrip() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![Package {
@@ -782,6 +810,8 @@ fn test_e2e_v9_peer_requirements_roundtrip() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![
@@ -853,6 +883,8 @@ fn test_e2e_v9_platform_tags_roundtrip() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![
@@ -930,6 +962,8 @@ fn test_e2e_sign_lockfile_and_verify() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![Package {
@@ -987,6 +1021,8 @@ fn test_e2e_signed_lockfile_deserializes_correctly() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![
@@ -1043,6 +1079,8 @@ fn test_e2e_platform_extraction_with_real_lockfile() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         artifacts: vec![],
         packages: vec![
@@ -1221,6 +1259,8 @@ fn test_e2e_merge_no_conflicts() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
     };
     let serialized_base = serialize(&mut base).unwrap();
@@ -1296,6 +1336,8 @@ fn test_e2e_merge_roundtrip() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
     };
     let serialized_base = serialize(&mut base).unwrap();
@@ -1357,6 +1399,8 @@ fn test_e2e_lazy_parse() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
     };
     let serialized = serialize(&mut lockfile).unwrap();
@@ -1398,6 +1442,8 @@ fn test_e2e_lazy_validate_digest() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
     };
     let serialized = serialize(&mut lockfile).unwrap();
@@ -1453,6 +1499,8 @@ fn test_e2e_sbom_spdx() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
     };
     let json_str =
@@ -1490,6 +1538,8 @@ fn test_e2e_sbom_cyclonedx() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
     };
     let json_str =
@@ -1526,6 +1576,8 @@ fn test_e2e_lint_default() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
     };
     let report = hlock::lint_default(&lockfile);
@@ -1566,6 +1618,8 @@ fn test_e2e_provenance_roundtrip() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
     };
     let serialized = serialize(&mut lockfile).unwrap();
@@ -1602,6 +1656,8 @@ fn test_v013_reexports_exist() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         packages: vec![],
     };
@@ -1631,6 +1687,8 @@ fn test_e2e_diff_serialization_text() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         packages: vec![Package {
             name: "core".to_string(),
@@ -1661,6 +1719,8 @@ fn test_e2e_diff_serialization_text() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         packages: vec![
             Package {
@@ -1709,6 +1769,8 @@ fn test_e2e_diff_serialization_json() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         packages: vec![Package {
             name: "core".to_string(),
@@ -1739,6 +1801,8 @@ fn test_e2e_diff_serialization_json() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         packages: vec![
             Package {
@@ -1787,6 +1851,8 @@ fn test_e2e_digest_roundtrip() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         packages: vec![Package {
             name: "pkg".to_string(),
@@ -1839,6 +1905,8 @@ fn test_e2e_ml_dsa65_signed_lockfile() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         packages: vec![Package {
             name: "app".to_string(),
@@ -1893,6 +1961,8 @@ fn test_e2e_typed_graph_queries() {
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
+        root_rotations: vec![],
+        vex_entries: vec![],
         compat: None,
         packages: vec![
             Package {

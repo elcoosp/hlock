@@ -272,6 +272,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
         }
     }
@@ -376,6 +378,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
         };
         let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
@@ -409,6 +413,8 @@ mod tests {
             policies: vec![],
             trust_roots: vec![],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
         };
         let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();

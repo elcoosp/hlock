@@ -253,6 +253,8 @@ mod tests {
                 role: crate::policy::TrustRole::Root,
             }],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
         }
     }
@@ -340,6 +342,8 @@ mod tests {
                 role: crate::policy::TrustRole::Root,
             }],
             mirrors: vec![],
+            root_rotations: vec![],
+            vex_entries: vec![],
             compat: None,
         }
     }
