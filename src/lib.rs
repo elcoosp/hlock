@@ -7,6 +7,7 @@ pub mod lockfile;
 pub mod payload;
 pub mod merge;
 pub mod provenance;
+pub mod sbom;
 pub mod signature;
 pub mod varint;
 
@@ -34,4 +35,5 @@ pub use payload::{
 };
 pub use signature::{sign_lockfile, verify_signature, SignatureAlgorithm, SignatureDirective};
 pub use merge::{MergeConflict, MergeResult, ConflictStrategy, merge_lockfiles};
+pub use sbom::{SbomFormat, generate_sbom};
 pub use lazy::{LazyLockfile, LockfileHeader};
