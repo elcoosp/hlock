@@ -211,6 +211,12 @@ pub fn lint_default(lockfile: &Lockfile) -> LintReport {
         Box::new(NoPeerAsRuntime),
         Box::new(MaxDepth { max: 5 }),
         Box::new(RequireAttestation),
+        Box::new(NoKnownVulnerabilities),
+        Box::new(RequireLicense),
+        Box::new(DenyCopyleft),
+        Box::new(RequireTrustRoot),
+        Box::new(NoExpiredKeys),
+        Box::new(DenyPostinstall),
     ];
     lint(lockfile, &rules)
 }
@@ -237,9 +243,15 @@ mod tests {
             patches: vec![],
             provenance: vec![],
             advisories: vec![],
-            licenses: vec![],
+            licenses: vec![crate::policy::LicenseEntry { package: "pkg".to_string(), expression: "MIT".to_string() }],
             policies: vec![],
-            trust_roots: vec![],
+            trust_roots: vec![crate::policy::TrustRoot {
+                key_id: "test@key".to_string(),
+                algorithm: crate::signature::SignatureAlgorithm::Ed25519,
+                public_key: vec![0u8; 32],
+                expires_epoch: 0,
+                role: crate::policy::TrustRole::Root,
+            }],
             mirrors: vec![],
             compat: None,
         }
@@ -318,9 +330,15 @@ mod tests {
             patches: vec![],
             provenance: vec![],
             advisories: vec![],
-            licenses: vec![],
+            licenses: vec![crate::policy::LicenseEntry { package: "pkg".to_string(), expression: "MIT".to_string() }],
             policies: vec![],
-            trust_roots: vec![],
+            trust_roots: vec![crate::policy::TrustRoot {
+                key_id: "test@key".to_string(),
+                algorithm: crate::signature::SignatureAlgorithm::Ed25519,
+                public_key: vec![0u8; 32],
+                expires_epoch: 0,
+                role: crate::policy::TrustRole::Root,
+            }],
             mirrors: vec![],
             compat: None,
         }
@@ -504,5 +522,139 @@ mod tests {
         let lf = empty_lockfile();
         let report = lint_default(&lf);
         assert!(!report.has_errors());
+    }
+}
+// New v0.15 lint rules - add to existing file
+
+pub struct NoKnownVulnerabilities;
+
+impl LintRule for NoKnownVulnerabilities {
+    fn name(&self) -> &str { "no-known-vulnerabilities" }
+    fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
+        let mut findings = Vec::new();
+        let report = lockfile.audit();
+
+        for adv in report.critical.iter().chain(report.high.iter()) {
+            findings.push(LintFinding {
+                rule: "no-known-vulnerabilities".to_string(),
+                severity: LintSeverity::Error,
+                package: Some(adv.package.clone()),
+                message: format!("Package '{}' has {} severity vulnerability: {}",
+                    adv.package,
+                    adv.severity.as_str(),
+                    adv.advisory_id
+                ),
+            });
+        }
+        findings
+    }
+}
+
+pub struct RequireLicense;
+
+impl LintRule for RequireLicense {
+    fn name(&self) -> &str { "require-license" }
+    fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
+        lockfile.unlicensed_packages().iter().map(|pkg| {
+            LintFinding {
+                rule: "require-license".to_string(),
+                severity: LintSeverity::Error,
+                package: Some(pkg.name.clone()),
+                message: format!("Package '{}' has no license declaration", pkg.name),
+            }
+        }).collect()
+    }
+}
+
+pub struct DenyCopyleft;
+
+impl LintRule for DenyCopyleft {
+    fn name(&self) -> &str { "deny-copyleft" }
+    fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
+        let mut findings = Vec::new();
+        let copyleft_licenses = vec!["GPL", "AGPL", "LGPL", "CC-BY-SA"];
+
+        for pkg in &lockfile.packages {
+            if let Some(license) = lockfile.license_for(&pkg.name) {
+                for copyleft in &copyleft_licenses {
+                    if license.contains(copyleft) {
+                        findings.push(LintFinding {
+                            rule: "deny-copyleft".to_string(),
+                            severity: LintSeverity::Warning,
+                            package: Some(pkg.name.clone()),
+                            message: format!("Package '{}' uses copyleft license: {}", pkg.name, license),
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+        findings
+    }
+}
+
+pub struct RequireTrustRoot;
+
+impl LintRule for RequireTrustRoot {
+    fn name(&self) -> &str { "require-trust-root" }
+    fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
+        let roots = lockfile.trust_roots_for_role(crate::policy::TrustRole::Root);
+        if roots.is_empty() {
+            vec![LintFinding {
+                rule: "require-trust-root".to_string(),
+                severity: LintSeverity::Error,
+                package: None,
+                message: "No trust root keys found. At least one @trust-root with role=root is required".to_string(),
+            }]
+        } else {
+            vec![]
+        }
+    }
+}
+
+pub struct NoExpiredKeys;
+
+impl LintRule for NoExpiredKeys {
+    fn name(&self) -> &str { "no-expired-keys" }
+    fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
+        let mut findings = Vec::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        for root in &lockfile.trust_roots {
+            if root.expires_epoch != 0 && root.expires_epoch < now {
+                findings.push(LintFinding {
+                    rule: "no-expired-keys".to_string(),
+                    severity: LintSeverity::Error,
+                    package: None,
+                    message: format!("Trust root key '{}' expired at epoch {}", root.key_id, root.expires_epoch),
+                });
+            }
+        }
+        findings
+    }
+}
+
+pub struct DenyPostinstall;
+
+impl LintRule for DenyPostinstall {
+    fn name(&self) -> &str { "deny-postinstall" }
+    fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
+        let mut findings = Vec::new();
+        for pkg in &lockfile.packages {
+            for hook in &pkg.hook_hashes {
+                if hook.hook_type == "postinstall" {
+                    findings.push(LintFinding {
+                        rule: "deny-postinstall".to_string(),
+                        severity: LintSeverity::Warning,
+                        package: Some(pkg.name.clone()),
+                        message: format!("Package '{}' declares a postinstall hook", pkg.name),
+                    });
+                }
+            }
+        }
+        findings
     }
 }

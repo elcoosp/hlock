@@ -104,6 +104,10 @@ fn generate_spdx(lockfile: &Lockfile, namespace: &str) -> Result<String, Error> 
 
         if !hashes_obj.is_empty() {
             pkg_obj.as_object_mut().unwrap().insert("hashes".to_string(), serde_json::Value::Object(hashes_obj));
+
+        if let Some(license) = lockfile.license_for(&pkg.name) {
+            pkg_obj["licenseConcluded"] = serde_json::Value::String(license.to_string());
+        }
         }
 
         if pkg.hashes.is_empty() {
@@ -180,6 +184,10 @@ fn generate_cyclonedx(lockfile: &Lockfile, _namespace: &str) -> Result<String, E
 
         if !hashes_arr.is_empty() {
             comp.as_object_mut().unwrap().insert("hashes".to_string(), serde_json::Value::Array(hashes_arr));
+
+        if let Some(license) = lockfile.license_for(&pkg.name) {
+            comp["licenses"] = serde_json::json!([{ "expression": license }]);
+        }
         }
 
         components.push(comp);

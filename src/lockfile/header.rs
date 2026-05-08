@@ -35,6 +35,18 @@ pub fn format_header(lockfile: &Lockfile) -> Result<String, Error> {
     for mirror in &lockfile.mirrors {
         out.push_str(&format!("@mirror {} {}\n", mirror.scope, mirror.url));
     }
+
+    for policy in &lockfile.policies {
+        let policy_type_str = match policy.policy_type {
+            crate::policy::PolicyType::AllowHook => "allow-hook",
+            crate::policy::PolicyType::DenyHook => "deny-hook",
+            crate::policy::PolicyType::AllowScript => "allow-script",
+            crate::policy::PolicyType::DenyScript => "deny-script",
+            crate::policy::PolicyType::BuildEnv => "build-env",
+            crate::policy::PolicyType::Engine => "engine",
+        };
+        out.push_str(&format!("@policy {} {} {}\n", policy_type_str, policy.package_pattern, policy.value));
+    }
     for tr in &lockfile.trust_roots {
         let algo_str = match tr.algorithm {
             crate::signature::SignatureAlgorithm::Ed25519 => "00",
@@ -82,6 +94,7 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
     let mut workspace_root = None;
     let mut workspace_pkgs = Vec::new();
     let mut mirrors = Vec::new();
+    let mut policies: Vec<crate::policy::Policy> = Vec::new();
     let mut trust_roots: Vec<crate::policy::TrustRoot> = Vec::new();
     let mut hoist_boundaries = Vec::new();
     let lines = content.lines().enumerate();
@@ -100,7 +113,7 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
                     provenance: vec![],
                     advisories: vec![],
                     licenses: vec![],
-                    policies: vec![],
+                    policies,
                     trust_roots,
                     mirrors,
                     compat: None,
@@ -212,6 +225,30 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
             let deps_str = deps_str.strip_suffix("]").unwrap_or(deps_str);
             let allowed_deps = if deps_str.is_empty() { vec![] } else { deps_str.split(',').map(|s| s.trim().to_string()).collect() };
             hoist_boundaries.push(HoistBoundary { cosine, allowed_deps });
+        } else if let Some(rest) = line.strip_prefix("@policy ") {
+            let mut parts = rest.splitn(3, ' ');
+            let policy_type_str = parts.next().unwrap_or("").to_string();
+            let package_pattern = parts.next().unwrap_or("").to_string();
+            let value = parts.next().unwrap_or("").to_string();
+
+            let policy_type = match policy_type_str.as_str() {
+                "allow-hook" => crate::policy::PolicyType::AllowHook,
+                "deny-hook" => crate::policy::PolicyType::DenyHook,
+                "allow-script" => crate::policy::PolicyType::AllowScript,
+                "deny-script" => crate::policy::PolicyType::DenyScript,
+                "build-env" => crate::policy::PolicyType::BuildEnv,
+                "engine" => crate::policy::PolicyType::Engine,
+                _ => return Err(Error::InvalidHeader {
+                    line_number: line_num,
+                    reason: format!("Unknown policy type: {}", policy_type_str),
+                }),
+            };
+
+            policies.push(crate::policy::Policy {
+                policy_type,
+                package_pattern,
+                value,
+            });
         } else if let Some(rest) = line.strip_prefix("@metadata ") {
             let (key, value) = rest.split_once(' ').unwrap_or((rest, ""));
             metadata.push((key.to_string(), value.to_string()));
