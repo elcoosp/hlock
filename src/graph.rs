@@ -132,6 +132,12 @@ pub fn extract_subgraph(lockfile: &Lockfile, root_content_ids: &[u64]) -> Result
         }
     }
 
+    let subgraph_names: HashSet<&str> = extracted_packages.iter().map(|p| p.name.as_str()).collect();
+    let filtered_provenance: Vec<crate::provenance::ResolutionProvenance> = lockfile.provenance.iter()
+        .filter(|p| subgraph_names.contains(p.package_name.as_str()))
+        .cloned()
+        .collect();
+
     Ok(Lockfile {
         sources: new_sources,
         overrides: lockfile.overrides.clone(),
@@ -143,7 +149,7 @@ pub fn extract_subgraph(lockfile: &Lockfile, root_content_ids: &[u64]) -> Result
         packages: extracted_packages,
         artifacts: vec![],
         patches: lockfile.patches.clone(),
-        provenance: lockfile.provenance.clone(),
+        provenance: filtered_provenance,
     })
 }
 
@@ -1209,6 +1215,58 @@ mod tests {
             mock_pkg("app", 1, 0, 0, vec![], vec![]),
         ]);
         assert!(!would_create_cycle(&lockfile, "app", &["nonexistent".to_string()]));
+    }
+
+    #[test]
+    fn test_extract_subgraph_preserves_provenance() {
+        let lockfile = Lockfile {
+            sources: vec![crate::lockfile::Source::Registry("r".to_string())],
+            overrides: vec![],
+            features: vec![],
+            metadata: vec![],
+            workspace_root: None,
+            workspace_pkgs: vec![],
+            hoist_boundaries: vec![],
+            artifacts: vec![],
+            patches: vec![],
+            provenance: vec![
+                crate::provenance::ResolutionProvenance {
+                    package_name: "app".to_string(),
+                    constraint: "".to_string(),
+                    constrained_by: String::new(),
+                    dep_type: DepType::Runtime,
+                    source_type: crate::provenance::ProvenanceSourceType::Registry,
+                    depth: 0,
+                },
+                crate::provenance::ResolutionProvenance {
+                    package_name: "lib".to_string(),
+                    constraint: "^1.0.0".to_string(),
+                    constrained_by: "app".to_string(),
+                    dep_type: DepType::Runtime,
+                    source_type: crate::provenance::ProvenanceSourceType::Registry,
+                    depth: 1,
+                },
+                crate::provenance::ResolutionProvenance {
+                    package_name: "unused".to_string(),
+                    constraint: "^1.0.0".to_string(),
+                    constrained_by: "other".to_string(),
+                    dep_type: DepType::Runtime,
+                    source_type: crate::provenance::ProvenanceSourceType::Registry,
+                    depth: 1,
+                },
+            ],
+            packages: vec![
+                mock_pkg("app", 1, 0, 0, vec![("lib", DepType::Runtime)], vec![]),
+                mock_pkg("lib", 1, 0, 0, vec![], vec![]),
+                mock_pkg("unused", 1, 0, 0, vec![], vec![]),
+            ],
+        };
+        let app_cid = fnv::calculate("app@1.0.0");
+        let sub = extract_subgraph(&lockfile, &[app_cid]).unwrap();
+        let prov_names: Vec<&str> = sub.provenance.iter().map(|p| p.package_name.as_str()).collect();
+        assert!(prov_names.contains(&"app"));
+        assert!(prov_names.contains(&"lib"));
+        assert!(!prov_names.contains(&"unused"));
     }
 
     #[test]
