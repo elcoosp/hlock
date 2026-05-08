@@ -1027,6 +1027,252 @@ fn test_e2e_platform_extraction_with_real_lockfile() {
 }
 
 #[test]
+fn test_v014_reexports_exist() {
+    let _: fn(&str) -> Result<hlock::LazyLockfile, hlock::Error> = hlock::LazyLockfile::scan;
+    let _ = hlock::SbomFormat::SpdxJson;
+    let _ = hlock::SbomFormat::CycloneDxJson;
+    let _ = hlock::ConflictStrategy::Ours;
+    let _ = hlock::ConflictStrategy::Theirs;
+    let _ = hlock::ConflictStrategy::Fail;
+    let _ = hlock::LintSeverity::Error;
+    let _ = hlock::LintSeverity::Warning;
+    let _ = hlock::LintSeverity::Info;
+    let _ = hlock::ProvenanceSourceType::Registry;
+}
+
+#[test]
+fn test_e2e_merge_no_conflicts() {
+    let mut base = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![Package {
+            name: "core".to_string(), logical_name: None, source_idx: 0,
+            major: 1, minor: 0, patch: 0, ..Default::default()
+        }],
+        provenance: vec![],
+    };
+    let serialized_base = serialize(&mut base).unwrap();
+    let parsed_base = deserialize(&serialized_base).unwrap();
+
+    let mut ours = parsed_base.clone();
+    ours.packages.push(Package {
+        name: "utils".to_string(), logical_name: None, source_idx: 0,
+        major: 1, minor: 0, patch: 0, ..Default::default()
+    });
+
+    let mut theirs = parsed_base.clone();
+    theirs.packages.push(Package {
+        name: "helpers".to_string(), logical_name: None, source_idx: 0,
+        major: 1, minor: 0, patch: 0, ..Default::default()
+    });
+
+    let result = hlock::merge_lockfiles(&parsed_base, &ours, &theirs, hlock::ConflictStrategy::Fail).unwrap();
+    assert!(result.conflicts.is_empty());
+    assert_eq!(result.lockfile.packages.len(), 3);
+    let names: Vec<&str> = result.lockfile.packages.iter().map(|p| p.name.as_str()).collect();
+    assert!(names.contains(&"core"));
+    assert!(names.contains(&"utils"));
+    assert!(names.contains(&"helpers"));
+}
+
+#[test]
+fn test_e2e_merge_roundtrip() {
+    let mut base = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![Package {
+            name: "core".to_string(), logical_name: None, source_idx: 0,
+            major: 1, minor: 0, patch: 0,
+            hashes: vec![IntegrityHash {
+                algo: HashAlgorithm::Sha256,
+                digest: vec![42u8; 32],
+                attestation: Attestation::None,
+            }],
+            ..Default::default()
+        }],
+        provenance: vec![],
+    };
+    let serialized_base = serialize(&mut base).unwrap();
+    let parsed_base = deserialize(&serialized_base).unwrap();
+
+    let ours = parsed_base.clone();
+    let theirs = parsed_base.clone();
+
+    let result = hlock::merge_lockfiles(&parsed_base, &ours, &theirs, hlock::ConflictStrategy::Fail).unwrap();
+    let mut merged = result.lockfile;
+    let reserialized = serialize(&mut merged).unwrap();
+    let redeserialized = deserialize(&reserialized).unwrap();
+    assert_eq!(redeserialized.packages.len(), 1);
+    assert_eq!(redeserialized.packages[0].name, "core");
+}
+
+#[test]
+fn test_e2e_lazy_parse() {
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![
+            Package {
+                name: "alpha".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0,
+                hashes: vec![IntegrityHash {
+                    algo: HashAlgorithm::Blake3,
+                    digest: vec![0u8; 32],
+                    attestation: Attestation::None,
+                }],
+                ..Default::default()
+            },
+            Package {
+                name: "beta".to_string(), logical_name: None, source_idx: 0,
+                major: 2, minor: 0, patch: 0, ..Default::default()
+            },
+        ],
+        provenance: vec![],
+    };
+    let serialized = serialize(&mut lockfile).unwrap();
+    let lazy = hlock::LazyLockfile::scan(&serialized).unwrap();
+    assert_eq!(lazy.package_count(), 2);
+    let alpha = lazy.get_package("alpha").unwrap().unwrap();
+    assert_eq!(alpha.name, "alpha");
+    assert_eq!(alpha.major, 1);
+    assert!(lazy.get_package("nonexistent").unwrap().is_none());
+
+    let full = lazy.into_full().unwrap();
+    assert_eq!(full.packages.len(), 2);
+}
+
+#[test]
+fn test_e2e_lazy_validate_digest() {
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![Package {
+            name: "pkg".to_string(), logical_name: None, source_idx: 0,
+            major: 1, minor: 0, patch: 0, ..Default::default()
+        }],
+        provenance: vec![],
+    };
+    let serialized = serialize(&mut lockfile).unwrap();
+    let lazy = hlock::LazyLockfile::scan(&serialized).unwrap();
+    assert!(lazy.validate_digest().is_ok());
+}
+
+#[test]
+fn test_e2e_sbom_spdx() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![
+            Package {
+                name: "app".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0,
+                dependencies: vec![Dependency {
+                    name: "lodash".to_string(),
+                    dep_type: DepType::Runtime,
+                    requested_features: vec![],
+                }],
+                ..Default::default()
+            },
+            Package {
+                name: "lodash".to_string(), logical_name: None, source_idx: 0,
+                major: 4, minor: 17, patch: 21,
+                hashes: vec![IntegrityHash {
+                    algo: HashAlgorithm::Sha256,
+                    digest: vec![42u8; 32],
+                    attestation: Attestation::None,
+                }],
+                ..Default::default()
+            },
+        ],
+        provenance: vec![],
+    };
+    let json_str = hlock::generate_sbom(&lockfile, hlock::SbomFormat::SpdxJson, "my-project").unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(parsed["spdxVersion"], "SPDX-2.3");
+    assert_eq!(parsed["name"], "my-project");
+    assert_eq!(parsed["packages"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn test_e2e_sbom_cyclonedx() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![
+            Package {
+                name: "app".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0, ..Default::default()
+            },
+        ],
+        provenance: vec![],
+    };
+    let json_str = hlock::generate_sbom(&lockfile, hlock::SbomFormat::CycloneDxJson, "my-project").unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(parsed["bomFormat"], "CycloneDX");
+    assert_eq!(parsed["specVersion"], "1.5");
+}
+
+#[test]
+fn test_e2e_lint_default() {
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![Package {
+            name: "pkg".to_string(), logical_name: None, source_idx: 0,
+            major: 1, minor: 0, patch: 0, ..Default::default()
+        }],
+        provenance: vec![],
+    };
+    let report = hlock::lint_default(&lockfile);
+    assert!(report.has_errors());
+}
+
+#[test]
+fn test_e2e_provenance_roundtrip() {
+    let mut lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![], features: vec![], metadata: vec![],
+        workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+        artifacts: vec![], patches: vec![],
+        packages: vec![Package {
+            name: "lodash".to_string(), logical_name: None, source_idx: 0,
+            major: 4, minor: 17, patch: 21, ..Default::default()
+        }],
+        provenance: vec![hlock::provenance::ResolutionProvenance {
+            package_name: "lodash".to_string(),
+            constraint: "^4.17.0".to_string(),
+            constrained_by: "app".to_string(),
+            dep_type: DepType::Runtime,
+            source_type: hlock::ProvenanceSourceType::Registry,
+            depth: 1,
+        }],
+    };
+    let serialized = serialize(&mut lockfile).unwrap();
+    let deserialized = deserialize(&serialized).unwrap();
+    assert_eq!(deserialized.provenance.len(), 1);
+    assert_eq!(deserialized.provenance[0].package_name, "lodash");
+    assert_eq!(deserialized.provenance[0].constraint, "^4.17.0");
+    assert_eq!(deserialized.provenance[0].depth, 1);
+    let chain = deserialized.dependency_chain("lodash");
+    assert_eq!(chain.len(), 1);
+    assert_eq!(chain[0].package_name, "lodash");
+}
+
+#[test]
 fn test_v013_reexports_exist() {
     let _ = hlock::DiffFormat::Text;
     let _ = hlock::DiffFormat::Json;

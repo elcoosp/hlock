@@ -36,6 +36,7 @@ pub use payload::{
 };
 pub use signature::{sign_lockfile, verify_signature, SignatureAlgorithm, SignatureDirective};
 pub use merge::{MergeConflict, MergeResult, ConflictStrategy, merge_lockfiles};
+pub use provenance::{ProvenanceSourceType, ResolutionProvenance};
 pub use sbom::{SbomFormat, generate_sbom};
 pub use lazy::{LazyLockfile, LockfileHeader};
 pub use lint::{LintFinding, LintReport, LintRule, LintSeverity, lint_default};

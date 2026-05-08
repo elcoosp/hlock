@@ -219,7 +219,7 @@ pub fn lint_default(lockfile: &Lockfile) -> LintReport {
 mod tests {
     use super::*;
     use crate::lockfile::{
-        Attestation, DepType, Dependency, HashAlgorithm, IntegrityHash, Package, Source,
+        Attestation, DepType, HashAlgorithm, IntegrityHash, Package, Source,
     };
     use crate::provenance::{ProvenanceSourceType, ResolutionProvenance};
 
