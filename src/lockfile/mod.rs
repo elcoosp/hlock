@@ -167,7 +167,6 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
             adv.affected_versions
         ));
     }
-    let digest = blake3::hash(out.as_bytes());
     for vex in &lockfile.vex_entries {
         out.push_str(&format!("@vex {} {} {} {} {}\n",
             vex.package, vex.advisory_id, vex.status.as_str(),
@@ -176,6 +175,7 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
     for lic in &lockfile.licenses {
         out.push_str(&format!("@license {} {}\n", lic.package, lic.expression));
     }
+    let digest = blake3::hash(out.as_bytes());
     out.push_str(&format!("@digest {}\n", crate::lockfile::digest::bytes_to_hex(digest.as_bytes())));
     Ok(out)
 }
