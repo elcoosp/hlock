@@ -442,6 +442,63 @@ impl crate::lockfile::Lockfile {
         })
     }
 
+    pub fn validate_root_rotation(&self, now_epoch: u64) -> Result<(), crate::error::Error> {
+        for rotation in &self.root_rotations {
+            let old_root = self.trust_roots.iter()
+                .find(|t| t.key_id == rotation.old_key_id && t.role == TrustRole::Root);
+            if old_root.is_none() {
+                return Err(crate::error::Error::TrustRootRotationInvalid {
+                    reason: format!("old key '{}' not found as root", rotation.old_key_id),
+                });
+            }
+            let old_root = old_root.unwrap();
+            if old_root.expires_epoch != 0 && old_root.expires_epoch < now_epoch {
+                return Err(crate::error::Error::TrustRootExpired {
+                    key_id: old_root.key_id.clone(),
+                    expires_epoch: old_root.expires_epoch,
+                });
+            }
+            if rotation.new_expires_epoch != 0 && rotation.new_expires_epoch < now_epoch {
+                return Err(crate::error::Error::TrustRootExpired {
+                    key_id: rotation.new_key_id.clone(),
+                    expires_epoch: rotation.new_expires_epoch,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub fn vex_for(&self, package_name: &str, advisory_id: &str) -> Option<&crate::lockfile::VexEntry> {
+        self.vex_entries.iter()
+            .find(|v| v.package == package_name && v.advisory_id == advisory_id)
+    }
+
+    pub fn effective_advisories(&self) -> AuditReport {
+        let report = self.audit();
+        let mut filtered = AuditReport {
+            critical: Vec::new(),
+            high: Vec::new(),
+            medium: Vec::new(),
+            low: Vec::new(),
+            info: Vec::new(),
+        };
+        for adv in report.all_advisories() {
+            let vex = self.vex_for(&adv.package, &adv.advisory_id);
+            match vex.map(|v| &v.status) {
+                Some(crate::lockfile::VexStatus::NotAffected) | Some(crate::lockfile::VexStatus::Fixed) => continue,
+                _ => {}
+            }
+            match adv.severity {
+                AdvisorySeverity::Critical => filtered.critical.push(adv.clone()),
+                AdvisorySeverity::High => filtered.high.push(adv.clone()),
+                AdvisorySeverity::Medium => filtered.medium.push(adv.clone()),
+                AdvisorySeverity::Low => filtered.low.push(adv.clone()),
+                AdvisorySeverity::Info => filtered.info.push(adv.clone()),
+            }
+        }
+        filtered
+    }
+
     pub fn dedup_opportunities(&self) -> Vec<DedupOpportunity> {
         use std::collections::BTreeMap;
         let mut by_name: BTreeMap<&str, Vec<&crate::lockfile::Package>> = BTreeMap::new();

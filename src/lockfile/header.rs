@@ -61,6 +61,24 @@ pub fn format_header(lockfile: &Lockfile) -> Result<String, Error> {
         let pub_key_hex = tr.public_key.iter().map(|b| format!("{:02x}", b)).collect::<String>();
         out.push_str(&format!("@trust-root {} {} {} {} {}\n", tr.key_id, algo_str, pub_key_hex, tr.expires_epoch, role_str));
     }
+    for rot in &lockfile.root_rotations {
+        let algo_str = match rot.new_algorithm {
+            crate::signature::SignatureAlgorithm::Ed25519 => "00",
+            crate::signature::SignatureAlgorithm::MlDsa65 => "02",
+        };
+        let role_str = match rot.new_role {
+            crate::policy::TrustRole::Root => "root",
+            crate::policy::TrustRole::Targets => "targets",
+            crate::policy::TrustRole::Snapshot => "snapshot",
+            crate::policy::TrustRole::Delegation => "delegation",
+        };
+        let pub_key_hex: String = rot.new_public_key.iter().map(|b| format!("{:02x}", b)).collect();
+        let sig_hex: String = rot.rotation_signature.iter().map(|b| format!("{:02x}", b)).collect();
+        out.push_str(&format!("@trust-root-rotation {} {} {} {} {} {} {} {} {}\n",
+            rot.old_key_id, rot.new_key_id, rot.threshold,
+            algo_str, pub_key_hex, rot.new_expires_epoch, role_str,
+            rot.rotation_signature_key_id, sig_hex));
+    }
     for ovr in &lockfile.overrides {
         out.push_str(&format!("@override {} {} -> {}\n", ovr.name, ovr.from_version, ovr.to_version));
     }
@@ -95,6 +113,7 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
     let mut mirrors = Vec::new();
     let mut policies: Vec<crate::policy::Policy> = Vec::new();
     let mut trust_roots: Vec<crate::policy::TrustRoot> = Vec::new();
+    let mut root_rotations: Vec<crate::lockfile::TrustRootRotation> = Vec::new();
     let mut hoist_boundaries = Vec::new();
     let lines = content.lines().enumerate();
 
@@ -114,8 +133,8 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
                     licenses: vec![],
                     policies,
                     trust_roots,
+                    root_rotations,
                     mirrors,
-                    root_rotations: vec![],
                     vex_entries: vec![],
                     compat: None,
                 },
@@ -248,6 +267,64 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
                 policy_type,
                 package_pattern,
                 value,
+            });
+        } else if let Some(rest) = line.strip_prefix("@trust-root-rotation ") {
+            let mut parts = rest.splitn(9, ' ');
+            let old_key_id = parts.next().unwrap_or("").to_string();
+            let new_key_id = parts.next().unwrap_or("").to_string();
+            let threshold: u8 = parts.next().unwrap_or("1").parse().unwrap_or(1);
+            let algo_str = parts.next().unwrap_or("");
+            let pub_key_hex = parts.next().unwrap_or("");
+            let expires_str = parts.next().unwrap_or("0");
+            let role_str = parts.next().unwrap_or("root");
+            let sig_key_id = parts.next().unwrap_or("").to_string();
+            let sig_hex = parts.next().unwrap_or("");
+
+            let new_algorithm = match algo_str {
+                "00" => crate::signature::SignatureAlgorithm::Ed25519,
+                "02" => crate::signature::SignatureAlgorithm::MlDsa65,
+                _ => return Err(Error::InvalidHeader {
+                    line_number: line_num,
+                    reason: format!("Unknown algorithm in rotation: {}", algo_str),
+                }),
+            };
+
+            let new_expires_epoch: u64 = expires_str.parse().map_err(|_| Error::InvalidHeader {
+                line_number: line_num,
+                reason: "Invalid expires_epoch in rotation".to_string(),
+            })?;
+
+            let new_role = match role_str {
+                "root" => crate::policy::TrustRole::Root,
+                "targets" => crate::policy::TrustRole::Targets,
+                "snapshot" => crate::policy::TrustRole::Snapshot,
+                "delegation" => crate::policy::TrustRole::Delegation,
+                _ => return Err(Error::InvalidHeader {
+                    line_number: line_num,
+                    reason: format!("Unknown role in rotation: {}", role_str),
+                }),
+            };
+
+            let new_public_key: Vec<u8> = (0..pub_key_hex.len())
+                .step_by(2)
+                .filter_map(|i| u8::from_str_radix(&pub_key_hex[i..i+2], 16).ok())
+                .collect();
+
+            let rotation_signature: Vec<u8> = (0..sig_hex.len())
+                .step_by(2)
+                .filter_map(|i| u8::from_str_radix(&sig_hex[i..i+2], 16).ok())
+                .collect();
+
+            root_rotations.push(crate::lockfile::TrustRootRotation {
+                old_key_id,
+                new_key_id,
+                threshold,
+                new_algorithm,
+                new_public_key,
+                new_expires_epoch,
+                new_role,
+                rotation_signature_key_id: sig_key_id,
+                rotation_signature,
             });
         } else if let Some(rest) = line.strip_prefix("@metadata ") {
             let (key, value) = rest.split_once(' ').unwrap_or((rest, ""));

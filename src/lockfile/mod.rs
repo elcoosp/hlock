@@ -168,6 +168,11 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
         ));
     }
     let digest = blake3::hash(out.as_bytes());
+    for vex in &lockfile.vex_entries {
+        out.push_str(&format!("@vex {} {} {} {} {}\n",
+            vex.package, vex.advisory_id, vex.status.as_str(),
+            vex.justification, vex.impact_statement));
+    }
     for lic in &lockfile.licenses {
         out.push_str(&format!("@license {} {}\n", lic.package, lic.expression));
     }
@@ -187,6 +192,35 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
 
     for (idx, line) in pkg_content.lines().enumerate() {
         if line.trim().is_empty() || line.starts_with("@signature ") || line.starts_with("@digest ") { continue; }
+        if line.starts_with("@vex ") {
+            let rest = &line["@vex ".len()..];
+            let mut parts = rest.splitn(5, ' ');
+            let package = parts.next().unwrap_or("").to_string();
+            let advisory_id = parts.next().unwrap_or("").to_string();
+            let status_str = parts.next().unwrap_or("");
+            let justification = parts.next().unwrap_or("").to_string();
+            let impact_statement = parts.next().unwrap_or("").to_string();
+
+            let status = match crate::lockfile::VexStatus::from_str(status_str) {
+                Some(s) => s,
+                None => {
+                    provenance_parse_errors.push(Error::InvalidVexStatus {
+                        line_number: idx + 1,
+                        status: status_str.to_string(),
+                    });
+                    continue;
+                }
+            };
+
+            lockfile.vex_entries.push(crate::lockfile::VexEntry {
+                package,
+                advisory_id,
+                status,
+                justification,
+                impact_statement,
+            });
+            continue;
+        }
         if line.starts_with("@license ") {
             let rest = &line["@license ".len()..];
             let mut parts = rest.splitn(2, ' ');
