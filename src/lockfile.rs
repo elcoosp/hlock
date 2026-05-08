@@ -73,6 +73,16 @@ pub struct LockfileDiff {
     pub unchanged_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffFormat {
+    Text,
+    Json,
+}
+
+fn version_string(pkg: &Package) -> String {
+    format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch)
+}
+
 #[derive(Debug, Clone)]
 pub struct Override {
     pub name: String,
@@ -182,6 +192,84 @@ pub struct Lockfile {
     pub packages: Vec<Package>,
     pub artifacts: Vec<ArtifactDirective>,
     pub patches: Vec<PatchDirective>,
+}
+
+pub fn serialize_diff(diff: &LockfileDiff, format: DiffFormat) -> String {
+    match format {
+        DiffFormat::Text => serialize_diff_text(diff),
+        DiffFormat::Json => serialize_diff_json(diff),
+    }
+}
+
+fn serialize_diff_text(diff: &LockfileDiff) -> String {
+    let mut out = String::new();
+    out.push_str("LOCKFILE DIFF\n");
+    out.push_str(&format!("  unchanged: {} packages\n", diff.unchanged_count));
+
+    let added: Vec<&Package> = diff.changes.iter().filter_map(|c| match c {
+        PackageChange::Added(p) => Some(p),
+        _ => None,
+    }).collect();
+    let removed: Vec<&Package> = diff.changes.iter().filter_map(|c| match c {
+        PackageChange::Removed(p) => Some(p),
+        _ => None,
+    }).collect();
+    let altered: Vec<(&Package, &Package)> = diff.changes.iter().filter_map(|c| match c {
+        PackageChange::Altered(old, new) => Some((old, new)),
+        _ => None,
+    }).collect();
+
+    out.push_str(&format!("  added: {}\n", added.len()));
+    for p in &added {
+        out.push_str(&format!("    + {}@{}\n", p.name, version_string(p)));
+    }
+    out.push_str(&format!("  removed: {}\n", removed.len()));
+    for p in &removed {
+        out.push_str(&format!("    - {}@{}\n", p.name, version_string(p)));
+    }
+    out.push_str(&format!("  altered: {}\n", altered.len()));
+    for (old, new) in &altered {
+        out.push_str(&format!("    ~ {}@{} -> {}@{}\n", old.name, version_string(old), new.name, version_string(new)));
+    }
+
+    out
+}
+
+fn serialize_diff_json(diff: &LockfileDiff) -> String {
+    let mut changes = Vec::new();
+    for change in &diff.changes {
+        match change {
+            PackageChange::Added(p) => {
+                changes.push(serde_json::json!({
+                    "type": "added",
+                    "name": p.name,
+                    "version": version_string(p),
+                }));
+            }
+            PackageChange::Removed(p) => {
+                changes.push(serde_json::json!({
+                    "type": "removed",
+                    "name": p.name,
+                    "version": version_string(p),
+                }));
+            }
+            PackageChange::Altered(old, new) => {
+                changes.push(serde_json::json!({
+                    "type": "altered",
+                    "name": new.name,
+                    "old_version": version_string(old),
+                    "new_version": version_string(new),
+                }));
+            }
+        }
+    }
+
+    let obj = serde_json::json!({
+        "unchanged_count": diff.unchanged_count,
+        "changes": changes,
+    });
+
+    serde_json::to_string(&obj).unwrap()
 }
 
 fn format_header(lockfile: &Lockfile) -> Result<String, Error> {
@@ -788,5 +876,138 @@ mod tests {
         assert_eq!(deserialized.patches[0].content_id, 0xcafebabe);
         assert_eq!(deserialized.patches[0].patch_type, 0x01);
         assert_eq!(deserialized.patches[0].relative_path, "./fix.patch");
+    }
+
+    #[test]
+    fn test_diff_format_enum_exists() {
+        let _text = DiffFormat::Text;
+        let _json = DiffFormat::Json;
+    }
+
+    #[test]
+    fn test_serialize_diff_text_added() {
+        let diff = LockfileDiff {
+            changes: vec![PackageChange::Added(Package {
+                name: "lodash".to_string(),
+                major: 4, minor: 17, patch: 21,
+                ..Default::default()
+            })],
+            unchanged_count: 42,
+        };
+        let text = serialize_diff(&diff, DiffFormat::Text);
+        assert!(text.starts_with("LOCKFILE DIFF\n"));
+        assert!(text.contains("  unchanged: 42 packages\n"));
+        assert!(text.contains("  added: 1\n"));
+        assert!(text.contains("    + lodash@4.17.21\n"));
+    }
+
+    #[test]
+    fn test_serialize_diff_text_all_change_types() {
+        let diff = LockfileDiff {
+            changes: vec![
+                PackageChange::Added(Package {
+                    name: "react".to_string(),
+                    major: 18, minor: 3, patch: 1,
+                    ..Default::default()
+                }),
+                PackageChange::Removed(Package {
+                    name: "axios".to_string(),
+                    major: 0, minor: 21, patch: 1,
+                    ..Default::default()
+                }),
+                PackageChange::Altered(
+                    Package {
+                        name: "webpack".to_string(),
+                        major: 5, minor: 70, patch: 0,
+                        ..Default::default()
+                    },
+                    Package {
+                        name: "webpack".to_string(),
+                        major: 5, minor: 75, patch: 0,
+                        ..Default::default()
+                    },
+                ),
+            ],
+            unchanged_count: 10,
+        };
+        let text = serialize_diff(&diff, DiffFormat::Text);
+        assert!(text.contains("  added: 1\n"));
+        assert!(text.contains("    + react@18.3.1\n"));
+        assert!(text.contains("  removed: 1\n"));
+        assert!(text.contains("    - axios@0.21.1\n"));
+        assert!(text.contains("  altered: 1\n"));
+        assert!(text.contains("    ~ webpack@5.70.0 -> webpack@5.75.0\n"));
+    }
+
+    #[test]
+    fn test_serialize_diff_json_added() {
+        let diff = LockfileDiff {
+            changes: vec![PackageChange::Added(Package {
+                name: "lodash".to_string(),
+                major: 4, minor: 17, patch: 21,
+                ..Default::default()
+            })],
+            unchanged_count: 42,
+        };
+        let json_str = serialize_diff(&diff, DiffFormat::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["unchanged_count"], 42);
+        assert_eq!(parsed["changes"][0]["type"], "added");
+        assert_eq!(parsed["changes"][0]["name"], "lodash");
+        assert_eq!(parsed["changes"][0]["version"], "4.17.21");
+    }
+
+    #[test]
+    fn test_serialize_diff_json_all_change_types() {
+        let diff = LockfileDiff {
+            changes: vec![
+                PackageChange::Added(Package {
+                    name: "react".to_string(),
+                    major: 18, minor: 3, patch: 1,
+                    ..Default::default()
+                }),
+                PackageChange::Removed(Package {
+                    name: "axios".to_string(),
+                    major: 0, minor: 21, patch: 1,
+                    ..Default::default()
+                }),
+                PackageChange::Altered(
+                    Package {
+                        name: "webpack".to_string(),
+                        major: 5, minor: 70, patch: 0,
+                        ..Default::default()
+                    },
+                    Package {
+                        name: "webpack".to_string(),
+                        major: 5, minor: 75, patch: 0,
+                        ..Default::default()
+                    },
+                ),
+            ],
+            unchanged_count: 10,
+        };
+        let json_str = serialize_diff(&diff, DiffFormat::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let changes = parsed["changes"].as_array().unwrap();
+        assert_eq!(changes.len(), 3);
+        assert_eq!(changes[0]["type"], "added");
+        assert_eq!(changes[1]["type"], "removed");
+        assert_eq!(changes[1]["version"], "0.21.1");
+        assert_eq!(changes[2]["type"], "altered");
+        assert_eq!(changes[2]["name"], "webpack");
+        assert_eq!(changes[2]["old_version"], "5.70.0");
+        assert_eq!(changes[2]["new_version"], "5.75.0");
+    }
+
+    #[test]
+    fn test_serialize_diff_json_empty() {
+        let diff = LockfileDiff {
+            changes: vec![],
+            unchanged_count: 0,
+        };
+        let json_str = serialize_diff(&diff, DiffFormat::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        assert_eq!(parsed["unchanged_count"], 0);
+        assert_eq!(parsed["changes"].as_array().unwrap().len(), 0);
     }
 }
