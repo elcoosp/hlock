@@ -600,6 +600,32 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
     for p in &lockfile.patches {
         out.push_str(&format!("@patch {:016x} {:02x} {}\n", p.content_id, p.patch_type, p.relative_path));
     }
+    for prov in &lockfile.provenance {
+        let dep_type_id = match &prov.dep_type {
+            DepType::Runtime => 0,
+            DepType::Dev => 1,
+            DepType::Peer => 2,
+            DepType::Optional => 3,
+            DepType::OptionalTarget(_, _) => 4,
+        };
+        let source_type_id = match &prov.source_type {
+            crate::provenance::ProvenanceSourceType::Registry => 0,
+            crate::provenance::ProvenanceSourceType::Local => 1,
+            crate::provenance::ProvenanceSourceType::Git => 2,
+            crate::provenance::ProvenanceSourceType::Workspace => 3,
+            crate::provenance::ProvenanceSourceType::CasHttp => 4,
+            crate::provenance::ProvenanceSourceType::Ipfs => 5,
+        };
+        out.push_str(&format!(
+            "@provenance {} {} {} {} {} {}\n",
+            prov.package_name,
+            prov.constraint,
+            prov.constrained_by,
+            dep_type_id,
+            source_type_id,
+            prov.depth
+        ));
+    }
     let digest = blake3::hash(out.as_bytes());
     out.push_str(&format!("@digest {}\n", bytes_to_hex(digest.as_bytes())));
     Ok(out)
@@ -612,6 +638,8 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
     let mut parsed_payloads = Vec::new();
     let mut patches = Vec::new();
     let mut artifacts = Vec::new();
+    let mut provenance: Vec<crate::provenance::ResolutionProvenance> = Vec::new();
+    let mut provenance_parse_errors: Vec<Error> = Vec::new();
 
     for (idx, line) in pkg_content.lines().enumerate() {
         if line.trim().is_empty() { continue; }
@@ -639,6 +667,61 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
             let content_id = u64::from_str_radix(cid_hex, 16).unwrap_or(0);
             let patch_type = u8::from_str_radix(patch_type_str, 16).unwrap_or(0);
             patches.push(PatchDirective { content_id, patch_type, relative_path: rel_path.to_string() });
+            continue;
+        }
+        if line.starts_with("@provenance ") {
+            let rest = &line["@provenance ".len()..];
+            let mut parts = rest.splitn(6, ' ');
+            let pkg_name = parts.next().unwrap_or("").to_string();
+            let constraint = parts.next().unwrap_or("").to_string();
+            let constrained_by = parts.next().unwrap_or("").to_string();
+            let dep_type_str = parts.next().unwrap_or("");
+            let source_type_str = parts.next().unwrap_or("");
+            let depth_str = parts.next().unwrap_or("0");
+
+            let dep_type_id: u8 = dep_type_str.parse().unwrap_or(255);
+            let dep_type = match dep_type_id {
+                0 => DepType::Runtime,
+                1 => DepType::Dev,
+                2 => DepType::Peer,
+                3 => DepType::Optional,
+                4 => DepType::OptionalTarget(TargetOS::Any, TargetArch::Any),
+                _ => {
+                    provenance_parse_errors.push(Error::UnknownProvenanceDepType { type_id: dep_type_id });
+                    continue;
+                }
+            };
+
+            let source_type_id: u8 = source_type_str.parse().unwrap_or(255);
+            let source_type = match source_type_id {
+                0 => crate::provenance::ProvenanceSourceType::Registry,
+                1 => crate::provenance::ProvenanceSourceType::Local,
+                2 => crate::provenance::ProvenanceSourceType::Git,
+                3 => crate::provenance::ProvenanceSourceType::Workspace,
+                4 => crate::provenance::ProvenanceSourceType::CasHttp,
+                5 => crate::provenance::ProvenanceSourceType::Ipfs,
+                _ => {
+                    provenance_parse_errors.push(Error::UnknownProvenanceSourceType { type_id: source_type_id });
+                    continue;
+                }
+            };
+
+            let depth: u32 = depth_str.parse().unwrap_or(0);
+
+            let prov = crate::provenance::ResolutionProvenance {
+                package_name: pkg_name,
+                constraint,
+                constrained_by,
+                dep_type,
+                source_type,
+                depth,
+            };
+
+            if let Some(existing) = provenance.iter().position(|p: &crate::provenance::ResolutionProvenance| p.package_name == prov.package_name) {
+                provenance[existing] = prov;
+            } else {
+                provenance.push(prov);
+            }
             continue;
         }
         let line_num = header_line_count + idx;
@@ -772,9 +855,13 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
             ..Default::default()
         });
     }
+    if let Some(err) = provenance_parse_errors.into_iter().next() {
+        return Err(err);
+    }
     lockfile.packages = packages;
     lockfile.artifacts = artifacts;
     lockfile.patches = patches;
+    lockfile.provenance = provenance;
     Ok(lockfile)
 }
 
@@ -1191,6 +1278,135 @@ mod tests {
         let serialized = serialize(&mut lockfile).unwrap();
         assert!(serialized.contains("@digest "));
         assert!(validate_digest(&serialized).is_ok());
+    }
+
+    #[test]
+    fn test_provenance_serialize_roundtrip() {
+        let mut lockfile = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            overrides: vec![],
+            features: vec![],
+            metadata: vec![],
+            workspace_root: None,
+            workspace_pkgs: vec![],
+            hoist_boundaries: vec![],
+            artifacts: vec![],
+            patches: vec![],
+            provenance: vec![
+                crate::provenance::ResolutionProvenance {
+                    package_name: "lodash".to_string(),
+                    constraint: "^4.17.0".to_string(),
+                    constrained_by: "app".to_string(),
+                    dep_type: DepType::Runtime,
+                    source_type: crate::provenance::ProvenanceSourceType::Registry,
+                    depth: 1,
+                },
+                crate::provenance::ResolutionProvenance {
+                    package_name: "jest".to_string(),
+                    constraint: "^29.0.0".to_string(),
+                    constrained_by: String::new(),
+                    dep_type: DepType::Dev,
+                    source_type: crate::provenance::ProvenanceSourceType::Registry,
+                    depth: 0,
+                },
+            ],
+            packages: vec![Package {
+                name: "app".to_string(),
+                logical_name: None,
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
+                ..Default::default()
+            }],
+        };
+        let serialized = serialize(&mut lockfile).unwrap();
+        assert!(serialized.contains("@provenance lodash ^4.17.0 app 0 0 1"));
+        assert!(serialized.contains("@provenance jest ^29.0.0  1 0 0"));
+        let deserialized = deserialize(&serialized).unwrap();
+        assert_eq!(deserialized.provenance.len(), 2);
+        assert_eq!(deserialized.provenance[0].package_name, "lodash");
+        assert_eq!(deserialized.provenance[0].constraint, "^4.17.0");
+        assert_eq!(deserialized.provenance[0].constrained_by, "app");
+        assert_eq!(deserialized.provenance[0].dep_type, DepType::Runtime);
+        assert_eq!(deserialized.provenance[0].source_type, crate::provenance::ProvenanceSourceType::Registry);
+        assert_eq!(deserialized.provenance[0].depth, 1);
+        assert_eq!(deserialized.provenance[1].package_name, "jest");
+        assert_eq!(deserialized.provenance[1].depth, 0);
+    }
+
+    #[test]
+    fn test_provenance_unknown_dep_type() {
+        let mut lf = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            overrides: vec![], features: vec![], metadata: vec![],
+            workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+            artifacts: vec![], patches: vec![],
+            provenance: vec![],
+            packages: vec![Package {
+                name: "app".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0, ..Default::default()
+            }],
+        };
+        let base = serialize(&mut lf).unwrap();
+        let without_digest: String = base.lines()
+            .filter(|l| !l.starts_with("@digest "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let content = format!("{}\n@provenance x ^1.0.0 app 99 0 1\n", without_digest);
+        assert!(matches!(
+            deserialize(&content),
+            Err(Error::UnknownProvenanceDepType { type_id: 99 })
+        ));
+    }
+
+    #[test]
+    fn test_provenance_unknown_source_type() {
+        let mut lf = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            overrides: vec![], features: vec![], metadata: vec![],
+            workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+            artifacts: vec![], patches: vec![],
+            provenance: vec![],
+            packages: vec![Package {
+                name: "app".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0, ..Default::default()
+            }],
+        };
+        let base = serialize(&mut lf).unwrap();
+        let without_digest: String = base.lines()
+            .filter(|l| !l.starts_with("@digest "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let content = format!("{}\n@provenance x ^1.0.0 app 0 99 1\n", without_digest);
+        assert!(matches!(
+            deserialize(&content),
+            Err(Error::UnknownProvenanceSourceType { type_id: 99 })
+        ));
+    }
+
+    #[test]
+    fn test_provenance_duplicate_last_wins() {
+        let mut lf = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            overrides: vec![], features: vec![], metadata: vec![],
+            workspace_root: None, workspace_pkgs: vec![], hoist_boundaries: vec![],
+            artifacts: vec![], patches: vec![],
+            provenance: vec![],
+            packages: vec![Package {
+                name: "app".to_string(), logical_name: None, source_idx: 0,
+                major: 1, minor: 0, patch: 0, ..Default::default()
+            }],
+        };
+        let base = serialize(&mut lf).unwrap();
+        let without_digest: String = base.lines()
+            .filter(|l| !l.starts_with("@digest "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let content = format!("{}\n@provenance x ^1.0.0 app 0 0 1\n@provenance x ^2.0.0 app 0 0 1\n", without_digest);
+        let result = deserialize(&content).unwrap();
+        assert_eq!(result.provenance.len(), 1);
+        assert_eq!(result.provenance[0].constraint, "^2.0.0");
     }
 
     #[test]
