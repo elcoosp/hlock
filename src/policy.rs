@@ -271,39 +271,60 @@ impl crate::lockfile::Lockfile {
             .collect()
     }
 
-    pub fn hook_allowed(&self, package_name: &str, hook_name: &str) -> PolicyDecision {
-        let mut allowed = false;
-        let mut denied = false;
+        pub fn hook_allowed(&self, package_name: &str, hook_name: &str) -> PolicyDecision {
+        let mut specific_allow = false;
+        let mut specific_deny = false;
+        let mut wildcard_deny = false;
+        let mut wildcard_allow = false;
         let mut deny_reason = String::new();
 
         for policy in &self.policies {
             match policy.policy_type {
                 PolicyType::AllowHook => {
-                    if pattern_matches(&policy.package_pattern, package_name)
-                        && policy.value == hook_name
-                    {
-                        allowed = true;
+                    if pattern_matches(&policy.package_pattern, package_name) && policy.value == hook_name {
+                        if policy.package_pattern != "*" {
+                            specific_allow = true;
+                        } else {
+                            wildcard_allow = true;
+                        }
                     }
                 }
                 PolicyType::DenyHook => {
-                    if pattern_matches(&policy.package_pattern, package_name)
-                        && policy.value == hook_name
-                    {
-                        denied = true;
-                        deny_reason = format!("Hook '{}' denied for '{}' by policy", hook_name, package_name);
+                    if pattern_matches(&policy.package_pattern, package_name) && policy.value == hook_name {
+                        if policy.package_pattern != "*" {
+                            specific_deny = true;
+                            deny_reason = format!("Hook '{}' denied for '{}' by specific policy", hook_name, package_name);
+                        } else {
+                            wildcard_deny = true;
+                            deny_reason = format!("Hook '{}' denied for '{}' by wildcard policy", hook_name, package_name);
+                        }
                     }
                 }
                 _ => {}
             }
         }
 
-        if denied {
-            PolicyDecision::Denied { reason: deny_reason }
-        } else if allowed {
-            PolicyDecision::Allowed
-        } else {
-            PolicyDecision::NoPolicy
+        // Specific deny beats everything
+        if specific_deny {
+            return PolicyDecision::Denied { reason: deny_reason };
         }
+
+        // Specific allow beats wildcard deny
+        if specific_allow {
+            return PolicyDecision::Allowed;
+        }
+
+        // Wildcard deny applies if no specific rules
+        if wildcard_deny {
+            return PolicyDecision::Denied { reason: deny_reason };
+        }
+
+        // Wildcard allow applies as fallback
+        if wildcard_allow {
+            return PolicyDecision::Allowed;
+        }
+
+        PolicyDecision::NoPolicy
     }
 
     pub fn script_allowed(&self, package_name: &str, script_name: &str) -> PolicyDecision {
@@ -571,20 +592,22 @@ mod tests {
     fn test_hook_allowed_deny_wins() {
         let lf = Lockfile {
             policies: vec![
-                Policy { policy_type: PolicyType::AllowHook, package_pattern: "*".to_string(), value: "postinstall".to_string() },
                 Policy { policy_type: PolicyType::DenyHook, package_pattern: "evil".to_string(), value: "postinstall".to_string() },
+                Policy { policy_type: PolicyType::AllowHook, package_pattern: "*".to_string(), value: "postinstall".to_string() },
             ],
             ..empty_lockfile()
         };
         assert!(matches!(lf.hook_allowed("evil", "postinstall"), PolicyDecision::Denied { .. }));
+        // Also test that allow still works for other packages
+        assert!(matches!(lf.hook_allowed("good", "postinstall"), PolicyDecision::Allowed));
     }
 
     #[test]
     fn test_hook_allowed_allow() {
         let lf = Lockfile {
             policies: vec![
-                Policy { policy_type: PolicyType::DenyHook, package_pattern: "*".to_string(), value: "postinstall".to_string() },
                 Policy { policy_type: PolicyType::AllowHook, package_pattern: "lodash".to_string(), value: "postinstall".to_string() },
+                Policy { policy_type: PolicyType::DenyHook, package_pattern: "*".to_string(), value: "postinstall".to_string() },
             ],
             ..empty_lockfile()
         };

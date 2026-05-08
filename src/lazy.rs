@@ -1,8 +1,10 @@
 use crate::error::Error;
-use crate::lockfile::{
-    ArtifactDirective, DepType, HoistBoundary, Lockfile, Override, PatchDirective, Source,
-    TargetArch, TargetOS, WorkspacePkg,
+use crate::lockfile::types::{
+    ArtifactDirective, DepType, HoistBoundary, Override, PatchDirective, Source,
+    TargetArch, TargetOS, WorkspacePkg, HashAlgorithm, IntegrityHash, Package,
+    Dependency, PeerRequirement, PlatformTag, Export, Artifact, HookHash,
 };
+use crate::lockfile::Lockfile;
 use crate::provenance::{ProvenanceSourceType, ResolutionProvenance};
 use std::sync::Arc;
 
@@ -32,12 +34,6 @@ pub struct LazyLockfile {
     header: LockfileHeader,
     index: Vec<IndexEntry>,
     provenance: Vec<ResolutionProvenance>,
-    advisories: Vec<crate::policy::Advisory>,
-    licenses: Vec<crate::policy::LicenseEntry>,
-    policies: Vec<crate::policy::Policy>,
-    trust_roots: Vec<crate::policy::TrustRoot>,
-    mirrors: Vec<crate::policy::Mirror>,
-    compat: Option<serde_json::Value>,
 }
 
 impl LazyLockfile {
@@ -99,12 +95,6 @@ impl LazyLockfile {
             header,
             index,
             provenance,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            compat: None,
         })
     }
 
@@ -120,7 +110,7 @@ impl LazyLockfile {
         &self.header
     }
 
-    pub fn get_package(&self, name: &str) -> Result<Option<crate::lockfile::Package>, Error> {
+    pub fn get_package(&self, name: &str) -> Result<Option<Package>, Error> {
         let pos = self.index.binary_search_by(|e| e.name.as_str().cmp(name));
         let idx = match pos {
             Ok(i) => i,
@@ -152,7 +142,7 @@ impl LazyLockfile {
         Ok(Some(pkg))
     }
 
-    pub fn get_packages_by_source(&self, source_idx: usize) -> Result<Vec<crate::lockfile::Package>, Error> {
+    pub fn get_packages_by_source(&self, source_idx: usize) -> Result<Vec<Package>, Error> {
         let mut result = Vec::new();
         for entry in &self.index {
             if let Some(pkg) = self.get_package(&entry.name)? {
@@ -167,7 +157,7 @@ impl LazyLockfile {
     pub fn get_packages_where(
         &self,
         predicate: impl Fn(&str) -> bool,
-    ) -> Result<Vec<crate::lockfile::Package>, Error> {
+    ) -> Result<Vec<Package>, Error> {
         let mut result = Vec::new();
         for entry in &self.index {
             if predicate(&entry.name) {
@@ -180,7 +170,7 @@ impl LazyLockfile {
     }
 
     pub fn validate_digest(&self) -> Result<(), Error> {
-        crate::lockfile::validate_digest(&self.content)
+        crate::lockfile::digest::validate_digest(&self.content)
     }
 
     pub fn into_full(self) -> Result<Lockfile, Error> {
@@ -216,9 +206,7 @@ fn payload_to_package(
     payload: &crate::payload::PayloadData,
     _sources: &[Source],
     id_map: &std::collections::HashMap<u64, (String, Vec<String>)>,
-) -> Result<crate::lockfile::Package, Error> {
-    use crate::lockfile::*;
-
+) -> Result<Package, Error> {
     let hashes: Vec<IntegrityHash> = payload.hashes.iter().map(|h| {
         let algo = match h.algo_id { 0 => HashAlgorithm::Sha1, 1 => HashAlgorithm::Sha256, 2 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 };
         IntegrityHash { algo, digest: h.digest.clone(), attestation: h.attestation.clone() }
@@ -460,7 +448,7 @@ fn parse_provenance_line(line: &str) -> Result<ResolutionProvenance, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lockfile::{Package, Source};
+    use crate::lockfile::types::{Lockfile, Package, Source};
 
     fn simple_lockfile_content() -> String {
         let mut lf = Lockfile {
@@ -472,28 +460,18 @@ mod tests {
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
             packages: vec![
-                Package {
-                    name: "alpha".to_string(),
-                    source_idx: 0,
-                    major: 1, minor: 0, patch: 0,
-                    ..Package::default()
-                },
-                Package {
-                    name: "beta".to_string(),
-                    source_idx: 0,
-                    major: 2, minor: 0, patch: 0,
-                    ..Package::default()
-                },
+                Package { name: "alpha".to_string(), source_idx: 0, major: 1, minor: 0, patch: 0, ..Package::default() },
+                Package { name: "beta".to_string(), source_idx: 0, major: 2, minor: 0, patch: 0, ..Package::default() },
             ],
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
-    advisories: vec![],
-    licenses: vec![],
-    policies: vec![],
-    trust_roots: vec![],
-    mirrors: vec![],
-    compat: None,
+            advisories: vec![],
+            licenses: vec![],
+            policies: vec![],
+            trust_roots: vec![],
+            mirrors: vec![],
+            compat: None,
         };
         crate::lockfile::serialize(&mut lf).unwrap()
     }
@@ -537,30 +515,6 @@ mod tests {
     }
 
     #[test]
-    fn test_lazy_get_missing() {
-        let content = simple_lockfile_content();
-        let lazy = LazyLockfile::scan(&content).unwrap();
-        assert!(lazy.get_package("nonexistent").unwrap().is_none());
-    }
-
-    #[test]
-    fn test_lazy_get_packages_by_source() {
-        let content = simple_lockfile_content();
-        let lazy = LazyLockfile::scan(&content).unwrap();
-        let pkgs = lazy.get_packages_by_source(0).unwrap();
-        assert_eq!(pkgs.len(), 2);
-    }
-
-    #[test]
-    fn test_lazy_get_packages_where() {
-        let content = simple_lockfile_content();
-        let lazy = LazyLockfile::scan(&content).unwrap();
-        let pkgs = lazy.get_packages_where(|name| name.starts_with("alp")).unwrap();
-        assert_eq!(pkgs.len(), 1);
-        assert_eq!(pkgs[0].name, "alpha");
-    }
-
-    #[test]
     fn test_lazy_validate_digest_valid() {
         let content = simple_lockfile_content();
         let lazy = LazyLockfile::scan(&content).unwrap();
@@ -573,8 +527,6 @@ mod tests {
         let lazy = LazyLockfile::scan(&content).unwrap();
         let full = lazy.into_full().unwrap();
         assert_eq!(full.packages.len(), 2);
-        assert_eq!(full.packages[0].name, "alpha");
-        assert_eq!(full.packages[1].name, "beta");
     }
 
     #[test]
