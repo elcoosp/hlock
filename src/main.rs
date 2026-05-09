@@ -307,13 +307,8 @@ fn read_input(path: &std::path::Path) -> Result<String, hlock::Error> {
 fn main() {
     let cli = Cli::parse();
 
-    if cli.verbose && cli.quiet {
-        eprintln!("Error: --quiet and --verbose are mutually exclusive");
-        std::process::exit(2);
-    }
-
     let quiet = cli.quiet;
-    let verbose = cli.verbose;
+    let verbose = cli.verbose && !quiet;
     let _color_config = output::ColorConfig::from_cli_args(
         &cli.color,
         cli.no_color,
@@ -819,7 +814,7 @@ fn main() {
 
                     if let Some(ref root) = lockfile.workspace_root {
                         println!("Workspace:      {}", root);
-                        for wp in &lockfile.workspace_pkgs { println!("  +-- {} ({})", wp.name, wp.manifest_path); }
+                        for wp in &lockfile.workspace_pkgs { println!("  └── {} ({})", wp.name, wp.manifest_path); }
                     }
 
                     if !lockfile.hoist_boundaries.is_empty() {
@@ -827,7 +822,7 @@ fn main() {
                         for hb in &lockfile.hoist_boundaries { println!("  {} -> [{}]", hb.cosine, hb.allowed_deps.join(", ")); }
                     }
 
-                    if digest_valid { println!("Digest:         valid (blake3)"); } else { println!("Digest:         invalid"); }
+                    if digest_valid { println!("✓ Digest valid (blake3)"); } else { println!("✗ Digest invalid"); }
                 }
             }
         }
@@ -900,9 +895,7 @@ fn main() {
                     if let Some(ref dt) = self.dep_type {
                         obj["dep_type"] = serde_json::Value::String(dt.clone());
                     }
-                    if !deps.is_empty() {
-                        obj["dependencies"] = serde_json::Value::Array(deps);
-                    }
+                    obj["dependencies"] = serde_json::Value::Array(deps);
                     obj
                 }
             }
@@ -1043,7 +1036,7 @@ fn main() {
                         }
                         let mut visited = HashSet::new();
                         let tree = build_tree(&lockfile, root_name, 0, max_depth, &filter_dep_type, &mut visited);
-                        let show_dep_type = filter_dep_type != "all";
+                        let show_dep_type = filter_dep_type == "all";
                         println!("{}@{}", tree.name, tree.version);
                         let dep_count = tree.dependencies.len();
                         for (j, child) in tree.dependencies.iter().enumerate() {

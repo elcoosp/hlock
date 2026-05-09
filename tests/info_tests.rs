@@ -98,7 +98,7 @@ fn test_info_text_output() {
     assert!(stdout.contains("Trust Roots:"), "should contain Trust Roots header");
     assert!(stdout.contains("Overrides:"), "should contain Overrides header");
     assert!(stdout.contains("Licenses:"), "should contain Licenses header");
-    assert!(stdout.contains("Digest:"), "should contain Digest header");
+    assert!(stdout.contains("Digest"), "should contain Digest, got: {}", stdout);
 }
 
 #[test]

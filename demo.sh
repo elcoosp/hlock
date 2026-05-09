@@ -112,8 +112,8 @@ echo "Step 20: Dependents command (transitive dependents of lodash)"
 "$HLOCK" dependents "$DEMO_DIR/demo.hlock" lodash --transitive
 echo ""
 
-echo "Step 21: Tree command"
-"$HLOCK" tree "$DEMO_DIR/demo.hlock"
+echo "Step 21: Tree command (--root my-app)"
+"$HLOCK" tree "$DEMO_DIR/demo.hlock" --root my-app
 echo ""
 
 echo "Step 22: Tree command (--root my-app)"
