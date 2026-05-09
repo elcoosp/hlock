@@ -18,6 +18,7 @@ pub struct ColorConfig {
     when: ColorWhen,
 }
 
+#[allow(dead_code)]
 impl ColorConfig {
     pub fn new(when: ColorWhen) -> Self {
         let cfg = Self { when };

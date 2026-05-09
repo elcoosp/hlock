@@ -221,6 +221,7 @@ pub fn verify_signature(
 }
 
 #[cfg(test)]
+#[allow(unused_mut)]
 mod tests {
     use super::*;
 
