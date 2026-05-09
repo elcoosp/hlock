@@ -329,10 +329,10 @@ fn main() {
             };
 
             if let Err(e) = validate_digest(&content) {
-                eprintln!("✗ {}", e);
+                eprintln!("{} {}", "✗".red().bold(), e);
                 std::process::exit(1);
             }
-            println!("✓ digest valid");
+            println!("{} digest valid", "✓".green().bold());
 
             let mut trusted: HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> = HashMap::new();
             for spec in &trusted_key {
@@ -343,10 +343,10 @@ fn main() {
 
             if !trusted.is_empty() {
                 if let Err(e) = verify_signature(&content, &trusted) {
-                    eprintln!("✗ {}", e);
+                    eprintln!("{} {}", "✗".red().bold(), e);
                     std::process::exit(1);
                 }
-                println!("✓ signature valid");
+                println!("{} signature valid", "✓".green().bold());
             }
 
             let lockfile = match deserialize(&content) {
@@ -357,10 +357,10 @@ fn main() {
             let now = if time > 0 { time } else { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) };
             if !lockfile.trust_roots.is_empty() {
                 if let Err(e) = lockfile.validate_trust_chain(now) {
-                    eprintln!("✗ {}", e);
+                    eprintln!("{} {}", "✗".red().bold(), e);
                     std::process::exit(1);
                 }
-                println!("✓ trust chain valid");
+                println!("{} trust chain valid", "✓".green().bold());
             }
         }
 
@@ -415,9 +415,9 @@ fn main() {
             } else {
                 for f in &report.findings {
                     let sev_str = match f.severity {
-                        lint::LintSeverity::Error => "ERROR",
-                        lint::LintSeverity::Warning => "WARN",
-                        lint::LintSeverity::Info => "INFO",
+                        lint::LintSeverity::Error => "ERROR".red().bold().to_string(),
+                        lint::LintSeverity::Warning => "WARN".yellow().bold().to_string(),
+                        lint::LintSeverity::Info => "INFO".blue().to_string(),
                     };
                     let pkg = f.package.as_deref().unwrap_or("-");
                     let skip = match min_sev {
@@ -482,7 +482,13 @@ fn main() {
                 })).unwrap());
             } else {
                 for adv in report.all_advisories() {
-                    println!("{:10}{:16}{}   {}   {}", adv.severity.as_str().to_uppercase(), adv.package, adv.advisory_id, adv.affected_versions, adv.url);
+                    let sev_str = match adv.severity {
+                        policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High => adv.severity.as_str().to_uppercase().red().bold().to_string(),
+                        policy::AdvisorySeverity::Medium => adv.severity.as_str().to_uppercase().yellow().bold().to_string(),
+                        policy::AdvisorySeverity::Low => adv.severity.as_str().to_uppercase().yellow().to_string(),
+                        policy::AdvisorySeverity::Info => adv.severity.as_str().to_uppercase().blue().to_string(),
+                    };
+                    println!("{:10}{:16}{}   {}   {}", sev_str, adv.package, adv.advisory_id, adv.affected_versions, adv.url);
                 }
                 println!("---");
                 println!("Total: {} critical/high, {} medium, {} low, {} info", report.critical.len() + report.high.len(), report.medium.len(), report.low.len(), report.info.len());
@@ -718,6 +724,7 @@ fn main() {
                 let vex_json: Vec<serde_json::Value> = lockfile.vex_entries.iter().map(|v| serde_json::json!({"package": v.package, "advisory_id": v.advisory_id, "status": v.status.as_str()})).collect();
 
                 let json = serde_json::json!({
+                    "version": env!("CARGO_PKG_VERSION"),
                     "package_count": lockfile.packages.len(),
                     "packages_by_source": {"registry": registry_count, "git": git_count, "workspace": workspace_count, "local": local_count, "cas_http": cas_count, "ipfs": ipfs_count},
                     "sources": sources_json,
@@ -871,6 +878,8 @@ fn main() {
             };
 
             let fmt = output::parse_format(&format);
+            let max_depth = depth;
+            let filter_dep_type = dep_type.clone();
 
             let root_names: Vec<String> = if root.is_empty() {
                 lockfile.packages.iter()
@@ -883,59 +892,157 @@ fn main() {
                 root
             };
 
-            let mut visited = HashSet::new();
+            struct TreeNode {
+                name: String,
+                version: String,
+                dep_type: Option<String>,
+                dependencies: Vec<TreeNode>,
+            }
 
-            fn print_tree(
+            impl TreeNode {
+                fn to_json(&self) -> serde_json::Value {
+                    let deps: Vec<serde_json::Value> = self.dependencies.iter().map(|d| d.to_json()).collect();
+                    let mut obj = serde_json::json!({
+                        "name": self.name,
+                        "version": self.version,
+                    });
+                    if let Some(ref dt) = self.dep_type {
+                        obj["dep_type"] = serde_json::Value::String(dt.clone());
+                    }
+                    if !deps.is_empty() {
+                        obj["dependencies"] = serde_json::Value::Array(deps);
+                    }
+                    obj
+                }
+            }
+
+            fn build_tree(
                 lockfile: &hlock::Lockfile,
                 name: &str,
-                prefix: &str,
-                is_last: bool,
+                current_depth: u32,
+                max_depth: Option<u32>,
+                dep_type_filter: &str,
                 visited: &mut HashSet<String>,
-                fmt: output::OutputFormat,
-                lines: &mut Vec<serde_json::Value>,
-            ) {
+            ) -> TreeNode {
+                let pkg = lockfile.packages.iter().find(|p| p.name == name);
+                let version = pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
+                let mut node = TreeNode {
+                    name: name.to_string(),
+                    version,
+                    dep_type: None,
+                    dependencies: Vec::new(),
+                };
+
+                if max_depth.map_or(false, |max| current_depth >= max) {
+                    return node;
+                }
+
                 if visited.contains(name) {
-                    if fmt == output::OutputFormat::Text {
-                        println!("{}{}── {} (already listed above)", prefix, if is_last { "└" } else { "├" }, name);
-                    }
-                    return;
+                    return node;
                 }
                 visited.insert(name.to_string());
 
-                let connector = if is_last { "└" } else { "├" };
-                let pkg = lockfile.packages.iter().find(|p| p.name == name);
-                let version = pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
-                let license = lockfile.license_for(name).unwrap_or("—");
+                if let Some(pkg) = pkg {
+                    for dep in &pkg.dependencies {
+                        let follows = match dep_type_filter {
+                            "runtime" => matches!(dep.dep_type, hlock::DepType::Runtime),
+                            "dev" => matches!(dep.dep_type, hlock::DepType::Dev),
+                            "peer" => matches!(dep.dep_type, hlock::DepType::Peer),
+                            _ => true,
+                        };
+                        if !follows { continue; }
 
-                if fmt == output::OutputFormat::Text {
-                    println!("{}{}── {}@{} [{}]", prefix, connector, name, version, license);
-                } else {
-                    lines.push(serde_json::json!({
-                        "name": name,
-                        "version": version,
-                        "license": license,
-                    }));
+                        if visited.contains(&dep.name) {
+                            let dep_pkg = lockfile.packages.iter().find(|p| p.name == dep.name);
+                            let dep_ver = dep_pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
+                            let dt = match dep.dep_type {
+                                hlock::DepType::Runtime => "runtime",
+                                hlock::DepType::Dev => "dev",
+                                hlock::DepType::Peer => "peer",
+                                hlock::DepType::Optional => "optional",
+                                hlock::DepType::OptionalTarget(_, _) => "optional-target",
+                            };
+                            node.dependencies.push(TreeNode {
+                                name: format!("{} ↻", dep.name),
+                                version: dep_ver,
+                                dep_type: Some(dt.to_string()),
+                                dependencies: Vec::new(),
+                            });
+                            continue;
+                        }
+
+                        let dt = match dep.dep_type {
+                            hlock::DepType::Runtime => "runtime",
+                            hlock::DepType::Dev => "dev",
+                            hlock::DepType::Peer => "peer",
+                            hlock::DepType::Optional => "optional",
+                            hlock::DepType::OptionalTarget(_, _) => "optional-target",
+                        };
+                        let mut child = build_tree(lockfile, &dep.name, current_depth + 1, max_depth, dep_type_filter, visited);
+                        child.dep_type = Some(dt.to_string());
+                        node.dependencies.push(child);
+                    }
                 }
 
-                if let Some(pkg) = pkg {
-                    let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
-                    let dep_count = pkg.dependencies.len();
-                    for (i, dep) in pkg.dependencies.iter().enumerate() {
-                        let is_last_child = i == dep_count - 1;
-                        print_tree(lockfile, &dep.name, &child_prefix, is_last_child, visited, fmt, lines);
+                visited.remove(name);
+                node
+            }
+
+            fn render_tree_text(
+                node: &TreeNode,
+                prefix: &str,
+                is_last: bool,
+                show_dep_type: bool,
+            ) {
+                let connector = if is_last { "└" } else { "├" };
+                let is_cycle = node.name.contains(" ↻");
+                let display_name = if is_cycle {
+                    node.name.clone()
+                } else {
+                    format!("{}@{}", node.name, node.version)
+                };
+                let type_suffix = if show_dep_type {
+                    if let Some(ref dt) = node.dep_type {
+                        format!(" ({})", dt)
+                    } else {
+                        String::new()
                     }
+                } else {
+                    String::new()
+                };
+                println!("{}{}── {}{}", prefix, connector, display_name, type_suffix);
+
+                let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+                let dep_count = node.dependencies.len();
+                for (i, child) in node.dependencies.iter().enumerate() {
+                    let is_last_child = i == dep_count - 1;
+                    render_tree_text(child, &child_prefix, is_last_child, show_dep_type);
                 }
             }
 
             if fmt == output::OutputFormat::Json {
-                let mut all_lines = Vec::new();
+                let mut trees = Vec::new();
                 for root_name in &root_names {
-                    print_tree(&lockfile, root_name, "", true, &mut visited, fmt, &mut all_lines);
+                    let mut visited = HashSet::new();
+                    let tree = build_tree(&lockfile, root_name, 0, max_depth, &filter_dep_type, &mut visited);
+                    trees.push(tree);
                 }
-                let json = serde_json::json!({
-                    "roots": root_names,
-                    "packages": all_lines,
-                });
+
+                let root_pkg = lockfile.packages.iter().find(|p| root_names.first().map(|rn| p.name == *rn).unwrap_or(false));
+                let root_version = root_pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
+
+                let json = if root_names.len() == 1 {
+                    serde_json::json!({
+                        "root": root_names[0],
+                        "root_version": root_version,
+                        "tree": trees[0].to_json(),
+                    })
+                } else {
+                    serde_json::json!({
+                        "roots": root_names,
+                        "trees": trees.iter().map(|t| t.to_json()).collect::<Vec<_>>(),
+                    })
+                };
                 if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
             } else {
                 if !quiet {
@@ -943,8 +1050,15 @@ fn main() {
                         if root_names.len() > 1 && i > 0 {
                             println!();
                         }
-                        visited.clear();
-                        print_tree(&lockfile, root_name, "", true, &mut visited, fmt, &mut Vec::new());
+                        let mut visited = HashSet::new();
+                        let tree = build_tree(&lockfile, root_name, 0, max_depth, &filter_dep_type, &mut visited);
+                        let show_dep_type = filter_dep_type != "all";
+                        println!("{}@{}", tree.name, tree.version);
+                        let dep_count = tree.dependencies.len();
+                        for (j, child) in tree.dependencies.iter().enumerate() {
+                            let is_last = j == dep_count - 1;
+                            render_tree_text(child, "", is_last, show_dep_type);
+                        }
                     }
                 }
             }
@@ -962,52 +1076,152 @@ fn main() {
 
             let fmt = output::parse_format(&format);
 
-            let licensed: HashSet<&str> = lockfile.licenses.iter().map(|l| l.package.as_str()).collect();
+            let licensed_map: std::collections::HashMap<&str, &str> = lockfile.licenses.iter()
+                .map(|l| (l.package.as_str(), l.expression.as_str()))
+                .collect();
 
-            let entries: Vec<(String, String)> = if missing {
-                lockfile.packages.iter()
-                    .filter(|p| !licensed.contains(p.name.as_str()))
-                    .map(|p| (p.name.clone(), "—".to_string()))
-                    .collect()
+            let allowed_licenses: Vec<String> = allow.as_ref().map(|s| s.split(',').map(|x| x.trim().to_string()).collect()).unwrap_or_default();
+            let denied_licenses: Vec<String> = deny.as_ref().map(|s| s.split(',').map(|x| x.trim().to_string()).collect()).unwrap_or_default();
+
+            struct LicenseEntry {
+                name: String,
+                license: Option<String>,
+                source: String,
+                source_type: String,
+                is_workspace: bool,
+            }
+
+            let mut entries: Vec<LicenseEntry> = Vec::new();
+            for pkg in &lockfile.packages {
+                let lic = licensed_map.get(pkg.name.as_str()).cloned();
+                let (source, source_type) = match lockfile.sources.get(pkg.source_idx) {
+                    Some(hlock::Source::Registry(u)) => (u.clone(), "registry".to_string()),
+                    Some(hlock::Source::Git(u)) => (u.clone(), "git".to_string()),
+                    Some(hlock::Source::Workspace) => (String::new(), "workspace".to_string()),
+                    Some(hlock::Source::Local(u)) => (u.clone(), "local".to_string()),
+                    Some(hlock::Source::CasHttp(u)) => (u.clone(), "cas-http".to_string()),
+                    Some(hlock::Source::Ipfs(u)) => (u.clone(), "ipfs".to_string()),
+                    None => (String::new(), "unknown".to_string()),
+                };
+                let is_workspace = source_type == "workspace";
+                entries.push(LicenseEntry { name: pkg.name.clone(), license: lic.map(String::from), source, source_type, is_workspace });
+            }
+
+            let filtered_entries: Vec<&LicenseEntry> = if missing {
+                entries.iter().filter(|e| e.license.is_none() && !e.is_workspace).collect()
             } else {
-                lockfile.licenses.iter()
-                    .map(|l| (l.package.clone(), l.expression.clone()))
-                    .collect()
+                entries.iter().collect()
             };
 
+            let declared_count = entries.iter().filter(|e| e.license.is_some()).count();
+            let undeclared_count = entries.iter().filter(|e| e.license.is_none() && !e.is_workspace).count();
+            let workspace_count = entries.iter().filter(|e| e.is_workspace).count();
+            let copyleft_keywords = ["GPL", "AGPL", "LGPL", "CPAL", "EUPL", "Ms-PL"];
+            let copyleft_count = entries.iter().filter(|e| {
+                e.license.as_ref().map_or(false, |l| copyleft_keywords.iter().any(|k| l.contains(k)))
+            }).count();
+            let permissive_count = declared_count - copyleft_count;
+
+            let mut violations: Vec<serde_json::Value> = Vec::new();
+
+            for entry in &entries {
+                if entry.is_workspace { continue; }
+                if let Some(ref lic) = entry.license {
+                    for denied in &denied_licenses {
+                        if lic.contains(denied) {
+                            violations.push(serde_json::json!({
+                                "package": entry.name,
+                                "reason": "denied",
+                                "license": lic,
+                            }));
+                        }
+                    }
+                    if !allowed_licenses.is_empty() {
+                        let is_allowed = allowed_licenses.iter().any(|a| lic.contains(a) || a == lic);
+                        if !is_allowed {
+                            violations.push(serde_json::json!({
+                                "package": entry.name,
+                                "reason": "not-allowed",
+                                "license": lic,
+                            }));
+                        }
+                    }
+                } else if strict {
+                    violations.push(serde_json::json!({
+                        "package": entry.name,
+                        "reason": "undeclared",
+                    }));
+                } else if !allowed_licenses.is_empty() {
+                    violations.push(serde_json::json!({
+                        "package": entry.name,
+                        "reason": "undeclared",
+                    }));
+                }
+            }
+
+            let has_violations = !violations.is_empty();
+
             if fmt == output::OutputFormat::Json {
+                let pkgs_json: Vec<serde_json::Value> = filtered_entries.iter().map(|e| {
+                    serde_json::json!({
+                        "name": e.name,
+                        "license": e.license,
+                        "source": e.source,
+                        "source_type": e.source_type,
+                    })
+                }).collect();
                 let json = serde_json::json!({
-                    "licenses": entries.iter().map(|(name, expr)| serde_json::json!({
-                        "package": name,
-                        "expression": expr,
-                    })).collect::<Vec<_>>(),
-                    "total_packages": lockfile.packages.len(),
-                    "declared": lockfile.licenses.len(),
-                    "missing": lockfile.packages.len() - lockfile.licenses.len(),
+                    "packages": pkgs_json,
+                    "summary": {
+                        "declared": declared_count,
+                        "total": entries.len(),
+                        "undeclared": undeclared_count,
+                        "workspace": workspace_count,
+                        "copyleft": copyleft_count,
+                        "permissive": permissive_count,
+                    },
+                    "violations": violations,
+                    "total_packages": entries.len(),
                 });
                 if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
             } else {
                 if !quiet {
-                    if entries.is_empty() {
+                    if filtered_entries.is_empty() {
                         if missing {
                             println!("All packages have license declarations.");
                         } else {
                             println!("No license declarations found.");
                         }
                     } else {
-                        println!("{:24}{:16}{}", "Package", "License", if missing { "Status" } else { "" });
-                        println!("{:24}{:16}{}", "────────────────────────", "────────────────", if missing { "──────" } else { "" });
-                        for (name, expr) in &entries {
+                        println!("{:24}{:16}{:16}{}", "Package", "License", "Source", if missing { "Status" } else { "" });
+                        println!("{:24}{:16}{:16}{}", "────────────────────────", "────────────────", "────────────────", if missing { "──────" } else { "" });
+                        for entry in filtered_entries {
+                            let lic_str = match &entry.license {
+                                Some(l) => l.clone(),
+                                None => "⚠ UNDECLARED".to_string(),
+                            };
+                            let src_short = if entry.source.is_empty() { entry.source_type.clone() } else {
+                                let url = &entry.source;
+                                if url.starts_with("https://") {
+                                    url[8..].split('/').next().unwrap_or(&url[8..]).to_string()
+                                } else {
+                                    url.clone()
+                                }
+                            };
                             if missing {
-                                println!("{:24}{:16}MISSING", name, expr);
+                                println!("{:24}{:16}{:16}MISSING", entry.name, lic_str, src_short);
                             } else {
-                                println!("{:24}{}", name, expr);
+                                println!("{:24}{:16}{}", entry.name, lic_str, src_short);
                             }
                         }
                         println!();
-                        println!("{}/{} declared ({} missing)", lockfile.licenses.len(), lockfile.packages.len(), lockfile.packages.len() - lockfile.licenses.len());
+                        println!("Summary: {}/{} declared, {} copyleft, {} permissive, {} undeclared, {} workspace", declared_count, entries.len(), copyleft_count, permissive_count, undeclared_count, workspace_count);
                     }
                 }
+            }
+
+            if has_violations {
+                std::process::exit(1);
             }
         }
 
