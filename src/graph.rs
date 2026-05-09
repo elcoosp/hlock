@@ -639,6 +639,56 @@ pub fn detect_cycle(lockfile: &Lockfile) -> Option<Vec<String>> {
     None
 }
 
+pub fn all_paths_to_roots(lockfile: &Lockfile, package_name: &str, max_paths: usize) -> Vec<Vec<String>> {
+    let name_to_idx: HashMap<&str, usize> = lockfile.packages.iter()
+        .enumerate()
+        .map(|(i, p)| (p.name.as_str(), i))
+        .collect();
+
+    let start_idx = match name_to_idx.get(package_name) {
+        Some(&idx) => idx,
+        None => return Vec::new(),
+    };
+
+    let mut reverse_adj: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, pkg) in lockfile.packages.iter().enumerate() {
+        for dep in &pkg.dependencies {
+            if let Some(&dep_idx) = name_to_idx.get(dep.name.as_str()) {
+                reverse_adj.entry(dep_idx).or_default().push(i);
+            }
+        }
+    }
+
+    let mut all_paths = Vec::new();
+    let mut queue: Vec<(usize, Vec<String>)> = vec![(start_idx, vec![package_name.to_string()])];
+
+    while let Some((idx, path)) = queue.pop() {
+        let parents = reverse_adj.get(&idx).cloned().unwrap_or_default();
+        if parents.is_empty() {
+            all_paths.push(path);
+            if all_paths.len() >= max_paths {
+                break;
+            }
+        } else {
+            for &parent_idx in &parents {
+                let parent_name = lockfile.packages[parent_idx].name.clone();
+                if path.contains(&parent_name) {
+                    continue;
+                }
+                let mut new_path = path.clone();
+                new_path.push(parent_name);
+                queue.push((parent_idx, new_path));
+            }
+        }
+    }
+
+    for path in &mut all_paths {
+        path.reverse();
+    }
+
+    all_paths
+}
+
 pub fn would_create_cycle(
     lockfile: &Lockfile,
     package_name: &str,

@@ -34,7 +34,7 @@ pub use graph::{
     topological_sort, dependents_of, transitive_deps,
     leaf_packages, detect_cycle, would_create_cycle,
     runtime_deps, dev_deps, runtime_dependents_of, dev_dependents_of,
-    has_dep_path, dep_count,
+    has_dep_path, dep_count, all_paths_to_roots,
 };
 pub use payload::{
     DepPayload, pack_payload, unpack_payload, PeerReqPayload, PlatformTagPayload,

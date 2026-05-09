@@ -106,6 +106,18 @@ enum Commands {
         #[arg(value_name = "SHELL")]
         shell: String,
     },
+    Info {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+    Dedup {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
 }
 
 fn parse_trusted_key(spec: &str) -> Option<(String, (Vec<u8>, signature::SignatureAlgorithm))> {
@@ -567,6 +579,209 @@ fn main() {
                     }
                 }
                 Err(e) => { eprintln!("Merge error: {}", e); std::process::exit(2); }
+            }
+        }
+
+        Commands::Info { file, format } => {
+            let content = match read_input(&file) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
+            };
+
+            let digest_valid = validate_digest(&content).is_ok();
+
+            let lockfile = match deserialize(&content) {
+                Ok(lf) => lf,
+                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+            };
+
+            let mut registry_count = 0usize;
+            let mut git_count = 0usize;
+            let mut workspace_count = 0usize;
+            let mut local_count = 0usize;
+            let mut cas_count = 0usize;
+            let mut ipfs_count = 0usize;
+
+            for pkg in &lockfile.packages {
+                if let Some(source) = lockfile.sources.get(pkg.source_idx) {
+                    match source {
+                        hlock::Source::Registry(_) => registry_count += 1,
+                        hlock::Source::Git(_) => git_count += 1,
+                        hlock::Source::Workspace => workspace_count += 1,
+                        hlock::Source::Local(_) => local_count += 1,
+                        hlock::Source::CasHttp(_) => cas_count += 1,
+                        hlock::Source::Ipfs(_) => ipfs_count += 1,
+                    }
+                }
+            }
+
+            let fmt = output::parse_format(&format);
+
+            if fmt == output::OutputFormat::Json {
+                let mut sources_json = Vec::new();
+                for (idx, source) in lockfile.sources.iter().enumerate() {
+                    let mut obj = serde_json::json!({"index": idx});
+                    match source {
+                        hlock::Source::Registry(u) => { obj["url"] = serde_json::Value::String(u.clone()); obj["type"] = serde_json::Value::String("registry".to_string()); }
+                        hlock::Source::Git(u) => { obj["url"] = serde_json::Value::String(u.clone()); obj["type"] = serde_json::Value::String("git".to_string()); }
+                        hlock::Source::Local(u) => { obj["url"] = serde_json::Value::String(u.clone()); obj["type"] = serde_json::Value::String("local".to_string()); }
+                        hlock::Source::Workspace => { obj["type"] = serde_json::Value::String("workspace".to_string()); }
+                        hlock::Source::CasHttp(u) => { obj["url"] = serde_json::Value::String(u.clone()); obj["type"] = serde_json::Value::String("cas-http".to_string()); }
+                        hlock::Source::Ipfs(u) => { obj["url"] = serde_json::Value::String(u.clone()); obj["type"] = serde_json::Value::String("ipfs".to_string()); }
+                    }
+                    sources_json.push(obj);
+                }
+
+                let policies_json: Vec<serde_json::Value> = lockfile.policies.iter().map(|p| serde_json::json!({"type": p.policy_type.as_str(), "pattern": p.package_pattern, "value": p.value})).collect();
+                let trust_roots_json: Vec<serde_json::Value> = lockfile.trust_roots.iter().map(|tr| serde_json::json!({"key_id": tr.key_id, "algorithm": match tr.algorithm { hlock::signature::SignatureAlgorithm::Ed25519 => "ed25519", hlock::signature::SignatureAlgorithm::MlDsa65 => "mldsa65" }, "role": tr.role.as_str(), "expires_epoch": tr.expires_epoch})).collect();
+                let overrides_json: Vec<serde_json::Value> = lockfile.overrides.iter().map(|o| serde_json::json!({"name": o.name, "from": o.from_version, "to": o.to_version})).collect();
+                let features_json: Vec<serde_json::Value> = lockfile.features.iter().map(|(n, f)| serde_json::json!({"name": n, "flags": f})).collect();
+
+                let adv_report = lockfile.audit();
+                let advisory_summary = serde_json::json!({"critical": adv_report.critical.len(), "high": adv_report.high.len(), "medium": adv_report.medium.len(), "low": adv_report.low.len(), "info": adv_report.info.len()});
+
+                let vex_json: Vec<serde_json::Value> = lockfile.vex_entries.iter().map(|v| serde_json::json!({"package": v.package, "advisory_id": v.advisory_id, "status": v.status.as_str()})).collect();
+
+                let json = serde_json::json!({
+                    "package_count": lockfile.packages.len(),
+                    "packages_by_source": {"registry": registry_count, "git": git_count, "workspace": workspace_count, "local": local_count, "cas_http": cas_count, "ipfs": ipfs_count},
+                    "sources": sources_json,
+                    "mirrors": lockfile.mirrors.iter().map(|m| serde_json::json!({"scope": m.scope, "url": m.url})).collect::<Vec<_>>(),
+                    "policy_count": lockfile.policies.len(),
+                    "policies": policies_json,
+                    "trust_roots": trust_roots_json,
+                    "overrides": overrides_json,
+                    "features": features_json,
+                    "advisory_summary": advisory_summary,
+                    "vex_entries": vex_json,
+                    "license_summary": {"declared": lockfile.licenses.len(), "total": lockfile.packages.len()},
+                    "workspace_root": lockfile.workspace_root,
+                    "workspace_pkgs": lockfile.workspace_pkgs.iter().map(|wp| serde_json::json!({"name": wp.name, "manifest_path": wp.manifest_path})).collect::<Vec<_>>(),
+                    "hoist_boundaries": lockfile.hoist_boundaries.iter().map(|hb| serde_json::json!({"consumer": hb.cosine, "allowed_deps": hb.allowed_deps})).collect::<Vec<_>>(),
+                    "digest_valid": digest_valid,
+                });
+
+                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
+            } else {
+                if !quiet {
+                    println!("hlock v{} lockfile", env!("CARGO_PKG_VERSION"));
+                    println!("────────────────────────");
+
+                    let mut parts = Vec::new();
+                    if registry_count > 0 { parts.push(format!("{} registry", registry_count)); }
+                    if git_count > 0 { parts.push(format!("{} git", git_count)); }
+                    if workspace_count > 0 { parts.push(format!("{} workspace", workspace_count)); }
+                    if local_count > 0 { parts.push(format!("{} local", local_count)); }
+                    if cas_count > 0 { parts.push(format!("{} cas-http", cas_count)); }
+                    if ipfs_count > 0 { parts.push(format!("{} ipfs", ipfs_count)); }
+                    let pkg_detail = if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) };
+                    println!("Packages:       {}{}", lockfile.packages.len(), pkg_detail);
+
+                    println!("Sources:        {}", lockfile.sources.len());
+                    for (idx, source) in lockfile.sources.iter().enumerate() {
+                        let (url, type_str) = match source {
+                            hlock::Source::Registry(u) => (u.as_str(), "registry"),
+                            hlock::Source::Git(u) => (u.as_str(), "git"),
+                            hlock::Source::Local(u) => (u.as_str(), "local"),
+                            hlock::Source::Workspace => ("", "workspace"),
+                            hlock::Source::CasHttp(u) => (u.as_str(), "cas-http"),
+                            hlock::Source::Ipfs(u) => (u.as_str(), "ipfs"),
+                        };
+                        if url.is_empty() { println!("  [{}] {}", idx, type_str); } else { println!("  [{}] {} ({})", idx, url, type_str); }
+                    }
+
+                    if !lockfile.mirrors.is_empty() {
+                        println!("Mirrors:        {}", lockfile.mirrors.len());
+                        for m in &lockfile.mirrors { println!("  {} -> {}", m.scope, m.url); }
+                    }
+
+                    if !lockfile.policies.is_empty() {
+                        println!("Policies:       {}", lockfile.policies.len());
+                        for p in &lockfile.policies { println!("  {} {} {}", p.policy_type.as_str(), p.package_pattern, p.value); }
+                    }
+
+                    if !lockfile.trust_roots.is_empty() {
+                        println!("Trust Roots:    {}", lockfile.trust_roots.len());
+                        for tr in &lockfile.trust_roots {
+                            let algo_str = match tr.algorithm { hlock::signature::SignatureAlgorithm::Ed25519 => "ed25519", hlock::signature::SignatureAlgorithm::MlDsa65 => "mldsa65" };
+                            let expires_str = if tr.expires_epoch == 0 { "never expires".to_string() } else { format!("expires epoch {}", tr.expires_epoch) };
+                            println!("  {} ({}, {}, {})", tr.key_id, algo_str, tr.role.as_str(), expires_str);
+                        }
+                    }
+
+                    if !lockfile.overrides.is_empty() {
+                        println!("Overrides:      {}", lockfile.overrides.len());
+                        for o in &lockfile.overrides { println!("  {} {} -> {}", o.name, o.from_version, o.to_version); }
+                    }
+
+                    if !lockfile.features.is_empty() {
+                        println!("Features:       {}", lockfile.features.len());
+                        for (name, flags) in &lockfile.features { println!("  {} -> {}", name, flags.join(", ")); }
+                    }
+
+                    let adv_report = lockfile.audit();
+                    if adv_report.total_count() > 0 {
+                        println!("Advisories:     {} ({} critical, {} high, {} medium, {} low, {} info)", adv_report.total_count(), adv_report.critical.len(), adv_report.high.len(), adv_report.medium.len(), adv_report.low.len(), adv_report.info.len());
+                        println!("  Run `hlock audit` for details.");
+                    }
+
+                    if !lockfile.vex_entries.is_empty() {
+                        println!("VEX Entries:    {}", lockfile.vex_entries.len());
+                        for v in &lockfile.vex_entries { println!("  {} / {} -> {}", v.package, v.advisory_id, v.status.as_str()); }
+                    }
+
+                    let declared = lockfile.licenses.len();
+                    let total = lockfile.packages.len();
+                    println!("Licenses:       {}/{} declared", declared, total);
+                    if declared < total { println!("  Run `hlock licenses` for details."); }
+
+                    if let Some(ref root) = lockfile.workspace_root {
+                        println!("Workspace:      {}", root);
+                        for wp in &lockfile.workspace_pkgs { println!("  +-- {} ({})", wp.name, wp.manifest_path); }
+                    }
+
+                    if !lockfile.hoist_boundaries.is_empty() {
+                        println!("Hoist Boundaries:");
+                        for hb in &lockfile.hoist_boundaries { println!("  {} -> [{}]", hb.cosine, hb.allowed_deps.join(", ")); }
+                    }
+
+                    if digest_valid { println!("Digest:         valid (blake3)"); } else { println!("Digest:         invalid"); }
+                }
+            }
+        }
+
+        Commands::Dedup { file, format } => {
+            let content = match read_input(&file) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
+            };
+            let lockfile = match deserialize(&content) {
+                Ok(lf) => lf,
+                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+            };
+
+            let opportunities = lockfile.dedup_opportunities();
+            let fmt = output::parse_format(&format);
+
+            if fmt == output::OutputFormat::Json {
+                let json = serde_json::json!({
+                    "opportunities": opportunities.iter().map(|o| serde_json::json!({"package": o.package_name, "versions": o.versions, "potential_saving_bytes": o.potential_saving_bytes})).collect::<Vec<_>>(),
+                });
+                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
+            } else {
+                if !quiet {
+                    if opportunities.is_empty() {
+                        println!("No deduplication opportunities found.");
+                    } else {
+                        println!("Deduplication Opportunities:");
+                        println!();
+                        println!("{:12}{:24}{:16}", "Package", "Versions", "Est. Saving");
+                        println!("{:12}{:24}{:16}", "---------", "------------------------", "--------------");
+                        for o in &opportunities {
+                            println!("{:12}{:24}~{} bytes", o.package_name, o.versions.join(", "), o.potential_saving_bytes);
+                        }
+                    }
+                }
             }
         }
 
