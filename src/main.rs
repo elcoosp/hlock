@@ -84,7 +84,7 @@ enum Commands {
     Graph {
         #[arg(value_name = "FILE")]
         file: PathBuf,
-        #[arg(long)]
+        #[arg(long, required = true)]
         root: Vec<String>,
         #[arg(long)]
         platform: Option<String>,
@@ -170,7 +170,7 @@ enum Commands {
     Tree {
         #[arg(value_name = "FILE")]
         file: PathBuf,
-        #[arg(long)]
+        #[arg(long, required = true)]
         root: Vec<String>,
         #[arg(long)]
         depth: Option<u32>,
@@ -881,16 +881,7 @@ fn main() {
             let max_depth = depth;
             let filter_dep_type = dep_type.clone();
 
-            let root_names: Vec<String> = if root.is_empty() {
-                lockfile.packages.iter()
-                    .filter(|p| {
-                        !lockfile.packages.iter().any(|other| other.dependencies.iter().any(|d| d.name == p.name))
-                    })
-                    .map(|p| p.name.clone())
-                    .collect()
-            } else {
-                root
-            };
+            let root_names = root;
 
             struct TreeNode {
                 name: String,

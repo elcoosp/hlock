@@ -60,7 +60,7 @@ fn test_tree_text() {
     let serialized = make_lockfile_with_tree();
     let path = write_temp_file("tree_text.hlock", &serialized);
     let output = Command::new(hlock_bin())
-        .arg("tree")
+        .arg("tree").arg("--root").arg("my-app")
         .arg(&path)
         .output()
         .expect("failed to run hlock");
@@ -76,7 +76,7 @@ fn test_tree_json() {
     let serialized = make_lockfile_with_tree();
     let path = write_temp_file("tree_json.hlock", &serialized);
     let output = Command::new(hlock_bin())
-        .arg("tree")
+        .arg("tree").arg("--root").arg("my-app")
         .arg(&path)
         .arg("--format")
         .arg("json")
@@ -95,7 +95,7 @@ fn test_tree_with_root() {
     let serialized = make_lockfile_with_tree();
     let path = write_temp_file("tree_root.hlock", &serialized);
     let output = Command::new(hlock_bin())
-        .arg("tree")
+        .arg("tree").arg("--root").arg("my-app")
         .arg(&path)
         .arg("--root")
         .arg("my-app")
