@@ -373,7 +373,9 @@ fn main() {
             };
 
             let rules = build_rule_set(&rule);
+            if verbose { eprintln!("[verbose] Running lint ({} rules)...", rules.len()); }
             let report = hlock::lint::lint(&lockfile, &rules);
+            if verbose { eprintln!("[verbose] Lint complete: {} findings", report.findings.len()); }
 
             let min_sev = match severity.as_str() {
                 "error" => lint::LintSeverity::Error,
@@ -403,12 +405,12 @@ fn main() {
                 let error_count = findings.iter().filter(|f| f["severity"] == "error").count();
                 let warning_count = findings.iter().filter(|f| f["severity"] == "warning").count();
                 let info_count = findings.iter().filter(|f| f["severity"] == "info").count();
-                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                if !quiet { println!("{}", serde_json::to_string_pretty(&serde_json::json!({
                     "findings": findings,
                     "error_count": error_count,
                     "warning_count": warning_count,
                     "info_count": info_count,
-                })).unwrap());
+                })).unwrap()); }
             } else {
                 for f in &report.findings {
                     let sev_str = match f.severity {
@@ -423,7 +425,7 @@ fn main() {
                         lint::LintSeverity::Info => false,
                     };
                     if skip { continue; }
-                    println!("{:8}{:24}{:12}{}", sev_str, f.rule, pkg, f.message);
+                    if !quiet { println!("{:8}{:24}{:12}{}", sev_str, f.rule, pkg, f.message); }
                 }
             }
 
@@ -450,6 +452,7 @@ fn main() {
             };
 
             let diff = diff_lockfiles(&old_lf, &new_lf);
+            if verbose { eprintln!("[verbose] Diff: {} changes, {} unchanged", diff.changes.len(), diff.unchanged_count); }
             let fmt = match format.as_str() {
                 "json" => lockfile::DiffFormat::Json,
                 _ => lockfile::DiffFormat::Text,
@@ -467,16 +470,18 @@ fn main() {
                 Ok(lf) => lf,
                 Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
             };
+            if verbose { eprintln!("[verbose] Running audit..."); }
             let report = lockfile.audit();
+            if verbose { eprintln!("[verbose] Audit complete: {} advisories", report.total_count()); }
 
             if format == "json" {
-                println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                if !quiet { println!("{}", serde_json::to_string_pretty(&serde_json::json!({
                     "critical": report.critical.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
                     "high": report.high.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
                     "medium": report.medium.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
                     "low": report.low.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
                     "info": report.info.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
-                })).unwrap());
+                })).unwrap()); }
             } else {
                 for adv in report.all_advisories() {
                     let sev_str = match adv.severity {
@@ -485,10 +490,9 @@ fn main() {
                         policy::AdvisorySeverity::Low => adv.severity.as_str().to_uppercase().yellow().to_string(),
                         policy::AdvisorySeverity::Info => adv.severity.as_str().to_uppercase().blue().to_string(),
                     };
-                    println!("{:10}{:16}{}   {}   {}", sev_str, adv.package, adv.advisory_id, adv.affected_versions, adv.url);
+                    if !quiet { println!("{:10}{:16}{}   {}   {}", sev_str, adv.package, adv.advisory_id, adv.affected_versions, adv.url); }
                 }
-                println!("---");
-                println!("Total: {} critical/high, {} medium, {} low, {} info", report.critical.len() + report.high.len(), report.medium.len(), report.low.len(), report.info.len());
+                if !quiet { println!("---"); println!("Total: {} critical/high, {} medium, {} low, {} info", report.critical.len() + report.high.len(), report.medium.len(), report.low.len(), report.info.len()); }
             }
 
             if report.has_critical_or_high() { std::process::exit(1); }
@@ -672,6 +676,8 @@ fn main() {
                 Ok(lf) => lf,
                 Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
             };
+
+            if verbose { eprintln!("[verbose] Parsed lockfile: {} packages, {} sources", lockfile.packages.len(), lockfile.sources.len()); }
 
             let mut registry_count = 0usize;
             let mut git_count = 0usize;
