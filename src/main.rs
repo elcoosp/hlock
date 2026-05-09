@@ -160,6 +160,22 @@ enum Commands {
         #[arg(long, default_value = "text")]
         format: String,
     },
+    Tree {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long)]
+        root: Vec<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+    Licenses {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long)]
+        missing: bool,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
 }
 
 fn parse_trusted_key(spec: &str) -> Option<(String, (Vec<u8>, signature::SignatureAlgorithm))> {
@@ -822,6 +838,157 @@ fn main() {
                         for o in &opportunities {
                             println!("{:12}{:24}~{} bytes", o.package_name, o.versions.join(", "), o.potential_saving_bytes);
                         }
+                    }
+                }
+            }
+        }
+
+        Commands::Tree { file, root, format } => {
+            let content = match read_input(&file) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
+            };
+            let lockfile = match deserialize(&content) {
+                Ok(lf) => lf,
+                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+            };
+
+            let fmt = output::parse_format(&format);
+
+            let root_names: Vec<String> = if root.is_empty() {
+                lockfile.packages.iter()
+                    .filter(|p| {
+                        !lockfile.packages.iter().any(|other| other.dependencies.iter().any(|d| d.name == p.name))
+                    })
+                    .map(|p| p.name.clone())
+                    .collect()
+            } else {
+                root
+            };
+
+            let mut visited = HashSet::new();
+
+            fn print_tree(
+                lockfile: &hlock::Lockfile,
+                name: &str,
+                prefix: &str,
+                is_last: bool,
+                visited: &mut HashSet<String>,
+                fmt: output::OutputFormat,
+                lines: &mut Vec<serde_json::Value>,
+            ) {
+                if visited.contains(name) {
+                    if fmt == output::OutputFormat::Text {
+                        println!("{}{}── {} (already listed above)", prefix, if is_last { "└" } else { "├" }, name);
+                    }
+                    return;
+                }
+                visited.insert(name.to_string());
+
+                let connector = if is_last { "└" } else { "├" };
+                let pkg = lockfile.packages.iter().find(|p| p.name == name);
+                let version = pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
+                let license = lockfile.license_for(name).unwrap_or("—");
+
+                if fmt == output::OutputFormat::Text {
+                    println!("{}{}── {}@{} [{}]", prefix, connector, name, version, license);
+                } else {
+                    lines.push(serde_json::json!({
+                        "name": name,
+                        "version": version,
+                        "license": license,
+                    }));
+                }
+
+                if let Some(pkg) = pkg {
+                    let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+                    let dep_count = pkg.dependencies.len();
+                    for (i, dep) in pkg.dependencies.iter().enumerate() {
+                        let is_last_child = i == dep_count - 1;
+                        print_tree(lockfile, &dep.name, &child_prefix, is_last_child, visited, fmt, lines);
+                    }
+                }
+            }
+
+            if fmt == output::OutputFormat::Json {
+                let mut all_lines = Vec::new();
+                for root_name in &root_names {
+                    print_tree(&lockfile, root_name, "", true, &mut visited, fmt, &mut all_lines);
+                }
+                let json = serde_json::json!({
+                    "roots": root_names,
+                    "packages": all_lines,
+                });
+                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
+            } else {
+                if !quiet {
+                    for (i, root_name) in root_names.iter().enumerate() {
+                        if root_names.len() > 1 && i > 0 {
+                            println!();
+                        }
+                        visited.clear();
+                        print_tree(&lockfile, root_name, "", true, &mut visited, fmt, &mut Vec::new());
+                    }
+                }
+            }
+        }
+
+        Commands::Licenses { file, missing, format } => {
+            let content = match read_input(&file) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
+            };
+            let lockfile = match deserialize(&content) {
+                Ok(lf) => lf,
+                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+            };
+
+            let fmt = output::parse_format(&format);
+
+            let licensed: HashSet<&str> = lockfile.licenses.iter().map(|l| l.package.as_str()).collect();
+
+            let entries: Vec<(String, String)> = if missing {
+                lockfile.packages.iter()
+                    .filter(|p| !licensed.contains(p.name.as_str()))
+                    .map(|p| (p.name.clone(), "—".to_string()))
+                    .collect()
+            } else {
+                lockfile.licenses.iter()
+                    .map(|l| (l.package.clone(), l.expression.clone()))
+                    .collect()
+            };
+
+            if fmt == output::OutputFormat::Json {
+                let json = serde_json::json!({
+                    "licenses": entries.iter().map(|(name, expr)| serde_json::json!({
+                        "package": name,
+                        "expression": expr,
+                    })).collect::<Vec<_>>(),
+                    "total_packages": lockfile.packages.len(),
+                    "declared": lockfile.licenses.len(),
+                    "missing": lockfile.packages.len() - lockfile.licenses.len(),
+                });
+                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
+            } else {
+                if !quiet {
+                    if entries.is_empty() {
+                        if missing {
+                            println!("All packages have license declarations.");
+                        } else {
+                            println!("No license declarations found.");
+                        }
+                    } else {
+                        println!("{:24}{:16}{}", "Package", "License", if missing { "Status" } else { "" });
+                        println!("{:24}{:16}{}", "────────────────────────", "────────────────", if missing { "──────" } else { "" });
+                        for (name, expr) in &entries {
+                            if missing {
+                                println!("{:24}{:16}MISSING", name, expr);
+                            } else {
+                                println!("{:24}{}", name, expr);
+                            }
+                        }
+                        println!();
+                        println!("{}/{} declared ({} missing)", lockfile.licenses.len(), lockfile.packages.len(), lockfile.packages.len() - lockfile.licenses.len());
                     }
                 }
             }
