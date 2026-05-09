@@ -1496,12 +1496,14 @@ fn main() {
                 Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
             };
 
+            if verbose { eprintln!("[verbose] Looking up dependents of '{}'...", package); }
             let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
                 Some(p) => p,
                 None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
             };
 
             let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
+            if verbose { eprintln!("[verbose] Found {}@{}", package, version); }
             let fmt = output::parse_format(&format);
 
             let direct: Vec<(String, String, String)> = lockfile.packages.iter()
@@ -1584,12 +1586,14 @@ fn main() {
                 Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
             };
 
+            if verbose { eprintln!("[verbose] Looking up package '{}'...", package); }
             let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
                 Some(p) => p,
                 None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
             };
 
             let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
+            if verbose { eprintln!("[verbose] Found {}@{}", package, version); }
             let fmt = output::parse_format(&format);
 
             let direct: Vec<(String, String, String)> = pkg.dependencies.iter()
@@ -1643,6 +1647,7 @@ fn main() {
                 if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
             } else {
                 if !quiet {
+                    if verbose { eprintln!("[verbose] {} direct, {} transitive deps", direct.len(), transitive_list.len()); }
                     println!("Direct dependencies of {}:", package);
                     if direct.is_empty() {
                         println!("  (none)");
@@ -1672,12 +1677,14 @@ fn main() {
                 Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
             };
 
+            if verbose { eprintln!("[verbose] Looking up package '{}'...", package); }
             let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
                 Some(p) => p,
                 None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
             };
 
             let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
+            if verbose { eprintln!("[verbose] Found {}@{}", package, version); }
             let source_info = lockfile.sources.get(pkg.source_idx);
             let source_str = match source_info {
                 Some(hlock::Source::Registry(u)) => u.clone(),
@@ -1772,6 +1779,7 @@ fn main() {
                 if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
             } else {
                 if !quiet {
+                    if verbose { eprintln!("[verbose] Building dependency chains for '{}'...", package); }
                     println!("{}@{}", package, version);
 
                     for (i, chain) in chains.iter().enumerate() {
