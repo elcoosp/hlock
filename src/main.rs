@@ -138,6 +138,18 @@ enum Commands {
         #[arg(long, default_value = "text")]
         format: String,
     },
+    Dependents {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(value_name = "PACKAGE")]
+        package: String,
+        #[arg(long)]
+        transitive: bool,
+        #[arg(long, default_value = "all")]
+        dep_type: String,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
 }
 
 fn parse_trusted_key(spec: &str) -> Option<(String, (Vec<u8>, signature::SignatureAlgorithm))> {
@@ -799,6 +811,94 @@ fn main() {
                         println!("{:12}{:24}{:16}", "---------", "------------------------", "--------------");
                         for o in &opportunities {
                             println!("{:12}{:24}~{} bytes", o.package_name, o.versions.join(", "), o.potential_saving_bytes);
+                        }
+                    }
+                }
+            }
+        }
+
+        Commands::Dependents { file, package, transitive, dep_type, format } => {
+            let content = match read_input(&file) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
+            };
+            let lockfile = match deserialize(&content) {
+                Ok(lf) => lf,
+                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+            };
+
+            let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
+                Some(p) => p,
+                None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
+            };
+
+            let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
+            let fmt = output::parse_format(&format);
+
+            let direct: Vec<(String, String, String)> = lockfile.packages.iter()
+                .filter(|p| p.dependencies.iter().any(|d| {
+                    d.name == package &&
+                    (dep_type == "all" || match dep_type.as_str() {
+                        "runtime" => matches!(d.dep_type, hlock::DepType::Runtime),
+                        "dev" => matches!(d.dep_type, hlock::DepType::Dev),
+                        _ => true,
+                    })
+                }))
+                .map(|p| {
+                    let dep = p.dependencies.iter().find(|d| d.name == package).unwrap();
+                    let dt = match dep.dep_type {
+                        hlock::DepType::Runtime => "runtime",
+                        hlock::DepType::Dev => "dev",
+                        hlock::DepType::Peer => "peer",
+                        hlock::DepType::Optional => "optional",
+                        hlock::DepType::OptionalTarget(_, _) => "optional-target",
+                    };
+                    (p.name.clone(), format!("{}.{}.{}", p.major, p.minor, p.patch), dt.to_string())
+                })
+                .collect();
+
+            let transitive_names: Vec<String> = if transitive {
+                match dep_type.as_str() {
+                    "runtime" => hlock::runtime_dependents_of(&lockfile, &package),
+                    "dev" => hlock::dev_dependents_of(&lockfile, &package),
+                    _ => hlock::dependents_of(&lockfile, &package),
+                }
+            } else {
+                Vec::new()
+            };
+
+            let transitive_list: Vec<(String, String)> = transitive_names.iter()
+                .filter(|name| !direct.iter().any(|(n, _, _)| n == *name))
+                .filter_map(|name| {
+                    lockfile.packages.iter().find(|p| p.name == *name).map(|p| {
+                        (name.clone(), format!("{}.{}.{}", p.major, p.minor, p.patch))
+                    })
+                })
+                .collect();
+
+            if fmt == output::OutputFormat::Json {
+                let json = serde_json::json!({
+                    "package": package,
+                    "version": version,
+                    "direct": direct.iter().map(|(n, v, dt)| serde_json::json!({"name": n, "version": v, "dep_type": dt})).collect::<Vec<_>>(),
+                    "transitive": transitive_list.iter().map(|(n, v)| serde_json::json!({"name": n, "version": v})).collect::<Vec<_>>(),
+                });
+                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
+            } else {
+                if !quiet {
+                    println!("Direct dependents of {}:", package);
+                    if direct.is_empty() {
+                        println!("  (none)");
+                    } else {
+                        for (name, ver, dt) in &direct {
+                            println!("  {}@{} ({})", name, ver, dt);
+                        }
+                    }
+                    if transitive && !transitive_list.is_empty() {
+                        println!();
+                        println!("Transitive dependents:");
+                        for (name, ver) in &transitive_list {
+                            println!("  {}@{}", name, ver);
                         }
                     }
                 }
