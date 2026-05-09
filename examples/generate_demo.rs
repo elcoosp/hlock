@@ -147,7 +147,7 @@ fn main() {
             ("esm".to_string(), vec!["tree-shaking".to_string(), "async-import".to_string()]),
         ],
         metadata: vec![
-            ("generator".to_string(), "hlock-cli@0.16.0".to_string()),
+            ("generator".to_string(), "hlock-cli@0.17.0".to_string()),
         ],
         workspace_root: Some("/home/dev/my-app".to_string()),
         workspace_pkgs: vec![

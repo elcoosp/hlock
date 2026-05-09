@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-echo "=== hlock v0.16.0 Demo Script ==="
+echo "=== hlock v0.17.0 Demo Script ==="
 echo ""
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -86,6 +86,61 @@ echo "Step 14: Merge (base=v1, ours=v1, theirs=v2, strategy=ours)"
 "$HLOCK" merge --base "$DEMO_DIR/demo.hlock" --ours "$DEMO_DIR/demo.hlock" --theirs "$DEMO_DIR/demo_v2.hlock" --strategy ours > "$DEMO_DIR/merged.hlock" 2>&1
 MERGE_EXIT=$?
 echo "  Merge exit code: $MERGE_EXIT"
+echo ""
+
+echo "Step 15: Info command"
+"$HLOCK" info "$DEMO_DIR/demo.hlock"
+echo ""
+
+echo "Step 16: Why command (why is lodash in the lockfile?)"
+"$HLOCK" why "$DEMO_DIR/demo.hlock" lodash
+echo ""
+
+echo "Step 17: Deps command (direct deps of my-app)"
+"$HLOCK" deps "$DEMO_DIR/demo.hlock" my-app
+echo ""
+
+echo "Step 18: Deps command (transitive deps of my-app)"
+"$HLOCK" deps "$DEMO_DIR/demo.hlock" my-app --transitive
+echo ""
+
+echo "Step 19: Dependents command (who depends on lodash?)"
+"$HLOCK" dependents "$DEMO_DIR/demo.hlock" lodash
+echo ""
+
+echo "Step 20: Dependents command (transitive dependents of lodash)"
+"$HLOCK" dependents "$DEMO_DIR/demo.hlock" lodash --transitive
+echo ""
+
+echo "Step 21: Tree command"
+"$HLOCK" tree "$DEMO_DIR/demo.hlock"
+echo ""
+
+echo "Step 22: Tree command (--root my-app)"
+"$HLOCK" tree "$DEMO_DIR/demo.hlock" --root my-app
+echo ""
+
+echo "Step 23: Dedup command"
+"$HLOCK" dedup "$DEMO_DIR/demo.hlock"
+echo ""
+
+echo "Step 24: Licenses command"
+"$HLOCK" licenses "$DEMO_DIR/demo.hlock"
+echo ""
+
+echo "Step 25: Licenses command (--missing)"
+"$HLOCK" licenses "$DEMO_DIR/demo.hlock" --missing
+echo ""
+
+echo "Step 26: Check command"
+"$HLOCK" check "$DEMO_DIR/demo.hlock"
+CHECK_EXIT=$?
+echo "  Exit code: $CHECK_EXIT"
+echo ""
+
+echo "Step 27: Completions (bash)"
+"$HLOCK" completions bash | head -5
+echo "  ..."
 echo ""
 
 echo "=== Demo Complete ==="
