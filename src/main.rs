@@ -2,6 +2,7 @@ mod output;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use hlock::*;
+use owo_colors::OwoColorize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -157,6 +158,12 @@ enum Commands {
         trusted_key: Vec<String>,
         #[arg(long, default_value_t = 0)]
         time: u64,
+        #[arg(long, default_value = "error")]
+        severity: String,
+        #[arg(long)]
+        rule: Vec<String>,
+        #[arg(long)]
+        vex: bool,
         #[arg(long, default_value = "text")]
         format: String,
     },
@@ -165,6 +172,10 @@ enum Commands {
         file: PathBuf,
         #[arg(long)]
         root: Vec<String>,
+        #[arg(long)]
+        depth: Option<u32>,
+        #[arg(long, default_value = "all")]
+        dep_type: String,
         #[arg(long, default_value = "text")]
         format: String,
     },
@@ -173,6 +184,12 @@ enum Commands {
         file: PathBuf,
         #[arg(long)]
         missing: bool,
+        #[arg(long)]
+        allow: Option<String>,
+        #[arg(long)]
+        deny: Option<String>,
+        #[arg(long)]
+        strict: bool,
         #[arg(long, default_value = "text")]
         format: String,
     },
@@ -843,7 +860,7 @@ fn main() {
             }
         }
 
-        Commands::Tree { file, root, format } => {
+        Commands::Tree { file, root, depth, dep_type, format } => {
             let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
@@ -933,7 +950,7 @@ fn main() {
             }
         }
 
-        Commands::Licenses { file, missing, format } => {
+        Commands::Licenses { file, missing, allow, deny, strict, format } => {
             let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
@@ -994,57 +1011,45 @@ fn main() {
             }
         }
 
-        Commands::Check { file, trusted_key, time, format } => {
+        Commands::Check { file, trusted_key, time, severity, rule, vex, format } => {
             let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
             };
 
             let digest_valid = validate_digest(&content).is_ok();
-            let mut failed = Vec::new();
-            let mut passed = Vec::new();
-
-            if digest_valid {
-                passed.push("digest valid (blake3)".to_string());
-            } else {
-                failed.push("digest invalid (blake3)".to_string());
-            }
 
             let lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
                 Err(e) => {
-                    failed.push(format!("parse error: {}", e));
                     let fmt = output::parse_format(&format);
                     if fmt == output::OutputFormat::Json {
                         if !quiet {
                             println!("{}", serde_json::to_string_pretty(&serde_json::json!({
                                 "digest_valid": digest_valid,
-                                "passed": passed,
-                                "failed": failed,
-                                "passed_count": passed.len(),
-                                "failed_count": failed.len(),
-                                "total": passed.len() + failed.len(),
-                                "result": "fail",
+                                "signature": { "present": false, "valid": false },
+                                "trust_chain_valid": false,
+                                "lint": { "error_count": 0, "warning_count": 0, "info_count": 0, "findings": [] },
+                                "audit": { "critical": [], "high": [], "medium": [], "low": [], "info": [], "vex_suppressed": [] },
+                                "passed": false,
                             })).unwrap());
                         }
                     } else {
                         if !quiet {
-                            println!("CHECK RESULT: FAIL");
-                            for f in &failed { println!("  ✗ {}", f); }
+                            println!("{} parse error: {}", "✗".red().bold(), e);
                         }
                     }
-                    std::process::exit(1);
+                    std::process::exit(2);
                 }
             };
 
             let now = if time > 0 { time } else { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) };
 
-            if !lockfile.trust_roots.is_empty() {
-                match lockfile.validate_trust_chain(now) {
-                    Ok(()) => passed.push("trust chain valid".to_string()),
-                    Err(e) => failed.push(format!("trust chain: {}", e)),
-                }
-            }
+            let trust_chain_valid = if !lockfile.trust_roots.is_empty() {
+                lockfile.validate_trust_chain(now).is_ok()
+            } else {
+                true
+            };
 
             let mut trusted: HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> = HashMap::new();
             for spec in &trusted_key {
@@ -1053,65 +1058,200 @@ fn main() {
                 }
             }
 
-            if !trusted.is_empty() {
+            let (sig_present, sig_valid, sig_key_id, sig_algo) = if !trusted.is_empty() {
                 match verify_signature(&content, &trusted) {
-                    Ok(()) => passed.push("signature valid".to_string()),
-                    Err(e) => failed.push(format!("signature: {}", e)),
+                    Ok(()) => {
+                        let first_key = trusted.keys().next().cloned().unwrap_or_default();
+                        let first_algo = trusted.values().next().map(|(_, a)| *a).unwrap_or(signature::SignatureAlgorithm::Ed25519);
+                        (true, true, first_key, first_algo)
+                    }
+                    Err(_) => {
+                        let first_key = trusted.keys().next().cloned().unwrap_or_default();
+                        let first_algo = trusted.values().next().map(|(_, a)| *a).unwrap_or(signature::SignatureAlgorithm::Ed25519);
+                        (true, false, first_key, first_algo)
+                    }
                 }
-            }
+            } else {
+                (false, true, String::new(), signature::SignatureAlgorithm::Ed25519)
+            };
 
-            let rules = build_rule_set(&[]);
+            let rules = build_rule_set(&rule);
             let lint_report = hlock::lint::lint(&lockfile, &rules);
-            if lint_report.has_errors() {
-                for f in lint_report.errors() {
-                    failed.push(format!("lint: {} - {}", f.rule, f.message));
-                }
-            } else {
-                passed.push(format!("lint: no errors ({} warnings, {} info)", lint_report.warnings().count(), lint_report.findings.iter().filter(|f| f.severity == hlock::lint::LintSeverity::Info).count()));
-            }
 
-            let audit_report = lockfile.audit();
-            if audit_report.has_critical_or_high() {
-                for adv in audit_report.critical.iter().chain(audit_report.high.iter()) {
-                    failed.push(format!("advisory: {} {} ({})", adv.severity.as_str().to_uppercase(), adv.advisory_id, adv.package));
-                }
-            } else {
-                let total = audit_report.total_count();
-                if total == 0 {
-                    passed.push("advisories: none".to_string());
-                } else {
-                    passed.push(format!("advisories: {} (no critical/high)", total));
-                }
-            }
+            let min_sev = match severity.as_str() {
+                "warning" => lint::LintSeverity::Warning,
+                "info" => lint::LintSeverity::Info,
+                _ => lint::LintSeverity::Error,
+            };
 
-            let all_passed = failed.is_empty();
+            let lint_errors: Vec<&lint::LintFinding> = lint_report.findings.iter()
+                .filter(|f| match min_sev {
+                    lint::LintSeverity::Error => f.severity == lint::LintSeverity::Error,
+                    lint::LintSeverity::Warning => matches!(f.severity, lint::LintSeverity::Error | lint::LintSeverity::Warning),
+                    lint::LintSeverity::Info => true,
+                })
+                .collect();
+
+            let audit_report = if vex {
+                lockfile.audit()
+            } else {
+                lockfile.effective_advisories()
+            };
+
+            let audit_has_critical_or_high = audit_report.has_critical_or_high();
+
+            let all_passed = digest_valid && (!sig_present || sig_valid) && trust_chain_valid && lint_errors.is_empty() && !audit_has_critical_or_high;
+
             let fmt = output::parse_format(&format);
 
             if fmt == output::OutputFormat::Json {
+                let sig_algo_str = match sig_algo {
+                    signature::SignatureAlgorithm::Ed25519 => "ed25519",
+                    signature::SignatureAlgorithm::MlDsa65 => "mldsa65",
+                };
+                let lint_findings: Vec<serde_json::Value> = lint_report.findings.iter()
+                    .filter(|f| match min_sev {
+                        lint::LintSeverity::Error => f.severity == lint::LintSeverity::Error,
+                        lint::LintSeverity::Warning => matches!(f.severity, lint::LintSeverity::Error | lint::LintSeverity::Warning),
+                        lint::LintSeverity::Info => true,
+                    })
+                    .map(|f| serde_json::json!({
+                        "rule": f.rule,
+                        "severity": match f.severity {
+                            lint::LintSeverity::Error => "error",
+                            lint::LintSeverity::Warning => "warning",
+                            lint::LintSeverity::Info => "info",
+                        },
+                        "package": f.package,
+                        "message": f.message,
+                    }))
+                    .collect();
+                let vex_suppressed: Vec<serde_json::Value> = if !vex {
+                    let full_audit = lockfile.audit();
+                    let effective_ids: std::collections::HashSet<String> = audit_report.all_advisories().map(|a| a.advisory_id.clone()).collect();
+                    full_audit.all_advisories()
+                        .filter(|a| !effective_ids.contains(&a.advisory_id))
+                        .map(|a| serde_json::json!({
+                            "package": a.package,
+                            "id": a.advisory_id,
+                            "status": lockfile.vex_for(&a.package, &a.advisory_id).map(|v| v.status.as_str()).unwrap_or("unknown"),
+                        }))
+                        .collect()
+                } else {
+                    vec![]
+                };
                 if !quiet {
                     println!("{}", serde_json::to_string_pretty(&serde_json::json!({
                         "digest_valid": digest_valid,
-                        "passed": passed,
-                        "failed": failed,
-                        "passed_count": passed.len(),
-                        "failed_count": failed.len(),
-                        "total": passed.len() + failed.len(),
-                        "result": if all_passed { "pass" } else { "fail" },
+                        "signature": {
+                            "present": sig_present,
+                            "valid": sig_valid,
+                            "key_id": sig_key_id,
+                            "algorithm": sig_algo_str,
+                        },
+                        "trust_chain_valid": trust_chain_valid,
+                        "lint": {
+                            "error_count": lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Error).count(),
+                            "warning_count": lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Warning).count(),
+                            "info_count": lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Info).count(),
+                            "findings": lint_findings,
+                        },
+                        "audit": {
+                            "critical": audit_report.critical.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
+                            "high": audit_report.high.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
+                            "medium": audit_report.medium.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
+                            "low": audit_report.low.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
+                            "info": audit_report.info.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
+                            "vex_suppressed": vex_suppressed,
+                        },
+                        "passed": all_passed,
                     })).unwrap());
                 }
             } else {
                 if !quiet {
-                    if all_passed {
-                        println!("CHECK RESULT: PASS");
-                        for p in &passed { println!("  ✓ {}", p); }
-                        println!();
-                        println!("{}/{} checks passed", passed.len(), passed.len() + failed.len());
+                    if digest_valid { println!("{} Digest valid", "✓".green().bold()); }
+                    else { println!("{} Digest invalid", "✗".red().bold()); }
+
+                    if sig_present {
+                        if sig_valid {
+                            let algo_str = match sig_algo { signature::SignatureAlgorithm::Ed25519 => "ed25519", signature::SignatureAlgorithm::MlDsa65 => "mldsa65" };
+                            println!("{} Signature valid ({}, {})", "✓".green().bold(), sig_key_id, algo_str);
+                        } else {
+                            println!("{} Signature invalid", "✗".red().bold());
+                        }
                     } else {
-                        println!("CHECK RESULT: FAIL");
-                        for p in &passed { println!("  ✓ {}", p); }
-                        for f in &failed { println!("  ✗ {}", f); }
+                        println!("  No signature found (use --trusted-key to verify signatures)");
+                    }
+
+                    if trust_chain_valid { println!("{} Trust chain valid", "✓".green().bold()); }
+                    else { println!("{} Trust chain invalid", "✗".red().bold()); }
+
+                    let err_count = lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Error).count();
+                    let warn_count = lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Warning).count();
+                    let info_count = lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Info).count();
+                    if err_count == 0 && warn_count == 0 && info_count == 0 {
+                        println!("{} Lint: 0 errors, 0 warnings, 0 info", "✓".green().bold());
+                    } else {
+                        println!("Lint: {} error(s), {} warning(s), {} info(s)", err_count, warn_count, info_count);
+                        for f in &lint_errors {
+                            let sev_str = match f.severity {
+                                lint::LintSeverity::Error => "ERROR".red().bold().to_string(),
+                                lint::LintSeverity::Warning => "WARN".yellow().bold().to_string(),
+                                lint::LintSeverity::Info => "INFO".blue().to_string(),
+                            };
+                            let pkg = f.package.as_deref().unwrap_or("-");
+                            println!("  {} {:20} {:12} {}", sev_str, f.rule, pkg, f.message);
+                        }
+                    }
+
+                    if !audit_has_critical_or_high && audit_report.total_count() == 0 {
+                        println!("{} Audit: 0 vulnerabilities", "✓".green().bold());
+                    } else if !audit_has_critical_or_high {
+                        println!("{} Audit: {} (no critical/high)", "✓".green().bold(), audit_report.total_count());
+                    } else {
+                        let crit_count = audit_report.critical.len();
+                        let high_count = audit_report.high.len();
+                        let med_count = audit_report.medium.len();
+                        let low_count = audit_report.low.len();
+                        let info_count = audit_report.info.len();
+                        print!("Audit: {} critical, {} high, {} medium, {} low, {} info", crit_count, high_count, med_count, low_count, info_count);
+                        if !vex {
+                            let full_audit = lockfile.audit();
+                            let effective_ids: std::collections::HashSet<String> = audit_report.all_advisories().map(|a| a.advisory_id.clone()).collect();
+                            let suppressed: Vec<_> = full_audit.all_advisories().filter(|a| !effective_ids.contains(&a.advisory_id)).collect();
+                            if !suppressed.is_empty() {
+                                print!(" ({} VEX-suppressed)", suppressed.len());
+                            }
+                        }
                         println!();
-                        println!("{}/{} checks passed", passed.len(), passed.len() + failed.len());
+                        for adv in audit_report.all_advisories() {
+                            let sev_str = match adv.severity {
+                                policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High => adv.severity.as_str().to_uppercase().red().bold().to_string(),
+                                policy::AdvisorySeverity::Medium => adv.severity.as_str().to_uppercase().yellow().bold().to_string(),
+                                policy::AdvisorySeverity::Low => adv.severity.as_str().to_uppercase().yellow().to_string(),
+                                policy::AdvisorySeverity::Info => adv.severity.as_str().to_uppercase().blue().to_string(),
+                            };
+                            println!("  {} {:12} {:16} {}", sev_str, adv.package, adv.advisory_id, adv.affected_versions);
+                        }
+                        if !vex {
+                            let full_audit = lockfile.audit();
+                            let effective_ids: std::collections::HashSet<String> = audit_report.all_advisories().map(|a| a.advisory_id.clone()).collect();
+                            let suppressed: Vec<_> = full_audit.all_advisories().filter(|a| !effective_ids.contains(&a.advisory_id)).collect();
+                            if !suppressed.is_empty() {
+                                println!("({} advisory suppressed by VEX{})", suppressed.len(), suppressed.iter().map(|a| format!(": {}/{} → {}", a.package, a.advisory_id, lockfile.vex_for(&a.package, &a.advisory_id).map(|v| v.status.as_str()).unwrap_or("unknown"))).collect::<Vec<_>>().join(", "));
+                            }
+                        }
+                    }
+
+                    if !all_passed {
+                        println!();
+                        let mut fail_parts = Vec::new();
+                        if !digest_valid { fail_parts.push("digest invalid".to_string()); }
+                        if sig_present && !sig_valid { fail_parts.push("signature invalid".to_string()); }
+                        if !trust_chain_valid { fail_parts.push("trust chain invalid".to_string()); }
+                        if !lint_errors.is_empty() { fail_parts.push(format!("{} lint errors", lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Error).count())); }
+                        if audit_has_critical_or_high { fail_parts.push(format!("{} critical/high advisory", audit_report.critical.len() + audit_report.high.len())); }
+                        println!("{} {}", "✗".red().bold(), fail_parts.join(", "));
                     }
                 }
             }

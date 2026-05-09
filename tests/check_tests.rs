@@ -110,8 +110,10 @@ fn test_check_json() {
     assert!(output.status.success(), "check --format json should succeed on clean lockfile, stderr: {}", String::from_utf8_lossy(&output.stderr));
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect(&format!("should be valid JSON, got: {}", stdout));
     assert!(parsed["digest_valid"].is_boolean(), "should have digest_valid boolean");
-    assert!(parsed["result"].is_string(), "should have result string");
-    assert_eq!(parsed["result"].as_str(), Some("pass"), "result should be 'pass'");
-    assert!(parsed["passed"].is_array(), "should have passed array");
-    assert!(parsed["failed"].is_array(), "should have failed array");
+    assert!(parsed["passed"].is_boolean(), "should have passed boolean");
+    assert_eq!(parsed["passed"].as_bool(), Some(true), "passed should be true");
+    assert!(parsed["signature"].is_object(), "should have signature object");
+    assert!(parsed["trust_chain_valid"].is_boolean(), "should have trust_chain_valid boolean");
+    assert!(parsed["lint"].is_object(), "should have lint object");
+    assert!(parsed["audit"].is_object(), "should have audit object");
 }
