@@ -718,10 +718,19 @@ fn main() {
 
                 let vex_json: Vec<serde_json::Value> = lockfile.vex_entries.iter().map(|v| serde_json::json!({"package": v.package, "advisory_id": v.advisory_id, "status": v.status.as_str()})).collect();
 
+                let mut pbs_map = serde_json::Map::new();
+                if registry_count > 0 { pbs_map.insert("registry".into(), serde_json::Value::Number(registry_count.into())); }
+                if git_count > 0 { pbs_map.insert("git".into(), serde_json::Value::Number(git_count.into())); }
+                if workspace_count > 0 { pbs_map.insert("workspace".into(), serde_json::Value::Number(workspace_count.into())); }
+                if local_count > 0 { pbs_map.insert("local".into(), serde_json::Value::Number(local_count.into())); }
+                if cas_count > 0 { pbs_map.insert("cas_http".into(), serde_json::Value::Number(cas_count.into())); }
+                if ipfs_count > 0 { pbs_map.insert("ipfs".into(), serde_json::Value::Number(ipfs_count.into())); }
+                let packages_by_source = serde_json::Value::Object(pbs_map);
+
                 let json = serde_json::json!({
                     "version": env!("CARGO_PKG_VERSION"),
                     "package_count": lockfile.packages.len(),
-                    "packages_by_source": {"registry": registry_count, "git": git_count, "workspace": workspace_count, "local": local_count, "cas_http": cas_count, "ipfs": ipfs_count},
+                    "packages_by_source": packages_by_source,
                     "sources": sources_json,
                     "mirrors": lockfile.mirrors.iter().map(|m| serde_json::json!({"scope": m.scope, "url": m.url})).collect::<Vec<_>>(),
                     "policy_count": lockfile.policies.len(),
@@ -1256,21 +1265,24 @@ fn main() {
                 }
             }
 
-            let (sig_present, sig_valid, sig_key_id, sig_algo) = if !trusted.is_empty() {
+            let (sig_present, sig_valid, sig_expired, sig_key_id, sig_algo, sig_expires_epoch) = if !trusted.is_empty() {
                 match verify_signature(&content, &trusted) {
                     Ok(()) => {
                         let first_key = trusted.keys().next().cloned().unwrap_or_default();
                         let first_algo = trusted.values().next().map(|(_, a)| *a).unwrap_or(signature::SignatureAlgorithm::Ed25519);
-                        (true, true, first_key, first_algo)
+                        (true, true, false, first_key, first_algo, 0u64)
+                    }
+                    Err(signature::SignatureError::SignatureExpired { key_id, expires_epoch }) => {
+                        (true, false, true, key_id, signature::SignatureAlgorithm::Ed25519, expires_epoch)
                     }
                     Err(_) => {
                         let first_key = trusted.keys().next().cloned().unwrap_or_default();
                         let first_algo = trusted.values().next().map(|(_, a)| *a).unwrap_or(signature::SignatureAlgorithm::Ed25519);
-                        (true, false, first_key, first_algo)
+                        (true, false, false, first_key, first_algo, 0u64)
                     }
                 }
             } else {
-                (false, true, String::new(), signature::SignatureAlgorithm::Ed25519)
+                (false, true, false, String::new(), signature::SignatureAlgorithm::Ed25519, 0u64)
             };
 
             let rules = build_rule_set(&rule);
@@ -1345,8 +1357,10 @@ fn main() {
                         "signature": {
                             "present": sig_present,
                             "valid": sig_valid,
+                            "expired": sig_expired,
                             "key_id": sig_key_id,
                             "algorithm": sig_algo_str,
+                            "expires_epoch": sig_expires_epoch,
                         },
                         "trust_chain_valid": trust_chain_valid,
                         "lint": {
@@ -1372,7 +1386,9 @@ fn main() {
                     else { println!("{} Digest invalid", "✗".red().bold()); }
 
                     if sig_present {
-                        if sig_valid {
+                        if sig_expired {
+                            println!("{} Signature expired ({}, expired epoch {})", "✗".red().bold(), sig_key_id, sig_expires_epoch);
+                        } else if sig_valid {
                             let algo_str = match sig_algo { signature::SignatureAlgorithm::Ed25519 => "ed25519", signature::SignatureAlgorithm::MlDsa65 => "mldsa65" };
                             println!("{} Signature valid ({}, {})", "✓".green().bold(), sig_key_id, algo_str);
                         } else {
