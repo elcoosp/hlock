@@ -150,6 +150,16 @@ enum Commands {
         #[arg(long, default_value = "text")]
         format: String,
     },
+    Check {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long, value_name = "KEY_ID:ALGO:HEX")]
+        trusted_key: Vec<String>,
+        #[arg(long, default_value_t = 0)]
+        time: u64,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
 }
 
 fn parse_trusted_key(spec: &str) -> Option<(String, (Vec<u8>, signature::SignatureAlgorithm))> {
@@ -814,6 +824,133 @@ fn main() {
                         }
                     }
                 }
+            }
+        }
+
+        Commands::Check { file, trusted_key, time, format } => {
+            let content = match read_input(&file) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
+            };
+
+            let digest_valid = validate_digest(&content).is_ok();
+            let mut failed = Vec::new();
+            let mut passed = Vec::new();
+
+            if digest_valid {
+                passed.push("digest valid (blake3)".to_string());
+            } else {
+                failed.push("digest invalid (blake3)".to_string());
+            }
+
+            let lockfile = match deserialize(&content) {
+                Ok(lf) => lf,
+                Err(e) => {
+                    failed.push(format!("parse error: {}", e));
+                    let fmt = output::parse_format(&format);
+                    if fmt == output::OutputFormat::Json {
+                        if !quiet {
+                            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                                "digest_valid": digest_valid,
+                                "passed": passed,
+                                "failed": failed,
+                                "passed_count": passed.len(),
+                                "failed_count": failed.len(),
+                                "total": passed.len() + failed.len(),
+                                "result": "fail",
+                            })).unwrap());
+                        }
+                    } else {
+                        if !quiet {
+                            println!("CHECK RESULT: FAIL");
+                            for f in &failed { println!("  ✗ {}", f); }
+                        }
+                    }
+                    std::process::exit(1);
+                }
+            };
+
+            let now = if time > 0 { time } else { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) };
+
+            if !lockfile.trust_roots.is_empty() {
+                match lockfile.validate_trust_chain(now) {
+                    Ok(()) => passed.push("trust chain valid".to_string()),
+                    Err(e) => failed.push(format!("trust chain: {}", e)),
+                }
+            }
+
+            let mut trusted: HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> = HashMap::new();
+            for spec in &trusted_key {
+                if let Some((key_id, (pubkey, algo))) = parse_trusted_key(spec) {
+                    trusted.insert(key_id, (pubkey, algo));
+                }
+            }
+
+            if !trusted.is_empty() {
+                match verify_signature(&content, &trusted) {
+                    Ok(()) => passed.push("signature valid".to_string()),
+                    Err(e) => failed.push(format!("signature: {}", e)),
+                }
+            }
+
+            let rules = build_rule_set(&[]);
+            let lint_report = hlock::lint::lint(&lockfile, &rules);
+            if lint_report.has_errors() {
+                for f in lint_report.errors() {
+                    failed.push(format!("lint: {} - {}", f.rule, f.message));
+                }
+            } else {
+                passed.push(format!("lint: no errors ({} warnings, {} info)", lint_report.warnings().count(), lint_report.findings.iter().filter(|f| f.severity == hlock::lint::LintSeverity::Info).count()));
+            }
+
+            let audit_report = lockfile.audit();
+            if audit_report.has_critical_or_high() {
+                for adv in audit_report.critical.iter().chain(audit_report.high.iter()) {
+                    failed.push(format!("advisory: {} {} ({})", adv.severity.as_str().to_uppercase(), adv.advisory_id, adv.package));
+                }
+            } else {
+                let total = audit_report.total_count();
+                if total == 0 {
+                    passed.push("advisories: none".to_string());
+                } else {
+                    passed.push(format!("advisories: {} (no critical/high)", total));
+                }
+            }
+
+            let all_passed = failed.is_empty();
+            let fmt = output::parse_format(&format);
+
+            if fmt == output::OutputFormat::Json {
+                if !quiet {
+                    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+                        "digest_valid": digest_valid,
+                        "passed": passed,
+                        "failed": failed,
+                        "passed_count": passed.len(),
+                        "failed_count": failed.len(),
+                        "total": passed.len() + failed.len(),
+                        "result": if all_passed { "pass" } else { "fail" },
+                    })).unwrap());
+                }
+            } else {
+                if !quiet {
+                    if all_passed {
+                        println!("CHECK RESULT: PASS");
+                        for p in &passed { println!("  ✓ {}", p); }
+                        println!();
+                        println!("{}/{} checks passed", passed.len(), passed.len() + failed.len());
+                    } else {
+                        println!("CHECK RESULT: FAIL");
+                        for p in &passed { println!("  ✓ {}", p); }
+                        for f in &failed { println!("  ✗ {}", f); }
+                        println!();
+                        println!("{}/{} checks passed", passed.len(), passed.len() + failed.len());
+                    }
+                }
+            }
+
+            if !all_passed {
+                std::process::exit(1);
             }
         }
 
