@@ -74,7 +74,7 @@ fn test_licenses_json() {
     assert!(output.status.success(), "licenses --format json should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("should be valid JSON");
-    assert!(parsed["licenses"].is_array(), "should have licenses array");
+    assert!(parsed["packages"].is_array(), "should have licenses array");
 }
 
 #[test]

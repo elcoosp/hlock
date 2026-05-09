@@ -1314,7 +1314,8 @@ fn main() {
 
             let audit_has_critical_or_high = audit_report.has_critical_or_high();
 
-            let all_passed = digest_valid && (!sig_present || sig_valid) && trust_chain_valid && lint_errors.is_empty() && !audit_has_critical_or_high;
+            let hard_failure = !digest_valid || (sig_present && !sig_valid) || !trust_chain_valid;
+            let soft_failure = !lint_errors.is_empty() || audit_has_critical_or_high;
 
             let fmt = output::parse_format(&format);
 
@@ -1378,7 +1379,7 @@ fn main() {
                             "info": audit_report.info.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
                             "vex_suppressed": vex_suppressed,
                         },
-                        "passed": all_passed,
+                        "passed": !hard_failure && !soft_failure,
                     })).unwrap());
                 }
             } else {
@@ -1457,7 +1458,7 @@ fn main() {
                         }
                     }
 
-                    if !all_passed {
+                    if hard_failure || soft_failure {
                         println!();
                         let mut fail_parts = Vec::new();
                         if !digest_valid { fail_parts.push("digest invalid".to_string()); }
@@ -1470,7 +1471,9 @@ fn main() {
                 }
             }
 
-            if !all_passed {
+            if hard_failure {
+                std::process::exit(2);
+            } else if soft_failure {
                 std::process::exit(1);
             }
         }
@@ -1737,8 +1740,9 @@ fn main() {
                         });
                         serde_json::json!({
                             "name": name,
-                            "constraint": constraint,
-                            "dep_type": dep_type_str,
+                            "version": lockfile.packages.iter().find(|p| p.name == *name).map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default(),
+                        "constraint": constraint,
+                        "dep_type": dep_type_str,
                         })
                     }).collect()
                 }).collect();

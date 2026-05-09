@@ -13,6 +13,7 @@ pub enum OutputFormat {
     Json,
 }
 
+#[allow(dead_code)]
 pub struct ColorConfig {
     when: ColorWhen,
 }
