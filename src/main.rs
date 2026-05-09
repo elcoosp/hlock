@@ -385,6 +385,7 @@ fn main() {
             };
 
             if format == "json" {
+                owo_colors::set_override(false);
                 let findings: Vec<serde_json::Value> = report.findings.iter()
                     .filter(|f| match min_sev {
                         lint::LintSeverity::Error => f.severity == lint::LintSeverity::Error,
@@ -454,7 +455,10 @@ fn main() {
             let diff = diff_lockfiles(&old_lf, &new_lf);
             if verbose { eprintln!("[verbose] Diff: {} changes, {} unchanged", diff.changes.len(), diff.unchanged_count); }
             let fmt = match format.as_str() {
-                "json" => lockfile::DiffFormat::Json,
+                "json" => {
+                    owo_colors::set_override(false);
+                    lockfile::DiffFormat::Json
+                }
                 _ => lockfile::DiffFormat::Text,
             };
             if !quiet { print!("{}", serialize_diff(&diff, fmt)); }
@@ -475,6 +479,7 @@ fn main() {
             if verbose { eprintln!("[verbose] Audit complete: {} advisories", report.total_count()); }
 
             if format == "json" {
+                owo_colors::set_override(false);
                 if !quiet { println!("{}", serde_json::to_string_pretty(&serde_json::json!({
                     "critical": report.critical.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
                     "high": report.high.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
@@ -499,6 +504,7 @@ fn main() {
         }
 
         Commands::Sbom { file, namespace, format } => {
+            owo_colors::set_override(false);
             if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
             let content = match read_input(&file) {
                 Ok(c) => c,

@@ -65,7 +65,10 @@ impl ColorConfig {
 
 pub fn parse_format(format: &str) -> OutputFormat {
     match format {
-        "json" => OutputFormat::Json,
+        "json" => {
+            owo_colors::set_override(false);
+            OutputFormat::Json
+        }
         _ => OutputFormat::Text,
     }
 }
