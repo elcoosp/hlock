@@ -1,6 +1,6 @@
 mod output;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use hlock::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -102,6 +102,10 @@ enum Commands {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    Completions {
+        #[arg(value_name = "SHELL")]
+        shell: String,
+    },
 }
 
 fn parse_trusted_key(spec: &str) -> Option<(String, (Vec<u8>, signature::SignatureAlgorithm))> {
@@ -145,6 +149,62 @@ fn parse_platform(spec: &str) -> Option<(lockfile::TargetOS, lockfile::TargetArc
         _ => return None,
     };
     Some((os, arch))
+}
+
+use std::collections::HashSet;
+
+fn build_rule_set(rule_args: &[String]) -> Vec<Box<dyn hlock::lint::LintRule>> {
+    use hlock::lint::*;
+
+    let all_rules: Vec<(&str, Box<dyn LintRule>)> = vec![
+        ("no-git-urls", Box::new(NoGitUrls) as Box<dyn LintRule>),
+        ("require-integrity", Box::new(RequireIntegrity)),
+        ("no-sha1", Box::new(NoSha1)),
+        ("no-peer-as-runtime", Box::new(NoPeerAsRuntime)),
+        ("max-depth", Box::new(MaxDepth { max: 5 })),
+        ("require-attestation", Box::new(RequireAttestation)),
+        ("no-known-vulnerabilities", Box::new(NoKnownVulnerabilities)),
+        ("require-license", Box::new(RequireLicense)),
+        ("deny-copyleft", Box::new(DenyCopyleft)),
+        ("require-trust-root", Box::new(RequireTrustRoot)),
+        ("no-expired-keys", Box::new(NoExpiredKeys)),
+        ("deny-postinstall", Box::new(DenyPostinstall)),
+    ];
+
+    let mut includes: HashSet<String> = HashSet::new();
+    let mut excludes: HashSet<String> = HashSet::new();
+
+    for arg in rule_args {
+        if let Some(name) = arg.strip_prefix('-') {
+            excludes.insert(name.to_string());
+        } else {
+            includes.insert(arg.clone());
+        }
+    }
+
+    if includes.is_empty() && excludes.is_empty() {
+        return all_rules.into_iter().map(|(_, r)| r).collect();
+    }
+
+    let valid_names: HashSet<&str> = all_rules.iter().map(|(n, _)| *n).collect();
+    for name in includes.iter().chain(excludes.iter()) {
+        if !valid_names.contains(name.as_str()) {
+            eprintln!("Error: unknown rule '{}'. Available rules: {}", name, valid_names.iter().cloned().collect::<Vec<&str>>().join(", "));
+            std::process::exit(2);
+        }
+    }
+
+    all_rules.into_iter()
+        .filter(|(name, _)| {
+            if !includes.is_empty() {
+                includes.contains(*name)
+            } else {
+                true
+            }
+        })
+        .filter(|(name, _)| !excludes.contains(*name))
+        .map(|(_, r)| r)
+        .collect()
 }
 
 fn read_input(path: &std::path::Path) -> Result<String, hlock::Error> {
@@ -228,12 +288,8 @@ fn main() {
                 Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
             };
 
-            let report = if rule.is_empty() {
-                lint_default(&lockfile)
-            } else {
-                eprintln!("Named rule filtering not yet supported, using default ruleset");
-                lint_default(&lockfile)
-            };
+            let rules = build_rule_set(&rule);
+            let report = hlock::lint::lint(&lockfile, &rules);
 
             let min_sev = match severity.as_str() {
                 "error" => lint::LintSeverity::Error,
@@ -512,6 +568,24 @@ fn main() {
                 }
                 Err(e) => { eprintln!("Merge error: {}", e); std::process::exit(2); }
             }
+        }
+
+        Commands::Completions { shell } => {
+            use clap_complete::{generate, Shell};
+            let shell_type = match shell.as_str() {
+                "bash" => Shell::Bash,
+                "zsh" => Shell::Zsh,
+                "fish" => Shell::Fish,
+                "elvish" => Shell::Elvish,
+                "powershell" => Shell::PowerShell,
+                _ => {
+                    eprintln!("Error: unknown shell '{}'. Supported: bash, zsh, fish, elvish, powershell", shell);
+                    std::process::exit(2);
+                }
+            };
+            let mut cmd = Cli::command();
+            let name = "hlock";
+            generate(shell_type, &mut cmd, name, &mut std::io::stdout());
         }
     }
 }

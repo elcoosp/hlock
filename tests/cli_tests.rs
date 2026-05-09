@@ -117,6 +117,21 @@ fn test_cli_audit_clean() {
 }
 
 #[test]
+fn test_cli_lint_rule_unknown() {
+    let serialized = make_simple_lockfile();
+    let path = write_temp_file("lint_rule_unknown.hlock", &serialized);
+    let output = Command::new(hlock_bin())
+        .arg("lint")
+        .arg(&path)
+        .arg("--rule=nonexistent-rule")
+        .output()
+        .expect("failed to run hlock");
+    assert!(!output.status.success(), "unknown rule should cause error exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("unknown rule"), "stderr should mention unknown rule, got: {}", stderr);
+}
+
+#[test]
 fn test_cli_sbom_spdx() {
     let serialized = make_simple_lockfile();
     let path = write_temp_file("sbom_spdx.hlock", &serialized);
