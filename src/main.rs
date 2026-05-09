@@ -118,6 +118,14 @@ enum Commands {
         #[arg(long, default_value = "text")]
         format: String,
     },
+    Why {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(value_name = "PACKAGE")]
+        package: String,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
 }
 
 fn parse_trusted_key(spec: &str) -> Option<(String, (Vec<u8>, signature::SignatureAlgorithm))> {
@@ -780,6 +788,166 @@ fn main() {
                         for o in &opportunities {
                             println!("{:12}{:24}~{} bytes", o.package_name, o.versions.join(", "), o.potential_saving_bytes);
                         }
+                    }
+                }
+            }
+        }
+
+        Commands::Why { file, package, format } => {
+            let content = match read_input(&file) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
+            };
+            let lockfile = match deserialize(&content) {
+                Ok(lf) => lf,
+                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+            };
+
+            let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
+                Some(p) => p,
+                None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
+            };
+
+            let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
+            let source_info = lockfile.sources.get(pkg.source_idx);
+            let source_str = match source_info {
+                Some(hlock::Source::Registry(u)) => u.clone(),
+                Some(hlock::Source::Git(u)) => u.clone(),
+                Some(hlock::Source::Workspace) => "workspace".to_string(),
+                Some(hlock::Source::Local(u)) => u.clone(),
+                Some(hlock::Source::CasHttp(u)) => u.clone(),
+                Some(hlock::Source::Ipfs(u)) => u.clone(),
+                None => "unknown".to_string(),
+            };
+            let source_type_str = match source_info {
+                Some(hlock::Source::Registry(_)) => "registry",
+                Some(hlock::Source::Git(_)) => "git",
+                Some(hlock::Source::Workspace) => "workspace",
+                Some(hlock::Source::Local(_)) => "local",
+                Some(hlock::Source::CasHttp(_)) => "cas-http",
+                Some(hlock::Source::Ipfs(_)) => "ipfs",
+                None => "unknown",
+            };
+
+            let license = lockfile.license_for(&package).map(String::from);
+            let integrity = pkg.hashes.first().map(|h| {
+                let algo = match h.algo {
+                    hlock::HashAlgorithm::Sha1 => "sha1",
+                    hlock::HashAlgorithm::Sha256 => "sha256",
+                    hlock::HashAlgorithm::Sha512 => "sha512",
+                    hlock::HashAlgorithm::Blake3 => "blake3",
+                };
+                let hex: String = h.digest.iter().map(|b| format!("{:02x}", b)).collect();
+                format!("{}-{}", algo, hex)
+            });
+
+            let advisories: Vec<&hlock::policy::Advisory> = lockfile.advisories.iter()
+                .filter(|a| a.package == package)
+                .collect();
+
+            let prov_chain = lockfile.dependency_chain(&package);
+            let has_provenance = !prov_chain.is_empty();
+
+            let chains = if has_provenance {
+                let primary: Vec<String> = prov_chain.iter().map(|p| p.package_name.clone()).collect();
+                let mut all_chains = vec![primary];
+                let graph_chains = hlock::graph::all_paths_to_roots(&lockfile, &package, 5);
+                for gc in &graph_chains {
+                    let primary_set: HashSet<String> = all_chains[0].iter().cloned().collect();
+                    let gc_set: HashSet<String> = gc.iter().cloned().collect();
+                    if gc_set != primary_set {
+                        all_chains.push(gc.clone());
+                    }
+                    if all_chains.len() >= 5 { break; }
+                }
+                all_chains
+            } else {
+                hlock::graph::all_paths_to_roots(&lockfile, &package, 5)
+            };
+
+            let fmt = output::parse_format(&format);
+
+            if fmt == output::OutputFormat::Json {
+                let chains_json: Vec<Vec<serde_json::Value>> = chains.iter().map(|chain| {
+                    chain.iter().map(|name| {
+                        let constraint = lockfile.provenance_for(name).map(|p| p.constraint.clone());
+                        let dep_type_str = lockfile.provenance_for(name).map(|p| match p.dep_type {
+                            hlock::DepType::Runtime => "runtime",
+                            hlock::DepType::Dev => "dev",
+                            hlock::DepType::Peer => "peer",
+                            _ => "other",
+                        });
+                        serde_json::json!({
+                            "name": name,
+                            "constraint": constraint,
+                            "dep_type": dep_type_str,
+                        })
+                    }).collect()
+                }).collect();
+
+                let json = serde_json::json!({
+                    "package": package,
+                    "version": version,
+                    "chains": chains_json,
+                    "source": source_str,
+                    "source_type": source_type_str,
+                    "license": license,
+                    "integrity": integrity,
+                    "advisories": advisories.iter().map(|a| serde_json::json!({
+                        "id": a.advisory_id,
+                        "severity": a.severity.as_str(),
+                    })).collect::<Vec<_>>(),
+                    "has_provenance": has_provenance,
+                });
+                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
+            } else {
+                if !quiet {
+                    println!("{}@{}", package, version);
+
+                    for (i, chain) in chains.iter().enumerate() {
+                        if chains.len() > 1 {
+                            println!();
+                            println!("Chain {}:", i + 1);
+                        }
+                        for (j, name) in chain.iter().enumerate() {
+                            let pkg_ver = lockfile.packages.iter().find(|p| p.name == *name)
+                                .map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch))
+                                .unwrap_or_default();
+                            let constraint = lockfile.provenance_for(name).map(|p| p.constraint.as_str()).unwrap_or("");
+                            let dep_type_str = lockfile.provenance_for(name).map(|p| match p.dep_type {
+                                hlock::DepType::Runtime => "runtime",
+                                hlock::DepType::Dev => "dev",
+                                _ => "other"
+                            }).unwrap_or("");
+                            if j == 0 {
+                                println!("  {}@{}", name, pkg_ver);
+                            } else {
+                                let prefix = if j == chain.len() - 1 { "└──" } else { "├──" };
+                                if constraint.is_empty() {
+                                    println!("  {} {}@{}", prefix, name, pkg_ver);
+                                } else {
+                                    println!("  {} {}@{} ({}, {})", prefix, name, pkg_ver, constraint, dep_type_str);
+                                }
+                            }
+                        }
+                    }
+
+                    println!();
+                    println!("Source: {}", source_str);
+                    println!("License: {}", license.unwrap_or_else(|| "—".to_string()));
+                    println!("Integrity: {}", integrity.unwrap_or_else(|| "—".to_string()));
+                    if advisories.is_empty() {
+                        println!("Advisories: none");
+                    } else {
+                        println!("Advisories:");
+                        for a in &advisories {
+                            println!("  {} {} ({})", a.severity.as_str().to_uppercase(), a.advisory_id, a.affected_versions);
+                        }
+                    }
+
+                    if !has_provenance {
+                        println!();
+                        println!("Note: no @provenance data; constraints not available");
                     }
                 }
             }
