@@ -134,7 +134,7 @@ pub fn sign_lockfile(
 
 pub fn verify_signature(
     lockfile_content: &str,
-    trusted_keys: &HashMap<String, (&[u8], SignatureAlgorithm)>,
+    trusted_keys: &HashMap<String, (Vec<u8>, SignatureAlgorithm)>,
 ) -> Result<(), SignatureError> {
     let mut sig_start: Option<usize> = None;
     let mut sig_directives: Vec<SignatureDirective> = Vec::new();
@@ -178,7 +178,7 @@ pub fn verify_signature(
                 if expected_pub_key.len() != 32 {
                     return Err(SignatureError::MalformedDirective { reason: "Ed25519 public key must be 32 bytes".to_string() });
                 }
-                let pk_bytes: [u8; 32] = (*expected_pub_key).try_into().map_err(|_| {
+                let pk_bytes: [u8; 32] = expected_pub_key.as_slice().try_into().map_err(|_| {
                     SignatureError::MalformedDirective { reason: "invalid Ed25519 public key".to_string() }
                 })?;
                 let sig_bytes: [u8; 64] = directive.signature_bytes.as_slice().try_into().map_err(|_| {
@@ -197,7 +197,7 @@ pub fn verify_signature(
                         reason: format!("ML-DSA-65 public key must be {} bytes", fips204::ml_dsa_65::PK_LEN),
                     });
                 }
-                let pk_bytes: <fips204::ml_dsa_65::PublicKey as FipsSerDes>::ByteArray = (*expected_pub_key).try_into().map_err(|_| {
+                let pk_bytes: <fips204::ml_dsa_65::PublicKey as FipsSerDes>::ByteArray = expected_pub_key.as_slice().try_into().map_err(|_| {
                     SignatureError::MalformedDirective {
                         reason: "invalid ML-DSA-65 public key".to_string(),
                     }
@@ -236,10 +236,9 @@ mod tests {
         *signing_key.verifying_key().as_bytes()
     }
 
-    fn make_trusted() -> HashMap<String, (&'static [u8], SignatureAlgorithm)> {
+    fn make_trusted() -> HashMap<String, (Vec<u8>, SignatureAlgorithm)> {
         let mut m = HashMap::new();
-        let leaked: &'static [u8] = &*Box::leak(Box::new(public_key()) as Box<[u8]>);
-        m.insert("ci@example.com".to_string(), (leaked, SignatureAlgorithm::Ed25519));
+        m.insert("ci@example.com".to_string(), (public_key().to_vec(), SignatureAlgorithm::Ed25519));
         m
     }
 
@@ -287,7 +286,7 @@ mod tests {
     #[test]
     fn test_verify_no_signature() {
         let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
-        let trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+        let mut trusted: HashMap<String, (Vec<u8>, SignatureAlgorithm)> = HashMap::new();
         assert!(verify_signature(lockfile, &trusted).is_ok());
     }
 
@@ -314,7 +313,7 @@ mod tests {
         let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
         let signed = sign_lockfile(lockfile, "ci@example.com", SignatureAlgorithm::Ed25519, &SEED, 0).unwrap();
         let with_embedded = signed.replace("@signature ", "x@signature ");
-        let trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+        let mut trusted: HashMap<String, (Vec<u8>, SignatureAlgorithm)> = HashMap::new();
         assert!(verify_signature(&with_embedded, &trusted).is_ok());
     }
 
@@ -322,7 +321,7 @@ mod tests {
     fn test_untrusted_key_rejected_with_signed_lockfile() {
         let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
         let signed = sign_lockfile(lockfile, "ci@example.com", SignatureAlgorithm::Ed25519, &SEED, 0).unwrap();
-        let trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+        let mut trusted: HashMap<String, (Vec<u8>, SignatureAlgorithm)> = HashMap::new();
         match verify_signature(&signed, &trusted) {
             Err(SignatureError::UntrustedKey { key_id }) if key_id == "ci@example.com" => {}
             other => panic!("expected UntrustedKey, got {:?}", other),
@@ -362,7 +361,7 @@ mod tests {
     fn test_verify_rejects_untrusted_key() {
         let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
         let signed = sign_lockfile(lockfile, "ci@example.com", SignatureAlgorithm::Ed25519, &SEED, 0).unwrap();
-        let trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+        let mut trusted: HashMap<String, (Vec<u8>, SignatureAlgorithm)> = HashMap::new();
         match verify_signature(&signed, &trusted) {
             Err(SignatureError::UntrustedKey { .. }) => {}
             other => panic!("expected UntrustedKey, got {:?}", other),
@@ -389,9 +388,8 @@ mod tests {
 
         let signed = sign_lockfile(lockfile, "pq@test.com", SignatureAlgorithm::MlDsa65, &sk_bytes, 0).unwrap();
 
-        let leaked: &'static [u8] = Box::leak(Box::new(vk_bytes) as Box<[u8]>);
-        let mut trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
-        trusted.insert("pq@test.com".to_string(), (leaked, SignatureAlgorithm::MlDsa65));
+        let mut trusted: HashMap<String, (Vec<u8>, SignatureAlgorithm)> = HashMap::new();
+        trusted.insert("pq@test.com".to_string(), (vk_bytes.to_vec(), SignatureAlgorithm::MlDsa65));
 
         let result = verify_signature(&signed, &trusted);
         assert!(result.is_ok(), "ML-DSA-65 verify failed: {:?}", result);
@@ -407,9 +405,8 @@ mod tests {
         let signed = sign_lockfile(lockfile, "pq@test.com", SignatureAlgorithm::MlDsa65, &sk_bytes, 0).unwrap();
 
         let tampered = signed.replace("r.com", "r.org");
-        let leaked: &'static [u8] = Box::leak(Box::new(vk_bytes) as Box<[u8]>);
-        let mut trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
-        trusted.insert("pq@test.com".to_string(), (leaked, SignatureAlgorithm::MlDsa65));
+        let mut trusted: HashMap<String, (Vec<u8>, SignatureAlgorithm)> = HashMap::new();
+        trusted.insert("pq@test.com".to_string(), (vk_bytes.to_vec(), SignatureAlgorithm::MlDsa65));
 
         match verify_signature(&tampered, &trusted) {
             Err(SignatureError::MlDsaVerificationFailed) => {}
@@ -432,6 +429,17 @@ mod tests {
         let directive = parse_signature_directive(&line).unwrap();
         assert_eq!(directive.algorithm, SignatureAlgorithm::MlDsa65);
         assert_eq!(directive.key_id, "pq@co.com");
+    }
+
+    #[test]
+    fn test_verify_with_owned_vec_keys() {
+        let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
+        let signed = sign_lockfile(lockfile, "ci@example.com", SignatureAlgorithm::Ed25519, &SEED, 0).unwrap();
+
+        let mut trusted: HashMap<String, (Vec<u8>, SignatureAlgorithm)> = HashMap::new();
+        trusted.insert("ci@example.com".to_string(), (public_key().to_vec(), SignatureAlgorithm::Ed25519));
+
+        assert!(verify_signature(&signed, &trusted).is_ok());
     }
 
     #[test]

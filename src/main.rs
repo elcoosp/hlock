@@ -1,3 +1,5 @@
+mod output;
+
 use clap::{Parser, Subcommand};
 use hlock::*;
 use std::collections::HashMap;
@@ -8,6 +10,18 @@ use std::path::PathBuf;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    #[arg(short, long, global = true, help = "Suppress non-error output")]
+    quiet: bool,
+
+    #[arg(short, long, global = true, help = "Show extra diagnostic information")]
+    verbose: bool,
+
+    #[arg(long, global = true, help = "Disable colored output")]
+    no_color: bool,
+
+    #[arg(long, default_value = "auto", global = true, help = "When to colorize: auto, always, never")]
+    color: String,
 }
 
 #[derive(Subcommand)]
@@ -133,12 +147,36 @@ fn parse_platform(spec: &str) -> Option<(lockfile::TargetOS, lockfile::TargetArc
     Some((os, arch))
 }
 
+fn read_input(path: &std::path::Path) -> Result<String, hlock::Error> {
+    if path == std::path::Path::new("-") {
+        std::io::read_to_string(std::io::stdin())
+            .map_err(hlock::Error::Io)
+    } else {
+        std::fs::read_to_string(path)
+            .map_err(hlock::Error::Io)
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
+    if cli.verbose && cli.quiet {
+        eprintln!("Error: --quiet and --verbose are mutually exclusive");
+        std::process::exit(2);
+    }
+
+    let quiet = cli.quiet;
+    let verbose = cli.verbose;
+    let _color_config = output::ColorConfig::from_cli_args(
+        &cli.color,
+        cli.no_color,
+        output::OutputFormat::Text,
+    );
+
     match cli.command {
         Commands::Verify { file, trusted_key, time } => {
-            let content = match std::fs::read_to_string(&file) {
+            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
+            let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
             };
@@ -149,11 +187,10 @@ fn main() {
             }
             println!("✓ digest valid");
 
-            let mut trusted: HashMap<String, (&[u8], signature::SignatureAlgorithm)> = HashMap::new();
+            let mut trusted: HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> = HashMap::new();
             for spec in &trusted_key {
                 if let Some((key_id, (pubkey, algo))) = parse_trusted_key(spec) {
-                    let leaked: &'static [u8] = Box::leak(pubkey.into_boxed_slice());
-                    trusted.insert(key_id, (leaked, algo));
+                    trusted.insert(key_id, (pubkey, algo));
                 }
             }
 
@@ -181,7 +218,8 @@ fn main() {
         }
 
         Commands::Lint { file, rule, severity, format } => {
-            let content = match std::fs::read_to_string(&file) {
+            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
+            let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
             };
@@ -253,11 +291,12 @@ fn main() {
         }
 
         Commands::Diff { old_file, new_file, format } => {
-            let old_content = match std::fs::read_to_string(&old_file) {
+            if verbose { eprintln!("[verbose] Reading {} and {}...", old_file.display(), new_file.display()); }
+            let old_content = match read_input(&old_file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", old_file.display(), e); std::process::exit(2); }
             };
-            let new_content = match std::fs::read_to_string(&new_file) {
+            let new_content = match read_input(&new_file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", new_file.display(), e); std::process::exit(2); }
             };
@@ -279,7 +318,8 @@ fn main() {
         }
 
         Commands::Audit { file, format } => {
-            let content = match std::fs::read_to_string(&file) {
+            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
+            let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
             };
@@ -309,7 +349,8 @@ fn main() {
         }
 
         Commands::Sbom { file, namespace, format } => {
-            let content = match std::fs::read_to_string(&file) {
+            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
+            let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
             };
@@ -328,7 +369,12 @@ fn main() {
         }
 
         Commands::Sign { file, key_id, algorithm, private_key, expires, in_place } => {
-            let content = match std::fs::read_to_string(&file) {
+            if in_place && file == std::path::Path::new("-") {
+                eprintln!("Error: --in-place cannot be used with stdin input");
+                std::process::exit(2);
+            }
+            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
+            let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
             };
@@ -375,7 +421,8 @@ fn main() {
         }
 
         Commands::Graph { file, root, platform, output } => {
-            let content = match std::fs::read_to_string(&file) {
+            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
+            let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
             };
@@ -425,7 +472,7 @@ fn main() {
 
         Commands::Merge { base, ours, theirs, strategy, output } => {
             let read_file = |path: &PathBuf| -> Result<Lockfile, String> {
-                let content = std::fs::read_to_string(path).map_err(|e| format!("Error reading {}: {}", path.display(), e))?;
+                let content = read_input(path).map_err(|e| format!("Error reading {}: {}", path.display(), e))?;
                 deserialize(&content).map_err(|e| format!("Parse error in {}: {}", path.display(), e))
             };
 

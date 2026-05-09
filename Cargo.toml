@@ -1,6 +1,6 @@
 [package]
 name = "hlock"
-version = "0.16.0"
+version = "0.17.0"
 edition = "2024"
 
 [dependencies]
@@ -10,6 +10,8 @@ blake3 = "1"
 serde_json = "1"
 fips204 = { version = "0.4", features = ["ml-dsa-65", "default-rng"] }
 clap = { version = "4", features = ["derive"] }
+owo-colors = { version = "4", features = ["supports-colors"] }
+clap_complete = "4"
 
 [[bin]]
 name = "hlock"

@@ -988,11 +988,10 @@ fn test_e2e_sign_lockfile_and_verify() {
     .unwrap();
     assert!(signed.contains("@signature ci@company.com "));
 
-    let leaked: &'static [u8] = Box::leak(Box::new(verifying_key_bytes) as Box<[u8]>);
-    let mut trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+    let mut trusted: HashMap<String, (Vec<u8>, SignatureAlgorithm)> = HashMap::new();
     trusted.insert(
         "ci@company.com".to_string(),
-        (leaked, SignatureAlgorithm::Ed25519),
+        (verifying_key_bytes.to_vec(), SignatureAlgorithm::Ed25519),
     );
     let verify_result = verify_signature(&signed, &trusted);
     assert!(verify_result.is_ok());
@@ -1930,11 +1929,10 @@ fn test_e2e_ml_dsa65_signed_lockfile() {
     .unwrap();
     assert!(signed.contains("@signature pq@company.com 02 0 "));
 
-    let leaked: &'static [u8] = Box::leak(Box::new(vk_bytes) as Box<[u8]>);
-    let mut trusted: HashMap<String, (&[u8], SignatureAlgorithm)> = HashMap::new();
+    let mut trusted: HashMap<String, (Vec<u8>, SignatureAlgorithm)> = HashMap::new();
     trusted.insert(
         "pq@company.com".to_string(),
-        (leaked, SignatureAlgorithm::MlDsa65),
+        (vk_bytes.to_vec(), SignatureAlgorithm::MlDsa65),
     );
 
     assert!(verify_signature(&signed, &trusted).is_ok());
