@@ -327,7 +327,7 @@ fn main() {
                 eprintln!("{} {}", "✗".red().bold(), e);
                 std::process::exit(1);
             }
-            println!("{} digest valid", "✓".green().bold());
+            if !quiet { println!("{} digest valid", "✓".green().bold()); }
 
             let mut trusted: HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> = HashMap::new();
             for spec in &trusted_key {
@@ -341,7 +341,7 @@ fn main() {
                     eprintln!("{} {}", "✗".red().bold(), e);
                     std::process::exit(1);
                 }
-                println!("{} signature valid", "✓".green().bold());
+                if !quiet { println!("{} signature valid", "✓".green().bold()); }
             }
 
             let lockfile = match deserialize(&content) {
@@ -349,13 +349,15 @@ fn main() {
                 Err(e) => { eprintln!("✗ parse error: {}", e); std::process::exit(2); }
             };
 
+            if verbose { eprintln!("[verbose] Parsed lockfile: {} packages", lockfile.packages.len()); }
+
             let now = if time > 0 { time } else { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) };
             if !lockfile.trust_roots.is_empty() {
                 if let Err(e) = lockfile.validate_trust_chain(now) {
                     eprintln!("{} {}", "✗".red().bold(), e);
                     std::process::exit(1);
                 }
-                println!("{} trust chain valid", "✓".green().bold());
+                if !quiet { println!("{} trust chain valid", "✓".green().bold()); }
             }
         }
 
@@ -452,7 +454,7 @@ fn main() {
                 "json" => lockfile::DiffFormat::Json,
                 _ => lockfile::DiffFormat::Text,
             };
-            print!("{}", serialize_diff(&diff, fmt));
+            if !quiet { print!("{}", serialize_diff(&diff, fmt)); }
         }
 
         Commands::Audit { file, format } => {
@@ -507,7 +509,7 @@ fn main() {
                 _ => sbom::SbomFormat::SpdxJson,
             };
             match generate_sbom(&lockfile, fmt, &namespace) {
-                Ok(s) => print!("{}", s),
+                Ok(s) => { if !quiet { print!("{}", s); } }
                 Err(e) => { eprintln!("SBOM generation error: {}", e); std::process::exit(1); }
             }
         }
@@ -556,7 +558,7 @@ fn main() {
                         if let Err(e) = std::fs::write(&file, &signed) {
                             eprintln!("Error writing {}: {}", file.display(), e); std::process::exit(1);
                         }
-                    } else {
+                    } else if !quiet {
                         print!("{}", signed);
                     }
                 }
@@ -606,7 +608,7 @@ fn main() {
                         if let Err(e) = std::fs::write(&out, &serialized) {
                             eprintln!("Error writing {}: {}", out.display(), e); std::process::exit(1);
                         }
-                    } else {
+                    } else if !quiet {
                         print!("{}", serialized);
                     }
                 }
@@ -645,7 +647,7 @@ fn main() {
                         if let Err(e) = std::fs::write(&out, &serialized) {
                             eprintln!("Error writing {}: {}", out.display(), e); std::process::exit(1);
                         }
-                    } else {
+                    } else if !quiet {
                         print!("{}", serialized);
                     }
                     if !result.conflicts.is_empty() && strat == merge::ConflictStrategy::Fail {
@@ -1830,7 +1832,9 @@ fn main() {
             };
             let mut cmd = Cli::command();
             let name = "hlock";
-            generate(shell_type, &mut cmd, name, &mut std::io::stdout());
+            if !quiet {
+                generate(shell_type, &mut cmd, name, &mut std::io::stdout());
+            }
         }
     }
 }
