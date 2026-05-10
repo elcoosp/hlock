@@ -949,7 +949,7 @@ fn main() {
                     dependencies: Vec::new(),
                 };
 
-                if max_depth.map_or(false, |max| current_depth >= max) {
+                if max_depth.is_some_and(|max| current_depth >= max) {
                     return node;
                 }
 
@@ -1134,7 +1134,7 @@ fn main() {
             let workspace_count = entries.iter().filter(|e| e.is_workspace).count();
             let copyleft_keywords = ["GPL", "AGPL", "LGPL", "CPAL", "EUPL", "CC-BY-SA"];
             let copyleft_count = entries.iter().filter(|e| {
-                e.license.as_ref().map_or(false, |l| copyleft_keywords.iter().any(|k| l.contains(k)))
+                e.license.as_ref().is_some_and(|l| copyleft_keywords.iter().any(|k| l.contains(k)))
             }).count();
             let permissive_count = declared_count - copyleft_count;
 
