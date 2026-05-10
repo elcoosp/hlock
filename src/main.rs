@@ -771,7 +771,8 @@ fn main() {
             } else {
                 if !quiet {
                     use owo_colors::OwoColorize;
-                    println!("{} v{} lockfile", output::C { text: "hlock", on: color_enabled }.b(), env!("CARGO_PKG_VERSION"));
+                    let b = |s: &str| -> String { if color_enabled { s.bold().to_string() } else { s.to_string() } };
+                                        println!("{} v{} lockfile", output::C { text: "hlock", on: color_enabled }.b(), env!("CARGO_PKG_VERSION"));
                     println!("────────────────────────");
 
                     let mut parts = Vec::new();
@@ -782,9 +783,9 @@ fn main() {
                     if cas_count > 0 { parts.push(format!("{} cas-http", cas_count)); }
                     if ipfs_count > 0 { parts.push(format!("{} ipfs", ipfs_count)); }
                     let pkg_detail = if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) };
-                    println!("{}:       {}{}", "Packages".bold(), lockfile.packages.len(), pkg_detail);
+                    println!("{}:       {}{}", b("Packages"), lockfile.packages.len(), pkg_detail);
 
-                    println!("{}:        {}", "Sources".bold(), lockfile.sources.len());
+                    println!("{}:        {}", b("Sources"), lockfile.sources.len());
                     for (idx, source) in lockfile.sources.iter().enumerate() {
                         let (url, type_str) = match source {
                             hlock::Source::Registry(u) => (u.as_str(), "registry"),
@@ -798,17 +799,17 @@ fn main() {
                     }
 
                     if !lockfile.mirrors.is_empty() {
-                        println!("{}:        {}", "Mirrors".bold(), lockfile.mirrors.len());
+                        println!("{}:        {}", b("Mirrors"), lockfile.mirrors.len());
                         for m in &lockfile.mirrors { println!("  {} -> {}", m.scope, m.url); }
                     }
 
                     if !lockfile.policies.is_empty() {
-                        println!("{}:       {}", "Policies".bold(), lockfile.policies.len());
+                        println!("{}:       {}", b("Policies"), lockfile.policies.len());
                         for p in &lockfile.policies { println!("  {} {} {}", p.policy_type.as_str(), p.package_pattern, p.value); }
                     }
 
                     if !lockfile.trust_roots.is_empty() {
-                        println!("{}:    {}", "Trust Roots".bold(), lockfile.trust_roots.len());
+                        println!("{}:    {}", b("Trust Roots"), lockfile.trust_roots.len());
                         for tr in &lockfile.trust_roots {
                             let algo_str = match tr.algorithm { hlock::signature::SignatureAlgorithm::Ed25519 => "ed25519", hlock::signature::SignatureAlgorithm::MlDsa65 => "mldsa65" };
                             let expires_str = if tr.expires_epoch == 0 { "never expires".to_string() } else { format!("expires epoch {}", tr.expires_epoch) };
@@ -817,39 +818,39 @@ fn main() {
                     }
 
                     if !lockfile.overrides.is_empty() {
-                        println!("{}:      {}", "Overrides".bold(), lockfile.overrides.len());
-                        for o in &lockfile.overrides { println!("  {} {} -> {}", o.name, o.from_version, o.to_version); }
+                        println!("{}:      {}", b("Overrides"), lockfile.overrides.len());
+                        for o in &lockfile.overrides { println!("  {} {} -> {}", b(&o.name), o.from_version, o.to_version); }
                     }
 
                     if !lockfile.features.is_empty() {
-                        println!("{}:       {}", "Features".bold(), lockfile.features.len());
-                        for (name, flags) in &lockfile.features { println!("  {} -> {}", name, flags.join(", ")); }
+                        println!("{}:       {}", b("Features"), lockfile.features.len());
+                        for (name, flags) in &lockfile.features { println!("  {} -> {}", b(name), flags.join(", ")); }
                     }
 
                     let adv_report = lockfile.audit();
                     if adv_report.total_count() > 0 {
-                        println!("{}:     {} ({} critical, {} high, {} medium, {} low, {} info)", "Advisories".bold(), adv_report.total_count(), adv_report.critical.len(), adv_report.high.len(), adv_report.medium.len(), adv_report.low.len(), adv_report.info.len());
+                        println!("{}:     {} ({} critical, {} high, {} medium, {} low, {} info)", b("Advisories"), adv_report.total_count(), adv_report.critical.len(), adv_report.high.len(), adv_report.medium.len(), adv_report.low.len(), adv_report.info.len());
                         println!("  Run `hlock audit` for details.");
                     }
 
                     if !lockfile.vex_entries.is_empty() {
-                        println!("{}:    {}", "VEX Entries".bold(), lockfile.vex_entries.len());
+                        println!("{}:    {}", b("VEX Entries"), lockfile.vex_entries.len());
                         for v in &lockfile.vex_entries { println!("  {} / {} -> {}", v.package, v.advisory_id, v.status.as_str()); }
                     }
 
                     let declared = lockfile.licenses.len();
                     let total = lockfile.packages.len();
-                    println!("{}:       {}/{} declared", "Licenses".bold(), declared, total);
+                    println!("{}:       {}/{} declared", b("Licenses"), declared, total);
                     if declared < total { println!("  Run `hlock licenses` for details."); }
 
                     if let Some(ref root) = lockfile.workspace_root {
-                        println!("{}:      {}", "Workspace".bold(), root);
-                        for wp in &lockfile.workspace_pkgs { println!("  └── {} ({})", wp.name, wp.manifest_path); }
+                        println!("{}:      {}", b("Workspace"), root);
+                        for wp in &lockfile.workspace_pkgs { println!("  └── {} ({})", b(&wp.name), wp.manifest_path); }
                     }
 
                     if !lockfile.hoist_boundaries.is_empty() {
-                        println!("{}:", "Hoist Boundaries".bold());
-                        for hb in &lockfile.hoist_boundaries { println!("  {} -> [{}]", hb.cosine, hb.allowed_deps.join(", ")); }
+                        println!("{}:", b("Hoist Boundaries"));
+                        for hb in &lockfile.hoist_boundaries { println!("  {} -> [{}]", b(&hb.cosine), hb.allowed_deps.join(", ")); }
                     }
 
                     if digest_valid { println!("{} Digest valid (blake3)", output::C { text: "✓", on: color_enabled }.gb()); } else { println!("{} Digest invalid", output::C { text: "✗", on: color_enabled }.rb()); }
