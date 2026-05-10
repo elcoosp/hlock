@@ -1162,12 +1162,7 @@ fn main() {
                             }));
                         }
                     }
-                } else if strict {
-                    violations.push(serde_json::json!({
-                        "package": entry.name,
-                        "reason": "undeclared",
-                    }));
-                } else if !allowed_licenses.is_empty() {
+                } else if strict || !allowed_licenses.is_empty() {
                     violations.push(serde_json::json!({
                         "package": entry.name,
                         "reason": "undeclared",
@@ -1219,8 +1214,8 @@ fn main() {
                             };
                             let src_short = if entry.source.is_empty() { entry.source_type.clone() } else {
                                 let url = &entry.source;
-                                if url.starts_with("https://") {
-                                    url[8..].split('/').next().unwrap_or(&url[8..]).to_string()
+                                if let Some(stripped) = url.strip_prefix("https://") {
+                                    stripped.split('/').next().unwrap_or(stripped).to_string()
                                 } else {
                                     url.clone()
                                 }
