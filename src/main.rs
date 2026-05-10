@@ -3,7 +3,7 @@ mod output;
 use clap::{CommandFactory, Parser, Subcommand};
 use hlock::*;
 use owo_colors::OwoColorize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -23,6 +23,9 @@ struct Cli {
 
     #[arg(long, default_value = "auto", global = true, help = "When to colorize: auto, always, never")]
     color: String,
+
+    #[arg(long, global = true, help = "Path to config file")]
+    config: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -34,6 +37,8 @@ enum Commands {
         trusted_key: Vec<String>,
         #[arg(long, default_value_t = 0)]
         time: u64,
+        #[arg(long, help = "Verify Sigstore/cosign signatures (experimental)")]
+        sigstore: bool,
     },
     Lint {
         #[arg(value_name = "FILE")]
@@ -56,8 +61,14 @@ enum Commands {
     Audit {
         #[arg(value_name = "FILE")]
         file: PathBuf,
+        #[arg(long, help = "Query OSV for live vulnerability data")]
+        online: bool,
+        #[arg(long, help = "Merge online results with embedded advisories")]
+        merge: bool,
         #[arg(long, default_value = "text")]
         format: String,
+        #[arg(long, default_value_t = 30, help = "HTTP request timeout in seconds")]
+        timeout: u64,
     },
     Sbom {
         #[arg(value_name = "FILE")]
@@ -193,7 +204,61 @@ enum Commands {
         #[arg(long, default_value = "text")]
         format: String,
     },
+    /// Check for newer versions of packages
+    Outdated {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long, help = "Show major version updates")]
+        major: bool,
+        #[arg(long, default_value = "all", help = "Filter: runtime, dev, peer, all")]
+        dep_type: String,
+        #[arg(long, default_value = "text")]
+        format: String,
+        #[arg(long, default_value_t = 30, help = "HTTP request timeout in seconds")]
+        timeout: u64,
+    },
+    /// Auto-remediate vulnerabilities or outdated packages
+    Fix {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long, help = "Fix audit findings (vulnerabilities)")]
+        audit: bool,
+        #[arg(long, help = "Fix outdated packages")]
+        outdated: bool,
+        #[arg(long, help = "Fix both audit and outdated")]
+        all: bool,
+        #[arg(long, help = "Show what would change without modifying")]
+        dry_run: bool,
+        #[arg(long, help = "Prompt for each fix")]
+        interactive: bool,
+        #[arg(long, default_value = "text")]
+        format: String,
+        #[arg(long, default_value_t = 30, help = "HTTP request timeout in seconds")]
+        timeout: u64,
+    },
+    /// Convert from yarn.lock or package-lock.json
+    Import {
+        #[arg(value_name = "SOURCE")]
+        source: PathBuf,
+        #[arg(long, required = true, help = "Input format: yarn, npm, pnpm")]
+        from: String,
+        #[arg(long, help = "Output path [default: stdout]")]
+        output: Option<PathBuf>,
+        #[arg(long, default_value = "https://registry.npmjs.org/")]
+        registry: String,
+    },
+    /// Explain a lint rule or advisory in detail
+    Explain {
+        #[arg(value_name = "RULE_OR_ID")]
+        rule_or_id: String,
+        #[arg(long, help = "Lockfile path (required for advisory explanations)")]
+        file: Option<PathBuf>,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
 }
+
+// --- Helper functions (unchanged) ---
 
 fn parse_trusted_key(spec: &str) -> Option<(String, (Vec<u8>, signature::SignatureAlgorithm))> {
     let parts: Vec<&str> = spec.splitn(3, ':').collect();
@@ -237,8 +302,6 @@ fn parse_platform(spec: &str) -> Option<(lockfile::TargetOS, lockfile::TargetArc
     };
     Some((os, arch))
 }
-
-use std::collections::HashSet;
 
 fn build_rule_set(rule_args: &[String]) -> Vec<Box<dyn hlock::lint::LintRule>> {
     use hlock::lint::*;
@@ -316,8 +379,12 @@ fn main() {
     );
     let color_enabled = color_config.should_color();
 
+    // Load config file (unused for now, but available)
+    let _config = HlockConfig::load(cli.config.as_deref());
+
     match cli.command {
-        Commands::Verify { file, trusted_key, time } => {
+        // --- VERIFY ---
+        Commands::Verify { file, trusted_key, time, sigstore: _ } => {
             if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
             let content = match read_input(&file) {
                 Ok(c) => c,
@@ -351,7 +418,7 @@ fn main() {
 
             let lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("✗ parse error: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("✗ [{}] parse error: {}", e.error_code(), e); std::process::exit(2); }
             };
 
             if verbose { eprintln!("[verbose] Parsed lockfile: {} packages", lockfile.packages.len()); }
@@ -366,6 +433,7 @@ fn main() {
             }
         }
 
+        // --- LINT ---
         Commands::Lint { file, rule, severity, format } => {
             if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
             let content = match read_input(&file) {
@@ -374,7 +442,7 @@ fn main() {
             };
             let lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
             };
 
             let rules = build_rule_set(&rule);
@@ -438,6 +506,7 @@ fn main() {
             if report.has_errors() { std::process::exit(1); }
         }
 
+        // --- DIFF ---
         Commands::Diff { old_file, new_file, format } => {
             if verbose { eprintln!("[verbose] Reading {} and {}...", old_file.display(), new_file.display()); }
             let old_content = match read_input(&old_file) {
@@ -450,11 +519,11 @@ fn main() {
             };
             let old_lf = match deserialize(&old_content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error in old file: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("[{}] Parse error in old file: {}", e.error_code(), e); std::process::exit(2); }
             };
             let new_lf = match deserialize(&new_content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error in new file: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("[{}] Parse error in new file: {}", e.error_code(), e); std::process::exit(2); }
             };
 
             let diff = diff_lockfiles(&old_lf, &new_lf);
@@ -469,7 +538,8 @@ fn main() {
             if !quiet { print!("{}", serialize_diff(&diff, fmt)); }
         }
 
-        Commands::Audit { file, format } => {
+        // --- AUDIT (updated with --online and --merge) ---
+        Commands::Audit { file, online, merge, format, timeout } => {
             if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
             let content = match read_input(&file) {
                 Ok(c) => c,
@@ -477,20 +547,57 @@ fn main() {
             };
             let lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
             };
-            if verbose { eprintln!("[verbose] Running audit..."); }
+            if verbose { eprintln!("[verbose] Running audit (online={})...", online); }
             let report = lockfile.audit();
             if verbose { eprintln!("[verbose] Audit complete: {} advisories", report.total_count()); }
 
+            let mut online_vulns: Vec<hlock::osv::OsvVulnerability> = Vec::new();
+            let mut online_errors: Vec<String> = Vec::new();
+
+            if online {
+                if verbose { eprintln!("[verbose] Querying OSV for {} packages...", lockfile.packages.len()); }
+                for pkg in &lockfile.packages {
+                    let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
+                    match hlock::osv::query_osv(&pkg.name, &version, timeout) {
+                        Ok(response) => {
+                            online_vulns.extend(response.vulns);
+                        }
+                        Err(e) => {
+                            online_errors.push(format!("{}@{}: {}", pkg.name, version, e));
+                        }
+                    }
+                }
+                if verbose { eprintln!("[verbose] OSV returned {} vulnerabilities, {} errors", online_vulns.len(), online_errors.len()); }
+            }
+
             if format == "json" {
                 owo_colors::set_override(false);
+                let embedded: Vec<serde_json::Value> = report.all_advisories().map(|a| serde_json::json!({
+                    "package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(),
+                    "url": a.url, "affected": a.affected_versions, "source": "embedded"
+                })).collect();
+                let online_json: Vec<serde_json::Value> = online_vulns.iter().map(|v| {
+                    let sev = hlock::osv::osv_severity(v);
+                    let fixed = hlock::osv::find_fixed_version(v);
+                    serde_json::json!({
+                        "id": v.id,
+                        "summary": v.summary,
+                        "severity": sev.as_str(),
+                        "fixed": fixed,
+                        "source": "online"
+                    })
+                }).collect();
                 if !quiet { println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                    "critical": report.critical.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
-                    "high": report.high.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
-                    "medium": report.medium.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
-                    "low": report.low.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
-                    "info": report.info.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
+                    "critical": report.critical.len(),
+                    "high": report.high.len(),
+                    "medium": report.medium.len(),
+                    "low": report.low.len(),
+                    "info": report.info.len(),
+                    "embedded": embedded,
+                    "online": online_json,
+                    "online_errors": online_errors,
                 })).unwrap()); }
             } else {
                 for adv in report.all_advisories() {
@@ -500,14 +607,53 @@ fn main() {
                         policy::AdvisorySeverity::Low => if color_enabled { adv.severity.as_str().to_uppercase().yellow().to_string() } else { adv.severity.as_str().to_uppercase() },
                         policy::AdvisorySeverity::Info => if color_enabled { adv.severity.as_str().to_uppercase().blue().to_string() } else { adv.severity.as_str().to_uppercase() },
                     };
-                    if !quiet { println!("{:10}{:16}{}   {}   {}", sev_str, adv.package, adv.advisory_id, adv.affected_versions, adv.url); }
+                    if !quiet { println!("{:10}{:16}{}   {}   (embedded)", sev_str, adv.package, adv.advisory_id, adv.affected_versions); }
                 }
-                if !quiet { println!("---"); println!("Total: {} critical/high, {} medium, {} low, {} info", report.critical.len() + report.high.len(), report.medium.len(), report.low.len(), report.info.len()); }
+
+                if online {
+                    let embedded_ids: HashSet<String> = lockfile.advisories.iter().map(|a| a.advisory_id.clone()).collect();
+                    for vuln in &online_vulns {
+                        if merge && embedded_ids.contains(&vuln.id) {
+                            continue;
+                        }
+                        let sev = hlock::osv::osv_severity(vuln);
+                        let sev_str = match sev {
+                            policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High => if color_enabled { sev.as_str().to_uppercase().red().bold().to_string() } else { sev.as_str().to_uppercase() },
+                            policy::AdvisorySeverity::Medium => if color_enabled { sev.as_str().to_uppercase().yellow().bold().to_string() } else { sev.as_str().to_uppercase() },
+                            policy::AdvisorySeverity::Low => if color_enabled { sev.as_str().to_uppercase().yellow().to_string() } else { sev.as_str().to_uppercase() },
+                            policy::AdvisorySeverity::Info => if color_enabled { sev.as_str().to_uppercase().blue().to_string() } else { sev.as_str().to_uppercase() },
+                        };
+                        let fixed = hlock::osv::find_fixed_version(vuln);
+                        let fixed_str = fixed.as_deref().unwrap_or("—");
+                        if !quiet { println!("{:10}{}   {}   (online, fixed: {})", sev_str, vuln.id, vuln.summary, fixed_str); }
+                    }
+                }
+
+                if !quiet {
+                    println!("---");
+                    let crit_high = report.critical.len() + report.high.len();
+                    let online_crit_high = online_vulns.iter().filter(|v| {
+                        let sev = hlock::osv::osv_severity(v);
+                        matches!(sev, policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High)
+                    }).count();
+                    println!("Total: {} critical/high, {} medium, {} low, {} info", crit_high + online_crit_high, report.medium.len(), report.low.len(), report.info.len());
+                    println!("Sources: {} embedded, {} online", lockfile.advisories.len(), online_vulns.len());
+                    if !online_errors.is_empty() {
+                        for e in &online_errors {
+                            eprintln!("  Warning: OSV query failed: {}", e);
+                        }
+                    }
+                }
             }
 
-            if report.has_critical_or_high() { std::process::exit(1); }
+            let has_critical_or_high = report.has_critical_or_high() || online_vulns.iter().any(|v| {
+                let sev = hlock::osv::osv_severity(v);
+                matches!(sev, policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High)
+            });
+            if has_critical_or_high { std::process::exit(1); }
         }
 
+        // --- SBOM ---
         Commands::Sbom { file, namespace, format } => {
             owo_colors::set_override(false);
             if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
@@ -517,7 +663,7 @@ fn main() {
             };
             let lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
             };
             let fmt = match format.as_str() {
                 "cyclonedx-json" => sbom::SbomFormat::CycloneDxJson,
@@ -525,10 +671,11 @@ fn main() {
             };
             match generate_sbom(&lockfile, fmt, &namespace) {
                 Ok(s) => { if !quiet { print!("{}", s); } }
-                Err(e) => { eprintln!("SBOM generation error: {}", e); std::process::exit(1); }
+                Err(e) => { eprintln!("[{}] SBOM generation error: {}", e.error_code(), e); std::process::exit(1); }
             }
         }
 
+        // --- SIGN ---
         Commands::Sign { file, key_id, algorithm, private_key, expires, in_place } => {
             if in_place && file == std::path::Path::new("-") {
                 eprintln!("Error: --in-place cannot be used with stdin input");
@@ -541,11 +688,11 @@ fn main() {
             };
             let mut lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
             };
             let serialized = match serialize(&mut lockfile) {
                 Ok(s) => s,
-                Err(e) => { eprintln!("Serialize error: {}", e); std::process::exit(1); }
+                Err(e) => { eprintln!("[{}] Serialize error: {}", e.error_code(), e); std::process::exit(1); }
             };
 
             let algo = match algorithm.as_str() {
@@ -581,6 +728,7 @@ fn main() {
             }
         }
 
+        // --- GRAPH ---
         Commands::Graph { file, root, platform, output } => {
             if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
             let content = match read_input(&file) {
@@ -589,7 +737,7 @@ fn main() {
             };
             let lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
             };
 
             let root_cids: Vec<u64> = root.iter()
@@ -627,14 +775,15 @@ fn main() {
                         print!("{}", serialized);
                     }
                 }
-                Err(e) => { eprintln!("Extraction error: {}", e); std::process::exit(1); }
+                Err(e) => { eprintln!("[{}] Extraction error: {}", e.error_code(), e); std::process::exit(1); }
             }
         }
 
+        // --- MERGE ---
         Commands::Merge { base, ours, theirs, strategy, output } => {
             let read_file = |path: &PathBuf| -> Result<Lockfile, String> {
                 let content = read_input(path).map_err(|e| format!("Error reading {}: {}", path.display(), e))?;
-                deserialize(&content).map_err(|e| format!("Parse error in {}: {}", path.display(), e))
+                deserialize(&content).map_err(|e| format!("[{}] Parse error in {}: {}", e.error_code(), path.display(), e))
             };
 
             let base_lf = match read_file(&base) { Ok(lf) => lf, Err(e) => { eprintln!("{}", e); std::process::exit(2); } };
@@ -671,10 +820,32 @@ fn main() {
                         std::process::exit(1);
                     }
                 }
-                Err(e) => { eprintln!("Merge error: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("[{}] Merge error: {}", e.error_code(), e); std::process::exit(2); }
             }
         }
 
+        // --- COMPLETIONS ---
+        Commands::Completions { shell } => {
+            use clap_complete::{generate, Shell};
+            let shell_type = match shell.as_str() {
+                "bash" => Shell::Bash,
+                "zsh" => Shell::Zsh,
+                "fish" => Shell::Fish,
+                "elvish" => Shell::Elvish,
+                "powershell" => Shell::PowerShell,
+                _ => {
+                    eprintln!("Error: unknown shell '{}'. Supported: bash, zsh, fish, elvish, powershell", shell);
+                    std::process::exit(2);
+                }
+            };
+            let mut cmd = Cli::command();
+            let name = "hlock";
+            if !quiet {
+                generate(shell_type, &mut cmd, name, &mut std::io::stdout());
+            }
+        }
+
+        // --- INFO ---
         Commands::Info { file, format } => {
             let content = match read_input(&file) {
                 Ok(c) => c,
@@ -685,7 +856,7 @@ fn main() {
 
             let lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
             };
 
             if verbose { eprintln!("[verbose] Parsed lockfile: {} packages, {} sources", lockfile.packages.len(), lockfile.sources.len()); }
@@ -772,7 +943,7 @@ fn main() {
                 if !quiet {
                     use owo_colors::OwoColorize;
                     let b = |s: &str| -> String { if color_enabled { s.bold().to_string() } else { s.to_string() } };
-                                        println!("{} v{} lockfile", output::C { text: "hlock", on: color_enabled }.b(), env!("CARGO_PKG_VERSION"));
+                    println!("{} v{} lockfile", output::C { text: "hlock", on: color_enabled }.b(), env!("CARGO_PKG_VERSION"));
                     println!("────────────────────────");
 
                     let mut parts = Vec::new();
@@ -858,6 +1029,7 @@ fn main() {
             }
         }
 
+        // --- DEDUP ---
         Commands::Dedup { file, format } => {
             let content = match read_input(&file) {
                 Ok(c) => c,
@@ -865,7 +1037,7 @@ fn main() {
             };
             let lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
             };
 
             let opportunities = lockfile.dedup_opportunities();
@@ -894,349 +1066,231 @@ fn main() {
             }
         }
 
-        Commands::Tree { file, root, depth, dep_type, format } => {
+        // --- WHY ---
+        Commands::Why { file, package, format } => {
             let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
             };
             let lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
             };
 
+            let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
+                Some(p) => p,
+                None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
+            };
+
+            let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
             let fmt = output::parse_format(&format);
-            let max_depth = depth;
-            let filter_dep_type = dep_type.clone();
 
-            let root_names = root;
-
-            struct TreeNode {
-                name: String,
-                version: String,
-                dep_type: Option<String>,
-                dependencies: Vec<TreeNode>,
-            }
-
-            impl TreeNode {
-                fn to_json(&self) -> serde_json::Value {
-                    let deps: Vec<serde_json::Value> = self.dependencies.iter().map(|d| d.to_json()).collect();
-                    let mut obj = serde_json::json!({
-                        "name": self.name,
-                        "version": self.version,
-                    });
-                    if let Some(ref dt) = self.dep_type {
-                        obj["dep_type"] = serde_json::Value::String(dt.clone());
-                    }
-                    obj["dependencies"] = serde_json::Value::Array(deps);
-                    obj
-                }
-            }
-
-            fn build_tree(
-                lockfile: &hlock::Lockfile,
-                name: &str,
-                current_depth: u32,
-                max_depth: Option<u32>,
-                dep_type_filter: &str,
-                visited: &mut HashSet<String>,
-            ) -> TreeNode {
-                let pkg = lockfile.packages.iter().find(|p| p.name == name);
-                let version = pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
-                let mut node = TreeNode {
-                    name: name.to_string(),
-                    version,
-                    dep_type: None,
-                    dependencies: Vec::new(),
-                };
-
-                if max_depth.is_some_and(|max| current_depth >= max) {
-                    return node;
-                }
-
-                if visited.contains(name) {
-                    return node;
-                }
-                visited.insert(name.to_string());
-
-                if let Some(pkg) = pkg {
-                    for dep in &pkg.dependencies {
-                        let follows = match dep_type_filter {
-                            "runtime" => matches!(dep.dep_type, hlock::DepType::Runtime),
-                            "dev" => matches!(dep.dep_type, hlock::DepType::Dev),
-                            "peer" => matches!(dep.dep_type, hlock::DepType::Peer),
-                            _ => true,
-                        };
-                        if !follows { continue; }
-
-                        if visited.contains(&dep.name) {
-                            let dep_pkg = lockfile.packages.iter().find(|p| p.name == dep.name);
-                            let dep_ver = dep_pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
-                            let dt = match dep.dep_type {
-                                hlock::DepType::Runtime => "runtime",
-                                hlock::DepType::Dev => "dev",
-                                hlock::DepType::Peer => "peer",
-                                hlock::DepType::Optional => "optional",
-                                hlock::DepType::OptionalTarget(_, _) => "optional-target",
-                            };
-                            node.dependencies.push(TreeNode {
-                                name: format!("{} ↻", dep.name),
-                                version: dep_ver,
-                                dep_type: Some(dt.to_string()),
-                                dependencies: Vec::new(),
-                            });
-                            continue;
+            if fmt == output::OutputFormat::Json {
+                let chains = hlock::graph::all_paths_to_roots(&lockfile, &package, 5);
+                let json = serde_json::json!({
+                    "package": package,
+                    "version": version,
+                    "chains": chains,
+                });
+                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
+            } else {
+                if !quiet {
+                    println!("{}@{}", package.bold(), version.cyan());
+                    let chains = hlock::graph::all_paths_to_roots(&lockfile, &package, 5);
+                    for chain in &chains {
+                        let mut rev = chain.clone();
+                        rev.reverse();
+                        for (j, name) in rev.iter().enumerate() {
+                            let indent = "  ".repeat(j);
+                            println!("{}{}", indent, name.bold());
                         }
+                        println!();
+                    }
+                }
+            }
+        }
 
-                        let dt = match dep.dep_type {
+        // --- DEPS ---
+        Commands::Deps { file, package, transitive, dep_type, format } => {
+            let content = match read_input(&file) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
+            };
+            let lockfile = match deserialize(&content) {
+                Ok(lf) => lf,
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
+            };
+
+            let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
+                Some(p) => p,
+                None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
+            };
+
+            let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
+            let fmt = output::parse_format(&format);
+
+            let direct: Vec<(String, String, String)> = pkg.dependencies.iter()
+                .filter(|d| dep_type == "all" || match dep_type.as_str() {
+                    "runtime" => matches!(d.dep_type, hlock::DepType::Runtime),
+                    "dev" => matches!(d.dep_type, hlock::DepType::Dev),
+                    "peer" => matches!(d.dep_type, hlock::DepType::Peer),
+                    _ => true,
+                })
+                .filter_map(|d| {
+                    lockfile.packages.iter().find(|p| p.name == d.name).map(|p| {
+                        let v = format!("{}.{}.{}", p.major, p.minor, p.patch);
+                        let dt = match d.dep_type {
                             hlock::DepType::Runtime => "runtime",
                             hlock::DepType::Dev => "dev",
                             hlock::DepType::Peer => "peer",
                             hlock::DepType::Optional => "optional",
                             hlock::DepType::OptionalTarget(_, _) => "optional-target",
                         };
-                        let mut child = build_tree(lockfile, &dep.name, current_depth + 1, max_depth, dep_type_filter, visited);
-                        child.dep_type = Some(dt.to_string());
-                        node.dependencies.push(child);
-                    }
+                        (d.name.clone(), v, dt.to_string())
+                    })
+                })
+                .collect();
+
+            let transitive_names: HashSet<String> = if transitive {
+                match dep_type.as_str() {
+                    "runtime" => hlock::runtime_deps(&lockfile, &package),
+                    "dev" => hlock::dev_deps(&lockfile, &package),
+                    _ => hlock::transitive_deps(&lockfile, &package),
                 }
+            } else {
+                HashSet::new()
+            };
 
-                visited.remove(name);
-                node
-            }
-
-            fn render_tree_text(
-                node: &TreeNode,
-                prefix: &str,
-                is_last: bool,
-                show_dep_type: bool,
-            ) {
-                let connector = if is_last { "└" } else { "├" };
-                let is_cycle = node.name.contains(" ↻");
-                let display_name = if is_cycle {
-                    node.name.clone()
-                } else {
-                    format!("{}@{}", node.name, node.version)
-                };
-                let type_suffix = if show_dep_type {
-                    if let Some(ref dt) = node.dep_type {
-                        format!(" ({})", dt)
-                    } else {
-                        String::new()
-                    }
-                } else {
-                    String::new()
-                };
-                println!("{}{}── {}{}", prefix, connector, display_name, type_suffix);
-
-                let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
-                let dep_count = node.dependencies.len();
-                for (i, child) in node.dependencies.iter().enumerate() {
-                    let is_last_child = i == dep_count - 1;
-                    render_tree_text(child, &child_prefix, is_last_child, show_dep_type);
-                }
-            }
+            let transitive_list: Vec<(String, String)> = transitive_names.iter()
+                .filter(|name| !direct.iter().any(|(n, _, _)| n == *name))
+                .filter_map(|name| {
+                    lockfile.packages.iter().find(|p| p.name == *name).map(|p| {
+                        (name.clone(), format!("{}.{}.{}", p.major, p.minor, p.patch))
+                    })
+                })
+                .collect();
 
             if fmt == output::OutputFormat::Json {
-                let mut trees = Vec::new();
-                for root_name in &root_names {
-                    let mut visited = HashSet::new();
-                    let tree = build_tree(&lockfile, root_name, 0, max_depth, &filter_dep_type, &mut visited);
-                    trees.push(tree);
-                }
-
-                let root_pkg = lockfile.packages.iter().find(|p| root_names.first().map(|rn| p.name == *rn).unwrap_or(false));
-                let root_version = root_pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
-
-                let json = if root_names.len() == 1 {
-                    serde_json::json!({
-                        "root": root_names[0],
-                        "root_version": root_version,
-                        "tree": trees[0].to_json(),
-                    })
-                } else {
-                    serde_json::json!({
-                        "roots": root_names,
-                        "trees": trees.iter().map(|t| t.to_json()).collect::<Vec<_>>(),
-                    })
-                };
+                let json = serde_json::json!({
+                    "package": package,
+                    "version": version,
+                    "direct": direct.iter().map(|(n, v, dt)| serde_json::json!({"name": n, "version": v, "dep_type": dt})).collect::<Vec<_>>(),
+                    "transitive": transitive_list.iter().map(|(n, v)| serde_json::json!({"name": n, "version": v})).collect::<Vec<_>>(),
+                });
                 if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
             } else {
                 if !quiet {
-                    for (i, root_name) in root_names.iter().enumerate() {
-                        if root_names.len() > 1 && i > 0 {
-                            println!();
+                    if verbose { eprintln!("[verbose] {} direct, {} transitive deps", direct.len(), transitive_list.len()); }
+                    use owo_colors::OwoColorize;
+                    println!("Direct dependencies of {}:", package.bold());
+                    if direct.is_empty() {
+                        println!("  (none)");
+                    } else {
+                        for (name, ver, dt) in &direct {
+                            println!("  {}@{} ({})", name.bold(), ver.cyan(), dt);
                         }
-                        let mut visited = HashSet::new();
-                        let tree = build_tree(&lockfile, root_name, 0, max_depth, &filter_dep_type, &mut visited);
-                        let show_dep_type = filter_dep_type == "all";
-                        println!("{}@{}", tree.name, tree.version);
-                        let dep_count = tree.dependencies.len();
-                        for (j, child) in tree.dependencies.iter().enumerate() {
-                            let is_last = j == dep_count - 1;
-                            render_tree_text(child, "", is_last, show_dep_type);
+                    }
+                    if transitive && !transitive_list.is_empty() {
+                        println!();
+                        println!("Transitive dependencies:");
+                        for (name, ver) in &transitive_list {
+                            println!("  {}@{}", name.bold(), ver.cyan());
                         }
                     }
                 }
             }
         }
 
-        Commands::Licenses { file, missing, allow, deny, strict, format } => {
+        // --- DEPENDENTS ---
+        Commands::Dependents { file, package, transitive, dep_type, format } => {
             let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
             };
             let lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
             };
 
+            let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
+                Some(p) => p,
+                None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
+            };
+
+            let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
             let fmt = output::parse_format(&format);
 
-            let licensed_map: std::collections::HashMap<&str, &str> = lockfile.licenses.iter()
-                .map(|l| (l.package.as_str(), l.expression.as_str()))
+            let direct: Vec<(String, String, String)> = lockfile.packages.iter()
+                .filter(|p| p.dependencies.iter().any(|d| {
+                    d.name == package &&
+                    (dep_type == "all" || match dep_type.as_str() {
+                        "runtime" => matches!(d.dep_type, hlock::DepType::Runtime),
+                        "dev" => matches!(d.dep_type, hlock::DepType::Dev),
+                        _ => true,
+                    })
+                }))
+                .map(|p| {
+                    let dep = p.dependencies.iter().find(|d| d.name == package).unwrap();
+                    let dt = match dep.dep_type {
+                        hlock::DepType::Runtime => "runtime",
+                        hlock::DepType::Dev => "dev",
+                        hlock::DepType::Peer => "peer",
+                        hlock::DepType::Optional => "optional",
+                        hlock::DepType::OptionalTarget(_, _) => "optional-target",
+                    };
+                    (p.name.clone(), format!("{}.{}.{}", p.major, p.minor, p.patch), dt.to_string())
+                })
                 .collect();
 
-            let allowed_licenses: Vec<String> = allow.as_ref().map(|s| s.split(',').map(|x| x.trim().to_string()).collect()).unwrap_or_default();
-            let denied_licenses: Vec<String> = deny.as_ref().map(|s| s.split(',').map(|x| x.trim().to_string()).collect()).unwrap_or_default();
-
-            struct LicenseEntry {
-                name: String,
-                license: Option<String>,
-                source: String,
-                source_type: String,
-                is_workspace: bool,
-            }
-
-            let mut entries: Vec<LicenseEntry> = Vec::new();
-            for pkg in &lockfile.packages {
-                let lic = licensed_map.get(pkg.name.as_str()).cloned();
-                let (source, source_type) = match lockfile.sources.get(pkg.source_idx) {
-                    Some(hlock::Source::Registry(u)) => (u.clone(), "registry".to_string()),
-                    Some(hlock::Source::Git(u)) => (u.clone(), "git".to_string()),
-                    Some(hlock::Source::Workspace) => (String::new(), "workspace".to_string()),
-                    Some(hlock::Source::Local(u)) => (u.clone(), "local".to_string()),
-                    Some(hlock::Source::CasHttp(u)) => (u.clone(), "cas-http".to_string()),
-                    Some(hlock::Source::Ipfs(u)) => (u.clone(), "ipfs".to_string()),
-                    None => (String::new(), "unknown".to_string()),
-                };
-                let is_workspace = source_type == "workspace";
-                entries.push(LicenseEntry { name: pkg.name.clone(), license: lic.map(String::from), source, source_type, is_workspace });
-            }
-
-            let filtered_entries: Vec<&LicenseEntry> = if missing {
-                entries.iter().filter(|e| e.license.is_none() && !e.is_workspace).collect()
+            let transitive_names: Vec<String> = if transitive {
+                match dep_type.as_str() {
+                    "runtime" => hlock::runtime_dependents_of(&lockfile, &package),
+                    "dev" => hlock::dev_dependents_of(&lockfile, &package),
+                    _ => hlock::dependents_of(&lockfile, &package),
+                }
             } else {
-                entries.iter().collect()
+                Vec::new()
             };
 
-            let declared_count = entries.iter().filter(|e| e.license.is_some()).count();
-            let undeclared_count = entries.iter().filter(|e| e.license.is_none() && !e.is_workspace).count();
-            let workspace_count = entries.iter().filter(|e| e.is_workspace).count();
-            let copyleft_keywords = ["GPL", "AGPL", "LGPL", "CPAL", "EUPL", "CC-BY-SA"];
-            let copyleft_count = entries.iter().filter(|e| {
-                e.license.as_ref().is_some_and(|l| copyleft_keywords.iter().any(|k| l.contains(k)))
-            }).count();
-            let permissive_count = declared_count - copyleft_count;
-
-            let mut violations: Vec<serde_json::Value> = Vec::new();
-
-            for entry in &entries {
-                if entry.is_workspace { continue; }
-                if let Some(ref lic) = entry.license {
-                    for denied in &denied_licenses {
-                        if lic.contains(denied) {
-                            violations.push(serde_json::json!({
-                                "package": entry.name,
-                                "reason": "denied",
-                                "license": lic,
-                            }));
-                        }
-                    }
-                    if !allowed_licenses.is_empty() {
-                        let is_allowed = allowed_licenses.iter().any(|a| lic.contains(a) || a == lic);
-                        if !is_allowed {
-                            violations.push(serde_json::json!({
-                                "package": entry.name,
-                                "reason": "not-allowed",
-                                "license": lic,
-                            }));
-                        }
-                    }
-                } else if strict || !allowed_licenses.is_empty() {
-                    violations.push(serde_json::json!({
-                        "package": entry.name,
-                        "reason": "undeclared",
-                    }));
-                }
-            }
-
-            let has_violations = !violations.is_empty();
+            let transitive_list: Vec<(String, String)> = transitive_names.iter()
+                .filter(|name| !direct.iter().any(|(n, _, _)| n == *name))
+                .filter_map(|name| {
+                    lockfile.packages.iter().find(|p| p.name == *name).map(|p| {
+                        (name.clone(), format!("{}.{}.{}", p.major, p.minor, p.patch))
+                    })
+                })
+                .collect();
 
             if fmt == output::OutputFormat::Json {
-                let pkgs_json: Vec<serde_json::Value> = filtered_entries.iter().map(|e| {
-                    serde_json::json!({
-                        "name": e.name,
-                        "license": e.license,
-                        "source": e.source,
-                        "source_type": e.source_type,
-                    })
-                }).collect();
                 let json = serde_json::json!({
-                    "packages": pkgs_json,
-                    "summary": {
-                        "declared": declared_count,
-                        "total": entries.len(),
-                        "undeclared": undeclared_count,
-                        "workspace": workspace_count,
-                        "copyleft": copyleft_count,
-                        "permissive": permissive_count,
-                    },
-                    "violations": violations,
-                    "total_packages": entries.len(),
+                    "package": package,
+                    "version": version,
+                    "direct": direct.iter().map(|(n, v, dt)| serde_json::json!({"name": n, "version": v, "dep_type": dt})).collect::<Vec<_>>(),
+                    "transitive": transitive_list.iter().map(|(n, v)| serde_json::json!({"name": n, "version": v})).collect::<Vec<_>>(),
                 });
                 if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
             } else {
                 if !quiet {
-                    if filtered_entries.is_empty() {
-                        if missing {
-                            println!("All packages have license declarations.");
-                        } else {
-                            println!("No license declarations found.");
-                        }
+                    println!("Direct dependents of {}:", package.bold());
+                    if direct.is_empty() {
+                        println!("  (none)");
                     } else {
-                        use owo_colors::OwoColorize;
-                        println!("{:24}{:16}{:16}{}", "Package".bold(), "License".bold(), "Source".bold(), if missing { "Status".bold() } else { "".bold() });
-                        println!("{:24}{:16}{:16}{}", "────────────────────────", "────────────────", "────────────────", if missing { "──────" } else { "" });
-                        for entry in filtered_entries {
-                            let lic_display = match &entry.license {
-                                Some(l) => l.green().to_string(),
-                                None => "⚠ UNDECLARED".yellow().bold().to_string(),
-                            };
-                            let src_short = if entry.source.is_empty() { entry.source_type.clone() } else {
-                                let url = &entry.source;
-                                if let Some(stripped) = url.strip_prefix("https://") {
-                                    stripped.split('/').next().unwrap_or(stripped).to_string()
-                                } else {
-                                    url.clone()
-                                }
-                            };
-                            if missing {
-                                println!("{:24}{:16}{:16}{}", entry.name.bold(), lic_display, src_short, "MISSING".red().bold());
-                            } else {
-                                println!("{:24}{:16}{}", entry.name.bold(), lic_display, src_short);
-                            }
+                        for (name, ver, dt) in &direct {
+                            println!("  {}@{} ({})", name.bold(), ver.cyan(), dt);
                         }
+                    }
+                    if transitive && !transitive_list.is_empty() {
                         println!();
-                        println!("Summary: {}/{} declared, {} copyleft, {} permissive, {} undeclared, {} workspace", declared_count, entries.len(), copyleft_count, permissive_count, undeclared_count, workspace_count);
+                        println!("Transitive dependents:");
+                        for (name, ver) in &transitive_list {
+                            println!("  {}@{}", name.bold(), ver.cyan());
+                        }
                     }
                 }
             }
-
-            if has_violations {
-                std::process::exit(1);
-            }
         }
 
+        // --- CHECK ---
         Commands::Check { file, trusted_key, time, severity, rule, vex, format } => {
             if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
             let t_read = std::time::Instant::now();
@@ -1267,7 +1321,7 @@ fn main() {
                         }
                     } else {
                         if !quiet {
-                            println!("{} parse error: {}", output::C { text: "✗", on: color_enabled }.rb(), e);
+                            println!("{} [{}] parse error: {}", output::C { text: "✗", on: color_enabled }.rb(), e.error_code(), e);
                         }
                     }
                     std::process::exit(2);
@@ -1509,384 +1563,739 @@ fn main() {
             }
         }
 
-        Commands::Dependents { file, package, transitive, dep_type, format } => {
+        // --- TREE ---
+        Commands::Tree { file, root, depth, dep_type, format } => {
             let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
             };
             let lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
             };
 
-            if verbose { eprintln!("[verbose] Looking up dependents of '{}'...", package); }
-            let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
-                Some(p) => p,
-                None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
-            };
-
-            let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
-            if verbose { eprintln!("[verbose] Found {}@{}", package, version); }
             let fmt = output::parse_format(&format);
+            let max_depth = depth;
+            let filter_dep_type = dep_type.clone();
 
-            let direct: Vec<(String, String, String)> = lockfile.packages.iter()
-                .filter(|p| p.dependencies.iter().any(|d| {
-                    d.name == package &&
-                    (dep_type == "all" || match dep_type.as_str() {
-                        "runtime" => matches!(d.dep_type, hlock::DepType::Runtime),
-                        "dev" => matches!(d.dep_type, hlock::DepType::Dev),
-                        _ => true,
-                    })
-                }))
-                .map(|p| {
-                    let dep = p.dependencies.iter().find(|d| d.name == package).unwrap();
-                    let dt = match dep.dep_type {
-                        hlock::DepType::Runtime => "runtime",
-                        hlock::DepType::Dev => "dev",
-                        hlock::DepType::Peer => "peer",
-                        hlock::DepType::Optional => "optional",
-                        hlock::DepType::OptionalTarget(_, _) => "optional-target",
-                    };
-                    (p.name.clone(), format!("{}.{}.{}", p.major, p.minor, p.patch), dt.to_string())
-                })
-                .collect();
+            let root_names = root;
 
-            let transitive_names: Vec<String> = if transitive {
-                match dep_type.as_str() {
-                    "runtime" => hlock::runtime_dependents_of(&lockfile, &package),
-                    "dev" => hlock::dev_dependents_of(&lockfile, &package),
-                    _ => hlock::dependents_of(&lockfile, &package),
-                }
-            } else {
-                Vec::new()
-            };
+            struct TreeNode {
+                name: String,
+                version: String,
+                dep_type: Option<String>,
+                dependencies: Vec<TreeNode>,
+            }
 
-            let transitive_list: Vec<(String, String)> = transitive_names.iter()
-                .filter(|name| !direct.iter().any(|(n, _, _)| n == *name))
-                .filter_map(|name| {
-                    lockfile.packages.iter().find(|p| p.name == *name).map(|p| {
-                        (name.clone(), format!("{}.{}.{}", p.major, p.minor, p.patch))
-                    })
-                })
-                .collect();
-
-            if fmt == output::OutputFormat::Json {
-                let json = serde_json::json!({
-                    "package": package,
-                    "version": version,
-                    "direct": direct.iter().map(|(n, v, dt)| serde_json::json!({"name": n, "version": v, "dep_type": dt})).collect::<Vec<_>>(),
-                    "transitive": transitive_list.iter().map(|(n, v)| serde_json::json!({"name": n, "version": v})).collect::<Vec<_>>(),
-                });
-                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
-            } else {
-                if !quiet {
-                    println!("Direct dependents of {}:", package.bold());
-                    if direct.is_empty() {
-                        println!("  (none)");
-                    } else {
-                        for (name, ver, dt) in &direct {
-                            println!("  {}@{} ({})", name.bold(), ver.cyan(), dt);
-                        }
+            impl TreeNode {
+                fn to_json(&self) -> serde_json::Value {
+                    let deps: Vec<serde_json::Value> = self.dependencies.iter().map(|d| d.to_json()).collect();
+                    let mut obj = serde_json::json!({
+                        "name": self.name,
+                        "version": self.version,
+                    });
+                    if let Some(ref dt) = self.dep_type {
+                        obj["dep_type"] = serde_json::Value::String(dt.clone());
                     }
-                    if transitive && !transitive_list.is_empty() {
-                        println!();
-                        println!("Transitive dependents:");
-                        for (name, ver) in &transitive_list {
-                            println!("  {}@{}", name.bold(), ver.cyan());
-                        }
-                    }
+                    obj["dependencies"] = serde_json::Value::Array(deps);
+                    obj
                 }
             }
-        }
 
-        Commands::Deps { file, package, transitive, dep_type, format } => {
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
-            };
+            fn build_tree(
+                lockfile: &hlock::Lockfile,
+                name: &str,
+                current_depth: u32,
+                max_depth: Option<u32>,
+                dep_type_filter: &str,
+                visited: &mut HashSet<String>,
+            ) -> TreeNode {
+                let pkg = lockfile.packages.iter().find(|p| p.name == name);
+                let version = pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
+                let mut node = TreeNode {
+                    name: name.to_string(),
+                    version,
+                    dep_type: None,
+                    dependencies: Vec::new(),
+                };
 
-            if verbose { eprintln!("[verbose] Looking up package '{}'...", package); }
-            let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
-                Some(p) => p,
-                None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
-            };
+                if max_depth.is_some_and(|max| current_depth >= max) {
+                    return node;
+                }
 
-            let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
-            if verbose { eprintln!("[verbose] Found {}@{}", package, version); }
-            let fmt = output::parse_format(&format);
+                if visited.contains(name) {
+                    return node;
+                }
+                visited.insert(name.to_string());
 
-            let direct: Vec<(String, String, String)> = pkg.dependencies.iter()
-                .filter(|d| dep_type == "all" || match dep_type.as_str() {
-                    "runtime" => matches!(d.dep_type, hlock::DepType::Runtime),
-                    "dev" => matches!(d.dep_type, hlock::DepType::Dev),
-                    "peer" => matches!(d.dep_type, hlock::DepType::Peer),
-                    _ => true,
-                })
-                .filter_map(|d| {
-                    lockfile.packages.iter().find(|p| p.name == d.name).map(|p| {
-                        let v = format!("{}.{}.{}", p.major, p.minor, p.patch);
-                        let dt = match d.dep_type {
+                if let Some(pkg) = pkg {
+                    for dep in &pkg.dependencies {
+                        let follows = match dep_type_filter {
+                            "runtime" => matches!(dep.dep_type, hlock::DepType::Runtime),
+                            "dev" => matches!(dep.dep_type, hlock::DepType::Dev),
+                            "peer" => matches!(dep.dep_type, hlock::DepType::Peer),
+                            _ => true,
+                        };
+                        if !follows { continue; }
+
+                        if visited.contains(&dep.name) {
+                            let dep_pkg = lockfile.packages.iter().find(|p| p.name == dep.name);
+                            let dep_ver = dep_pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
+                            let dt = match dep.dep_type {
+                                hlock::DepType::Runtime => "runtime",
+                                hlock::DepType::Dev => "dev",
+                                hlock::DepType::Peer => "peer",
+                                hlock::DepType::Optional => "optional",
+                                hlock::DepType::OptionalTarget(_, _) => "optional-target",
+                            };
+                            node.dependencies.push(TreeNode {
+                                name: format!("{} ↻", dep.name),
+                                version: dep_ver,
+                                dep_type: Some(dt.to_string()),
+                                dependencies: Vec::new(),
+                            });
+                            continue;
+                        }
+
+                        let dt = match dep.dep_type {
                             hlock::DepType::Runtime => "runtime",
                             hlock::DepType::Dev => "dev",
                             hlock::DepType::Peer => "peer",
                             hlock::DepType::Optional => "optional",
                             hlock::DepType::OptionalTarget(_, _) => "optional-target",
                         };
-                        (d.name.clone(), v, dt.to_string())
-                    })
-                })
-                .collect();
-
-            let transitive_names: HashSet<String> = if transitive {
-                match dep_type.as_str() {
-                    "runtime" => hlock::runtime_deps(&lockfile, &package),
-                    "dev" => hlock::dev_deps(&lockfile, &package),
-                    _ => hlock::transitive_deps(&lockfile, &package),
+                        let mut child = build_tree(lockfile, &dep.name, current_depth + 1, max_depth, dep_type_filter, visited);
+                        child.dep_type = Some(dt.to_string());
+                        node.dependencies.push(child);
+                    }
                 }
-            } else {
-                HashSet::new()
-            };
 
-            let transitive_list: Vec<(String, String)> = transitive_names.iter()
-                .filter(|name| !direct.iter().any(|(n, _, _)| n == *name))
-                .filter_map(|name| {
-                    lockfile.packages.iter().find(|p| p.name == *name).map(|p| {
-                        (name.clone(), format!("{}.{}.{}", p.major, p.minor, p.patch))
-                    })
-                })
-                .collect();
+                visited.remove(name);
+                node
+            }
+
+            fn render_tree_text(
+                node: &TreeNode,
+                prefix: &str,
+                is_last: bool,
+                show_dep_type: bool,
+            ) {
+                let connector = if is_last { "└" } else { "├" };
+                let is_cycle = node.name.contains(" ↻");
+                let display_name = if is_cycle {
+                    node.name.clone()
+                } else {
+                    format!("{}@{}", node.name, node.version)
+                };
+                let type_suffix = if show_dep_type {
+                    if let Some(ref dt) = node.dep_type {
+                        format!(" ({})", dt)
+                    } else {
+                        String::new()
+                    }
+                } else {
+                    String::new()
+                };
+                println!("{}{}── {}{}", prefix, connector, display_name, type_suffix);
+
+                let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
+                let dep_count = node.dependencies.len();
+                for (i, child) in node.dependencies.iter().enumerate() {
+                    let is_last_child = i == dep_count - 1;
+                    render_tree_text(child, &child_prefix, is_last_child, show_dep_type);
+                }
+            }
 
             if fmt == output::OutputFormat::Json {
-                let json = serde_json::json!({
-                    "package": package,
-                    "version": version,
-                    "direct": direct.iter().map(|(n, v, dt)| serde_json::json!({"name": n, "version": v, "dep_type": dt})).collect::<Vec<_>>(),
-                    "transitive": transitive_list.iter().map(|(n, v)| serde_json::json!({"name": n, "version": v})).collect::<Vec<_>>(),
-                });
+                let mut trees = Vec::new();
+                for root_name in &root_names {
+                    let mut visited = HashSet::new();
+                    let tree = build_tree(&lockfile, root_name, 0, max_depth, &filter_dep_type, &mut visited);
+                    trees.push(tree);
+                }
+
+                let root_pkg = lockfile.packages.iter().find(|p| root_names.first().map(|rn| p.name == *rn).unwrap_or(false));
+                let root_version = root_pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
+
+                let json = if root_names.len() == 1 {
+                    serde_json::json!({
+                        "root": root_names[0],
+                        "root_version": root_version,
+                        "tree": trees[0].to_json(),
+                    })
+                } else {
+                    serde_json::json!({
+                        "roots": root_names,
+                        "trees": trees.iter().map(|t| t.to_json()).collect::<Vec<_>>(),
+                    })
+                };
                 if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
             } else {
                 if !quiet {
-                    if verbose { eprintln!("[verbose] {} direct, {} transitive deps", direct.len(), transitive_list.len()); }
-                    use owo_colors::OwoColorize;
-                    println!("Direct dependencies of {}:", package.bold());
-                    if direct.is_empty() {
-                        println!("  (none)");
-                    } else {
-                        for (name, ver, dt) in &direct {
-                            println!("  {}@{} ({})", name.bold(), ver.cyan(), dt);
+                    for (i, root_name) in root_names.iter().enumerate() {
+                        if root_names.len() > 1 && i > 0 {
+                            println!();
                         }
-                    }
-                    if transitive && !transitive_list.is_empty() {
-                        println!();
-                        println!("Transitive dependencies:");
-                        for (name, ver) in &transitive_list {
-                            println!("  {}@{}", name.bold(), ver.cyan());
+                        let mut visited = HashSet::new();
+                        let tree = build_tree(&lockfile, root_name, 0, max_depth, &filter_dep_type, &mut visited);
+                        let show_dep_type = filter_dep_type == "all";
+                        println!("{}@{}", tree.name, tree.version);
+                        let dep_count = tree.dependencies.len();
+                        for (j, child) in tree.dependencies.iter().enumerate() {
+                            let is_last = j == dep_count - 1;
+                            render_tree_text(child, "", is_last, show_dep_type);
                         }
                     }
                 }
             }
         }
 
-        Commands::Why { file, package, format } => {
+        // --- LICENSES ---
+        Commands::Licenses { file, missing, allow, deny, strict, format } => {
             let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
             };
             let lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
-                Err(e) => { eprintln!("Parse error: {}", e); std::process::exit(2); }
-            };
-
-            if verbose { eprintln!("[verbose] Looking up package '{}'...", package); }
-            let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
-                Some(p) => p,
-                None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
-            };
-
-            let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
-            if verbose { eprintln!("[verbose] Found {}@{}", package, version); }
-            let source_info = lockfile.sources.get(pkg.source_idx);
-            let source_str = match source_info {
-                Some(hlock::Source::Registry(u)) => u.clone(),
-                Some(hlock::Source::Git(u)) => u.clone(),
-                Some(hlock::Source::Workspace) => "workspace".to_string(),
-                Some(hlock::Source::Local(u)) => u.clone(),
-                Some(hlock::Source::CasHttp(u)) => u.clone(),
-                Some(hlock::Source::Ipfs(u)) => u.clone(),
-                None => "unknown".to_string(),
-            };
-            let source_type_str = match source_info {
-                Some(hlock::Source::Registry(_)) => "registry",
-                Some(hlock::Source::Git(_)) => "git",
-                Some(hlock::Source::Workspace) => "workspace",
-                Some(hlock::Source::Local(_)) => "local",
-                Some(hlock::Source::CasHttp(_)) => "cas-http",
-                Some(hlock::Source::Ipfs(_)) => "ipfs",
-                None => "unknown",
-            };
-
-            let license = lockfile.license_for(&package).map(String::from);
-            let integrity = pkg.hashes.first().map(|h| {
-                let algo = match h.algo {
-                    hlock::HashAlgorithm::Sha1 => "sha1",
-                    hlock::HashAlgorithm::Sha256 => "sha256",
-                    hlock::HashAlgorithm::Sha512 => "sha512",
-                    hlock::HashAlgorithm::Blake3 => "blake3",
-                };
-                let hex: String = h.digest.iter().map(|b| format!("{:02x}", b)).collect();
-                format!("{}-{}", algo, hex)
-            });
-
-            let advisories: Vec<&hlock::policy::Advisory> = lockfile.advisories.iter()
-                .filter(|a| a.package == package)
-                .collect();
-
-            let prov_chain = lockfile.dependency_chain(&package);
-            let has_provenance = !prov_chain.is_empty();
-
-            let chains = if has_provenance {
-                let primary: Vec<String> = prov_chain.iter().map(|p| p.package_name.clone()).collect();
-                let mut all_chains = vec![primary];
-                let graph_chains = hlock::graph::all_paths_to_roots(&lockfile, &package, 5);
-                for gc in &graph_chains {
-                    let primary_set: HashSet<String> = all_chains[0].iter().cloned().collect();
-                    let gc_set: HashSet<String> = gc.iter().cloned().collect();
-                    if gc_set != primary_set {
-                        all_chains.push(gc.clone());
-                    }
-                    if all_chains.len() >= 5 { break; }
-                }
-                all_chains
-            } else {
-                hlock::graph::all_paths_to_roots(&lockfile, &package, 5)
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
             };
 
             let fmt = output::parse_format(&format);
 
-            if fmt == output::OutputFormat::Json {
-                let chains_json: Vec<Vec<serde_json::Value>> = chains.iter().map(|chain| {
-                    chain.iter().map(|name| {
-                        let constraint = lockfile.provenance_for(name).map(|p| p.constraint.clone());
-                        let dep_type_str = lockfile.provenance_for(name).map(|p| match p.dep_type {
-                            hlock::DepType::Runtime => "runtime",
-                            hlock::DepType::Dev => "dev",
-                            hlock::DepType::Peer => "peer",
-                            _ => "other",
-                        });
-                        serde_json::json!({
-                            "name": name,
-                            "version": lockfile.packages.iter().find(|p| p.name == *name).map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default(),
-                        "constraint": constraint,
-                        "dep_type": dep_type_str,
-                        })
-                    }).collect()
-                }).collect();
+            let licensed_map: std::collections::HashMap<&str, &str> = lockfile.licenses.iter()
+                .map(|l| (l.package.as_str(), l.expression.as_str()))
+                .collect();
 
+            let allowed_licenses: Vec<String> = allow.as_ref().map(|s| s.split(',').map(|x| x.trim().to_string()).collect()).unwrap_or_default();
+            let denied_licenses: Vec<String> = deny.as_ref().map(|s| s.split(',').map(|x| x.trim().to_string()).collect()).unwrap_or_default();
+
+            struct LicenseEntry {
+                name: String,
+                license: Option<String>,
+                source: String,
+                source_type: String,
+                is_workspace: bool,
+            }
+
+            let mut entries: Vec<LicenseEntry> = Vec::new();
+            for pkg in &lockfile.packages {
+                let lic = licensed_map.get(pkg.name.as_str()).cloned();
+                let (source, source_type) = match lockfile.sources.get(pkg.source_idx) {
+                    Some(hlock::Source::Registry(u)) => (u.clone(), "registry".to_string()),
+                    Some(hlock::Source::Git(u)) => (u.clone(), "git".to_string()),
+                    Some(hlock::Source::Workspace) => (String::new(), "workspace".to_string()),
+                    Some(hlock::Source::Local(u)) => (u.clone(), "local".to_string()),
+                    Some(hlock::Source::CasHttp(u)) => (u.clone(), "cas-http".to_string()),
+                    Some(hlock::Source::Ipfs(u)) => (u.clone(), "ipfs".to_string()),
+                    None => (String::new(), "unknown".to_string()),
+                };
+                let is_workspace = source_type == "workspace";
+                entries.push(LicenseEntry { name: pkg.name.clone(), license: lic.map(String::from), source, source_type, is_workspace });
+            }
+
+            let filtered_entries: Vec<&LicenseEntry> = if missing {
+                entries.iter().filter(|e| e.license.is_none() && !e.is_workspace).collect()
+            } else {
+                entries.iter().collect()
+            };
+
+            let declared_count = entries.iter().filter(|e| e.license.is_some()).count();
+            let undeclared_count = entries.iter().filter(|e| e.license.is_none() && !e.is_workspace).count();
+            let workspace_count = entries.iter().filter(|e| e.is_workspace).count();
+            let copyleft_keywords = ["GPL", "AGPL", "LGPL", "CPAL", "EUPL", "CC-BY-SA"];
+            let copyleft_count = entries.iter().filter(|e| {
+                e.license.as_ref().is_some_and(|l| copyleft_keywords.iter().any(|k| l.contains(k)))
+            }).count();
+            let permissive_count = declared_count - copyleft_count;
+
+            let mut violations: Vec<serde_json::Value> = Vec::new();
+
+            for entry in &entries {
+                if entry.is_workspace { continue; }
+                if let Some(ref lic) = entry.license {
+                    for denied in &denied_licenses {
+                        if lic.contains(denied) {
+                            violations.push(serde_json::json!({
+                                "package": entry.name,
+                                "reason": "denied",
+                                "license": lic,
+                            }));
+                        }
+                    }
+                    if !allowed_licenses.is_empty() {
+                        let is_allowed = allowed_licenses.iter().any(|a| lic.contains(a) || a == lic);
+                        if !is_allowed {
+                            violations.push(serde_json::json!({
+                                "package": entry.name,
+                                "reason": "not-allowed",
+                                "license": lic,
+                            }));
+                        }
+                    }
+                } else if strict || !allowed_licenses.is_empty() {
+                    violations.push(serde_json::json!({
+                        "package": entry.name,
+                        "reason": "undeclared",
+                    }));
+                }
+            }
+
+            let has_violations = !violations.is_empty();
+
+            if fmt == output::OutputFormat::Json {
+                let pkgs_json: Vec<serde_json::Value> = filtered_entries.iter().map(|e| {
+                    serde_json::json!({
+                        "name": e.name,
+                        "license": e.license,
+                        "source": e.source,
+                        "source_type": e.source_type,
+                    })
+                }).collect();
                 let json = serde_json::json!({
-                    "package": package,
-                    "version": version,
-                    "chains": chains_json,
-                    "source": source_str,
-                    "source_type": source_type_str,
-                    "license": license,
-                    "integrity": integrity,
-                    "advisories": advisories.iter().map(|a| serde_json::json!({
-                        "id": a.advisory_id,
-                        "severity": a.severity.as_str(),
-                    })).collect::<Vec<_>>(),
-                    "has_provenance": has_provenance,
+                    "packages": pkgs_json,
+                    "summary": {
+                        "declared": declared_count,
+                        "total": entries.len(),
+                        "undeclared": undeclared_count,
+                        "workspace": workspace_count,
+                        "copyleft": copyleft_count,
+                        "permissive": permissive_count,
+                    },
+                    "violations": violations,
+                    "total_packages": entries.len(),
                 });
                 if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
             } else {
                 if !quiet {
-                    use owo_colors::OwoColorize;
-                    if verbose { eprintln!("[verbose] Building dependency chains for '{}'...", package); }
-                    let is_workspace = matches!(lockfile.sources.get(pkg.source_idx), Some(hlock::Source::Workspace));
-                    println!("{}@{}", package.bold(), version.cyan());
-
-                    if is_workspace && chains.iter().all(|c| c.len() <= 1) {
-                        println!("  (workspace root)");
+                    if filtered_entries.is_empty() {
+                        if missing {
+                            println!("All packages have license declarations.");
+                        } else {
+                            println!("No license declarations found.");
+                        }
                     } else {
-                        for (i, chain) in chains.iter().enumerate() {
-                            if chains.len() > 1 {
-                                if i > 0 { println!(); }
-                                println!("Chain {}:", i + 1);
+                        use owo_colors::OwoColorize;
+                        println!("{:24}{:16}{:16}{}", "Package".bold(), "License".bold(), "Source".bold(), if missing { "Status".bold() } else { "".bold() });
+                        println!("{:24}{:16}{:16}{}", "────────────────────────", "────────────────", "────────────────", if missing { "──────" } else { "" });
+                        for entry in filtered_entries {
+                            let lic_display = match &entry.license {
+                                Some(l) => l.green().to_string(),
+                                None => "⚠ UNDECLARED".yellow().bold().to_string(),
+                            };
+                            let src_short = if entry.source.is_empty() { entry.source_type.clone() } else {
+                                let url = &entry.source;
+                                if let Some(stripped) = url.strip_prefix("https://") {
+                                    stripped.split('/').next().unwrap_or(stripped).to_string()
+                                } else {
+                                    url.clone()
+                                }
+                            };
+                            if missing {
+                                println!("{:24}{:16}{:16}{}", entry.name.bold(), lic_display, src_short, "MISSING".red().bold());
+                            } else {
+                                println!("{:24}{:16}{}", entry.name.bold(), lic_display, src_short);
                             }
-                            if chain.len() <= 1 {
+                        }
+                        println!();
+                        println!("Summary: {}/{} declared, {} copyleft, {} permissive, {} undeclared, {} workspace", declared_count, entries.len(), copyleft_count, permissive_count, undeclared_count, workspace_count);
+                    }
+                }
+            }
+
+            if has_violations {
+                std::process::exit(1);
+            }
+        }
+
+        // ==========================================
+        // NEW v0.18.0 COMMANDS
+        // ==========================================
+
+        // --- OUTDATED (G01) ---
+        Commands::Outdated { file, major, dep_type: _, format, timeout } => {
+            let content = match read_input(&file) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
+            };
+            let lockfile = match deserialize(&content) {
+                Ok(lf) => lf,
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
+            };
+
+            if verbose { eprintln!("[verbose] Checking {} packages for updates...", lockfile.packages.len()); }
+
+            let mut outdated_list = Vec::new();
+            let mut skipped_list = Vec::new();
+
+            for pkg in &lockfile.packages {
+                let current = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
+                let source = lockfile.sources.get(pkg.source_idx);
+                let source_type = OutdatedSourceType::from_source(source);
+
+                if let Some(label) = source_type.skip_label() {
+                    skipped_list.push(serde_json::json!({ "package": pkg.name, "reason": label }));
+                    continue;
+                }
+
+                match check_outdated(&pkg.name, &current, source_type, timeout) {
+                    Ok(info) => {
+                        if let Some(latest) = &info.latest {
+                            let update_type = info.update_type;
+                            if !major && matches!(update_type, UpdateType::Major) {
+                                skipped_list.push(serde_json::json!({ "package": pkg.name, "reason": "major (use --major to show)" }));
                                 continue;
                             }
-                            let mut display_chain = chain.clone();
-                            display_chain.reverse();
-                            for (j, name) in display_chain.iter().enumerate() {
-                                if name == &package { continue; }
-                                let pkg_ver = lockfile.packages.iter().find(|p| p.name == *name)
-                                    .map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch))
-                                    .unwrap_or_default();
-                                let constraint = lockfile.provenance_for(name).map(|p| p.constraint.as_str()).unwrap_or("");
-                                let dep_type_str = lockfile.provenance_for(name).map(|p| match p.dep_type {
-                                    hlock::DepType::Runtime => "runtime",
-                                    hlock::DepType::Dev => "dev",
-                                    _ => "other"
-                                }).unwrap_or("");
-                                let indent = if j == 0 { String::new() } else { format!("{}{}", "│   ".repeat(j - 1), "└── ") };
-                                if constraint.is_empty() {
-                                    println!("{}{}@{}", indent, name.bold(), pkg_ver.cyan());
-                                } else {
-                                    println!("{}{}@{} ({}, {})", indent, name.bold(), pkg_ver.cyan(), constraint, dep_type_str);
-                                }
-                            }
+                            outdated_list.push(serde_json::json!({
+                                "package": pkg.name,
+                                "current": current,
+                                "latest": latest,
+                                "update_type": update_type.to_string(),
+                                "source_type": "registry",
+                            }));
                         }
                     }
+                    Err(e) => {
+                        if verbose { eprintln!("[verbose] Failed to check {}: {}", pkg.name, e); }
+                    }
+                }
+            }
 
-                    println!();
-                    println!("Source: {}", source_str);
-                    println!("License: {}", license.as_deref().unwrap_or("—").green());
-                    println!("Integrity: {}", integrity.as_deref().unwrap_or("—").dimmed());
-                    if advisories.is_empty() {
-                        println!("Advisories: none");
-                    } else {
-                        println!("Advisories:");
-                        for a in &advisories {
-                            let sev_str = match a.severity {
-                                hlock::policy::AdvisorySeverity::Critical | hlock::policy::AdvisorySeverity::High => a.severity.as_str().to_uppercase().red().bold().to_string(),
-                                hlock::policy::AdvisorySeverity::Medium => a.severity.as_str().to_uppercase().yellow().bold().to_string(),
-                                hlock::policy::AdvisorySeverity::Low => a.severity.as_str().to_uppercase().yellow().to_string(),
-                                hlock::policy::AdvisorySeverity::Info => a.severity.as_str().to_uppercase().blue().to_string(),
+            let fmt = output::parse_format(&format);
+
+            if fmt == output::OutputFormat::Json {
+                owo_colors::set_override(false);
+                let major_count = outdated_list.iter().filter(|o| o["update_type"] == "major").count();
+                let minor_count = outdated_list.iter().filter(|o| o["update_type"] == "minor").count();
+                let patch_count = outdated_list.iter().filter(|o| o["update_type"] == "patch").count();
+                let json = serde_json::json!({
+                    "outdated": outdated_list,
+                    "skipped": skipped_list,
+                    "summary": {
+                        "total": lockfile.packages.len(),
+                        "outdated": outdated_list.len(),
+                        "major": major_count,
+                        "minor": minor_count,
+                        "patch": patch_count,
+                        "skipped": skipped_list.len(),
+                    }
+                });
+                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
+            } else {
+                owo_colors::set_override(color_enabled);
+                if outdated_list.is_empty() {
+                    if !quiet { println!("No outdated packages found."); }
+                } else {
+                    if !quiet {
+                        use owo_colors::OwoColorize;
+                        println!("{:16}{:12}{:12}{}", "Package".bold(), "Current".bold(), "Latest".bold(), "Type".bold());
+                        println!("{:16}{:12}{:12}{}", "────────────────", "────────────", "────────────", "─────");
+                        for entry in &outdated_list {
+                            let name = entry["package"].as_str().unwrap_or("");
+                            let current = entry["current"].as_str().unwrap_or("");
+                            let latest = entry["latest"].as_str().unwrap_or("");
+                            let update_type = entry["update_type"].as_str().unwrap_or("");
+                            let type_colored = match update_type {
+                                "major" => update_type.red().to_string(),
+                                "minor" => update_type.yellow().to_string(),
+                                "patch" => update_type.green().to_string(),
+                                _ => update_type.to_string(),
                             };
-                            println!("  {} {} ({})", sev_str, a.advisory_id, a.affected_versions);
+                            println!("{:16}{:12}{:12}{}", name.bold(), current.cyan(), latest.green(), type_colored);
+                        }
+                        println!();
+                        let major_count = outdated_list.iter().filter(|o| o["update_type"] == "major").count();
+                        let minor_count = outdated_list.iter().filter(|o| o["update_type"] == "minor").count();
+                        let patch_count = outdated_list.iter().filter(|o| o["update_type"] == "patch").count();
+                        println!("{} outdated ({} major, {} minor, {} patch)",
+                            outdated_list.len().to_string().bold(),
+                            major_count, minor_count, patch_count);
+                    }
+                }
+            }
+
+            if !outdated_list.is_empty() { std::process::exit(1); }
+        }
+
+        // --- FIX (G03) ---
+        Commands::Fix { file, audit, outdated, all, dry_run, interactive, format, timeout } => {
+            if file == std::path::Path::new("-") {
+                eprintln!("Error: fix requires a real file path (not stdin)");
+                std::process::exit(2);
+            }
+
+            let fix_type = if all || (audit && outdated) {
+                FixType::Audit
+            } else if audit {
+                FixType::Audit
+            } else if outdated {
+                FixType::Outdated
+            } else {
+                FixType::Audit
+            };
+
+            let content = match std::fs::read_to_string(&file) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
+            };
+            let mut lockfile = match deserialize(&content) {
+                Ok(lf) => lf,
+                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
+            };
+
+            if verbose { eprintln!("[verbose] Building fix plan..."); }
+
+            let plan = match build_fix_plan(&lockfile, fix_type, timeout) {
+                Ok(p) => p,
+                Err(e) => { eprintln!("Error building fix plan: {}", e); std::process::exit(2); }
+            };
+
+            if plan.fixes.is_empty() {
+                if !quiet { println!("No fixes needed."); }
+                std::process::exit(1);
+            }
+
+            let fmt = output::parse_format(&format);
+
+            if dry_run {
+                if fmt == output::OutputFormat::Json {
+                    owo_colors::set_override(false);
+                    let json = serde_json::json!({
+                        "would_fix": plan.fixes.iter().map(|f| serde_json::json!({
+                            "package": f.package, "current": f.current, "fixed": f.fixed,
+                            "advisory_id": f.advisory_id, "type": match f.fix_type { FixType::Audit => "audit", FixType::Outdated => "outdated" }
+                        })).collect::<Vec<_>>(),
+                        "total_vulnerabilities": plan.total_vulnerabilities,
+                    });
+                    if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
+                } else {
+                    if !quiet {
+                        println!("Would fix {} vulnerabilities:", plan.fixes.len());
+                        println!();
+                        println!("{:12}{:12}{:12}{}", "Package".bold(), "Current".bold(), "Fixed".bold(), "Advisory".bold());
+                        println!("{:12}{:12}{:12}{}", "────────────", "────────────", "────────────", "────────────");
+                        for fix in &plan.fixes {
+                            println!("{:12}{:12}{:12}{}", fix.package.bold(), fix.current.cyan(), fix.fixed.green(), fix.advisory_id);
+                        }
+                        println!();
+                        println!("Run without --dry-run to apply.");
+                    }
+                }
+                std::process::exit(0);
+            }
+
+            if interactive {
+                let mut selected = vec![false; plan.fixes.len()];
+                let stdin = std::io::stdin();
+                for (i, fix) in plan.fixes.iter().enumerate() {
+                    print!("Fix {} {} → {}? [y/n/a/q] ", fix.package.bold(), fix.current.cyan(), fix.fixed.green());
+                    use std::io::Write;
+                    std::io::stdout().flush().ok();
+                    let mut input = String::new();
+                    if stdin.read_line(&mut input).is_ok() {
+                        let answer = input.trim().to_lowercase();
+                        match answer.as_str() {
+                            "y" | "yes" => { selected[i] = true; }
+                            "a" | "all" => { for s in &mut selected { *s = true; } break; }
+                            "q" | "quit" => { break; }
+                            _ => { if !quiet { eprintln!("  Skipped {} (major update)", fix.package); } }
                         }
                     }
+                }
 
-                    if !has_provenance {
-                        println!();
-                        println!("Note: no @provenance data; constraints not available");
+                let applied = apply_fixes(&mut lockfile, &plan, &selected);
+                if !quiet { eprintln!("Applied {} fix(es). Re-serialize and re-validate...", applied); }
+            } else {
+                let selected: Vec<bool> = plan.fixes.iter().map(|_| true).collect();
+                let applied = apply_fixes(&mut lockfile, &plan, &selected);
+                if !quiet { eprintln!("Applied {} fix(es).", applied); }
+            }
+
+            let serialized = match serialize(&mut lockfile) {
+                Ok(s) => s,
+                Err(e) => { eprintln!("[{}] Serialize error: {}", e.error_code(), e); std::process::exit(1); }
+            };
+
+            if validate_digest(&serialized).is_ok() {
+                if !quiet { eprintln!("{} Digest updated.", output::C { text: "✓", on: color_enabled }.gb()); }
+            }
+
+            if let Err(e) = std::fs::write(&file, &serialized) {
+                eprintln!("Error writing {}: {}", file.display(), e);
+                std::process::exit(1);
+            }
+
+            if !quiet { println!("Fix applied to {}", file.display()); }
+        }
+
+        // --- IMPORT (G04) ---
+        Commands::Import { source, from, output, registry } => {
+            let source_content = match std::fs::read_to_string(&source) {
+                Ok(c) => c,
+                Err(e) => { eprintln!("Error reading {}: {}", source.display(), e); std::process::exit(2); }
+            };
+
+            let format = match from.as_str() {
+                "yarn" => ImportFormat::Yarn,
+                "npm" => ImportFormat::Npm,
+                "pnpm" => ImportFormat::Pnpm,
+                _ => {
+                    eprintln!("Error: unknown format '{}'. Supported: yarn, npm, pnpm", from);
+                    std::process::exit(2);
+                }
+            };
+
+            let (mut lockfile, result) = match format {
+                ImportFormat::Yarn | ImportFormat::Pnpm => {
+                    match import_yarn(&source_content, &registry) {
+                        Ok(r) => r,
+                        Err(e) => { eprintln!("[{}] Import failed: {}", e.error_code(), e); std::process::exit(2); }
                     }
+                }
+                ImportFormat::Npm => {
+                    match import_npm(&source_content, &registry) {
+                        Ok(r) => r,
+                        Err(e) => { eprintln!("[{}] Import failed: {}", e.error_code(), e); std::process::exit(2); }
+                    }
+                }
+            };
+
+            let serialized = match serialize(&mut lockfile) {
+                Ok(s) => s,
+                Err(e) => { eprintln!("[{}] Serialize error: {}", e.error_code(), e); std::process::exit(1); }
+            };
+
+            if let Some(ref out) = output {
+                if let Err(e) = std::fs::write(out, &serialized) {
+                    eprintln!("Error writing {}: {}", out.display(), e); std::process::exit(1);
+                }
+                if !quiet { eprintln!("Imported {} packages to {}", result.imported, out.display()); }
+            } else {
+                print!("{}", serialized);
+            }
+
+            if !quiet && output.is_none() {
+                eprintln!("Imported {} packages from {} ({})", result.imported, source.display(), result.source_format);
+                if !result.warnings.is_empty() {
+                    eprintln!("Warnings:");
+                    for w in &result.warnings { eprintln!("  - {}", w); }
                 }
             }
         }
 
-        Commands::Completions { shell } => {
-            use clap_complete::{generate, Shell};
-            let shell_type = match shell.as_str() {
-                "bash" => Shell::Bash,
-                "zsh" => Shell::Zsh,
-                "fish" => Shell::Fish,
-                "elvish" => Shell::Elvish,
-                "powershell" => Shell::PowerShell,
-                _ => {
-                    eprintln!("Error: unknown shell '{}'. Supported: bash, zsh, fish, elvish, powershell", shell);
-                    std::process::exit(2);
+        // --- EXPLAIN (G06) ---
+        Commands::Explain { rule_or_id, file, format } => {
+            if let Some(explanation) = explain_rule(&rule_or_id) {
+                let fmt = output::parse_format(&format);
+                if fmt == output::OutputFormat::Json {
+                    owo_colors::set_override(false);
+                    let json = serde_json::json!({
+                        "name": explanation.name,
+                        "kind": match explanation.kind { ExplanationKind::Rule => "rule", ExplanationKind::Advisory => "advisory" },
+                        "severity": explanation.severity,
+                        "category": explanation.category,
+                        "description": explanation.description,
+                        "why_it_matters": explanation.why_it_matters,
+                        "how_to_fix": explanation.how_to_fix,
+                        "related": explanation.related,
+                        "references": explanation.references,
+                    });
+                    if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
+                } else {
+                    owo_colors::set_override(color_enabled);
+                    use owo_colors::OwoColorize;
+                    println!("{}: {}", "Rule".bold(), rule_or_id);
+                    if let Some(ref sev) = explanation.severity {
+                        println!("{}: {}", "Severity".bold(), sev);
+                    }
+                    if let Some(ref cat) = explanation.category {
+                        println!("{}: {}", "Category".bold(), cat);
+                    }
+                    println!();
+                    println!("{}", explanation.description);
+                    println!();
+                    if !explanation.why_it_matters.is_empty() {
+                        println!("{}:", "Why it matters".bold());
+                        for item in &explanation.why_it_matters {
+                            println!("  - {}", item);
+                        }
+                        println!();
+                    }
+                    if !explanation.how_to_fix.is_empty() {
+                        println!("{}:", "How to fix".bold());
+                        for item in &explanation.how_to_fix {
+                            println!("  - {}", item);
+                        }
+                        println!();
+                    }
+                    if !explanation.related.is_empty() {
+                        println!("{}: {}", "Related rules".bold(), explanation.related.join(", "));
+                    }
+                    if !explanation.references.is_empty() {
+                        println!("{}:", "References".bold());
+                        for r in &explanation.references {
+                            println!("  - {}", r.cyan());
+                        }
+                    }
                 }
-            };
-            let mut cmd = Cli::command();
-            let name = "hlock";
-            if !quiet {
-                generate(shell_type, &mut cmd, name, &mut std::io::stdout());
+                return;
             }
+
+            if let Some(ref path) = file {
+                let content = match read_input(path) {
+                    Ok(c) => c,
+                    Err(e) => { eprintln!("Error reading {}: {}", path.display(), e); std::process::exit(2); }
+                };
+                let lockfile = match deserialize(&content) {
+                    Ok(lf) => lf,
+                    Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
+                };
+
+                if let Some(explanation) = explain_advisory(&rule_or_id, &lockfile) {
+                    let fmt = output::parse_format(&format);
+                    if fmt == output::OutputFormat::Json {
+                        owo_colors::set_override(false);
+                        let json = serde_json::json!({
+                            "name": explanation.name,
+                            "kind": "advisory",
+                            "severity": explanation.severity,
+                            "category": explanation.category,
+                            "description": explanation.description,
+                            "why_it_matters": explanation.why_it_matters,
+                            "how_to_fix": explanation.how_to_fix,
+                            "references": explanation.references,
+                        });
+                        if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
+                    } else {
+                        owo_colors::set_override(color_enabled);
+                        use owo_colors::OwoColorize;
+                        println!("{}: {}", "Advisory".bold(), rule_or_id);
+                        if let Some(ref sev) = explanation.severity {
+                            println!("{}: {}", "Severity".bold(), sev.red().bold());
+                        }
+                        println!();
+                        println!("{}", explanation.description);
+                        println!();
+                        if !explanation.how_to_fix.is_empty() {
+                            println!("{}:", "How to fix".bold());
+                            for item in &explanation.how_to_fix {
+                                println!("  - {}", item);
+                            }
+                        }
+                        if !explanation.references.is_empty() {
+                            println!("{}:", "References".bold());
+                            for r in &explanation.references {
+                                println!("  - {}", r.cyan());
+                            }
+                        }
+                    }
+                    return;
+                }
+            }
+
+            eprintln!("Error: '{}' not found as a rule or advisory.", rule_or_id);
+            eprintln!("Hint: Use --file <lockfile> to look up advisory IDs.");
+            std::process::exit(1);
         }
     }
 }
