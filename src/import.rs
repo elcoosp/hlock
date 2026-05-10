@@ -2,7 +2,7 @@
 
 use crate::error::Error;
 use crate::lockfile::{
-    Attestation, DepType, HashAlgorithm, IntegrityHash, Lockfile, Package, Source,
+    Attestation, HashAlgorithm, IntegrityHash, Lockfile, Package, Source,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -393,3 +393,4 @@ mod tests {
         assert_eq!(lockfile.sources.len(), 2);
         assert!(matches!(lockfile.sources[1], Source::Git(_)));
     }
+}

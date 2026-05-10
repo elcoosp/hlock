@@ -168,4 +168,81 @@ pub enum Error {
 
     #[error("Line {line_number}: Invalid VEX status '{status}'")]
     InvalidVexStatus { line_number: usize, status: String },
+
+    #[error("Network error: {reason}")]
+    NetworkError { reason: String },
+
+    #[error("Configuration error: {reason}")]
+    ConfigError { reason: String },
+}
+
+impl Error {
+    /// Return the structured error code for this error.
+    pub fn error_code(&self) -> &'static str {
+        match self {
+            // IO: E0000-E0099
+            Error::Io(_) => "E0001",
+            // Parse: E0100-E0199
+            Error::MissingDelimiter { .. } => "E0101",
+            Error::InvalidBase64 { .. } => "E0102",
+            Error::UnknownPayloadVersion { .. } => "E0103",
+            Error::InvalidHeader { .. } => "E0104",
+            Error::UnknownDepType { .. } => "E0105",
+            Error::UnknownHashAlgorithm { .. } => "E0106",
+            Error::UnknownAttestationType { .. } => "E0107",
+            Error::InvalidAdvisorySeverity { .. } => "E0108",
+            Error::InvalidPolicyType { .. } => "E0109",
+            Error::InvalidVexStatus { .. } => "E0110",
+            Error::UnknownProvenanceDepType { .. } => "E0111",
+            Error::UnknownProvenanceSourceType { .. } => "E0112",
+            Error::DuplicateProvenance { .. } => "E0113",
+            Error::InvalidWorkspaceHash { .. } => "E0114",
+            Error::LazyIndexCorrupt { .. } => "E0115",
+            // Digest: E0200-E0299
+            Error::PayloadDigestMismatch { .. } => "E0201",
+            Error::DigestMismatch { .. } => "E0202",
+            Error::DuplicateDigestDirective => "E0203",
+            Error::PatchDigestMismatch { .. } => "E0204",
+            Error::ArtifactDigestMismatch { .. } => "E0205",
+            Error::ScriptDigestMismatch { .. } => "E0206",
+            // Signature: E0300-E0399
+            Error::InvalidSignature { .. } => "E0301",
+            Error::TrustRootExpired { .. } => "E0302",
+            Error::MissingTrustRoot => "E0303",
+            Error::TrustRootVerificationFailed { .. } => "E0304",
+            Error::TrustRootRotationInvalid { .. } => "E0305",
+            // Lint: E0400-E0499
+            Error::PhantomDependency { .. } => "E0401",
+            Error::OrphanPatchHash { .. } => "E0402",
+            Error::HookDeniedByPolicy { .. } => "E0403",
+            Error::EngineConstraintUnsatisfied { .. } => "E0404",
+            // Audit: E0500-E0599
+            Error::InvalidDependencyIndex { .. } => "E0501",
+            Error::MissingPackage { .. } => "E0502",
+            Error::MissingContentId { .. } => "E0503",
+            Error::InvalidFeatureIndex { .. } => "E0504",
+            // Merge: E0600-E0699
+            Error::MergeConflict { .. } => "E0601",
+            Error::MergeSourceConflict { .. } => "E0602",
+            Error::MergeFailed { .. } => "E0603",
+            Error::MergeRemoveAlterConflict { .. } => "E0604",
+            Error::MergeOverrideConflict { .. } => "E0605",
+            // Network: E0700-E0799
+            Error::NetworkError { .. } => "E0701",
+            Error::SbomNoRegistrySource => "E0702",
+            Error::PatchFileMissing { .. } => "E0703",
+            Error::ArtifactMissing { .. } => "E0704",
+            Error::UnknownExport { .. } => "E0705",
+            Error::RootContentIdMissing { .. } => "E0706",
+            Error::NoPackagesForPlatform { .. } => "E0707",
+            Error::MissingSource { .. } => "E0708",
+            Error::PeerRangeMismatch { .. } => "E0709",
+            Error::PeerRequirementUnsatisfied { .. } => "E0710",
+            // Config: E0800-E0899
+            Error::ConfigError { .. } => "E0801",
+            Error::DuplicateMirrorScope { .. } => "E0802",
+            Error::SbomGenerationFailed { .. } => "E0803",
+            Error::ImportFailed { .. } => "E0804",
+        }
+    }
 }

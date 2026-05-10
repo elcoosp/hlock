@@ -13,6 +13,12 @@ pub mod provenance;
 pub mod sbom;
 pub mod signature;
 pub mod varint;
+pub mod config;
+pub mod osv;
+pub mod outdated;
+pub mod import;
+pub mod fix;
+pub mod explain;
 
 pub use error::Error;
 pub use lockfile::{
@@ -52,3 +58,9 @@ pub use sbom::{SbomFormat, generate_sbom};
 pub use lazy::{LazyLockfile, LockfileHeader};
 pub use lockfile::types::{TrustRootRotation, VexEntry, VexStatus};
 pub use lint::{LintFinding, LintReport, LintRule, LintSeverity, lint_default};
+pub use config::HlockConfig;
+pub use osv::{OsvResponse, OsvVulnerability, query_osv, find_fixed_version, osv_severity};
+pub use outdated::{OutdatedInfo, UpdateType, SourceType as OutdatedSourceType, check_outdated, compare_versions};
+pub use import::{ImportFormat, ImportResult, import_yarn, import_npm};
+pub use fix::{FixPlan, FixEntry, FixType, build_fix_plan, apply_fixes};
+pub use explain::{Explanation, ExplanationKind, explain_rule, explain_advisory};

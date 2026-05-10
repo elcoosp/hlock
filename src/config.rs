@@ -141,12 +141,12 @@ impl Default for OutputConfig {
 impl HlockConfig {
     pub fn load(cli_config_path: Option<&Path>) -> Self {
         if let Some(path) = cli_config_path {
-            if let Ok(config) = Self::load_from_file(path) {
+            if let Some(config) = Self::load_from_file(path) {
                 return config;
             }
         }
 
-        if let Ok(config) = Self::load_from_file(Path::new(".hlockrc")) {
+        if let Some(config) = Self::load_from_file(Path::new(".hlockrc")) {
             return config;
         }
 

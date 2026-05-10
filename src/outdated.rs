@@ -90,7 +90,7 @@ pub fn check_outdated(
     let url = format!("https://registry.npmjs.org/{}/latest", name);
     let response = match client.get(&url).send() {
         Ok(r) => r,
-        Err(_) => {
+        Err(_e) => {
             return Ok(OutdatedInfo {
                 package: name.to_string(),
                 current: current_version.to_string(),
