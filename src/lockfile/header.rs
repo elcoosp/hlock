@@ -8,7 +8,7 @@ fn classify_source(val: &str) -> Source {
         Source::Workspace
     } else if val.starts_with("file://") || val.starts_with('/') {
         Source::Local(val.to_string())
-    } else if val.starts_with("git://") || (val.starts_with("https://") && val.contains(".git")) {
+    } else if val.starts_with("git://") || val.starts_with("git+") || (val.starts_with("https://") && val.contains(".git")) {
         Source::Git(val.to_string())
     } else if val.starts_with("cas+http://") || val.starts_with("cas+https://") {
         Source::CasHttp(val.strip_prefix("cas+").unwrap_or(val).to_string())

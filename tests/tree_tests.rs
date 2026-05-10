@@ -60,6 +60,7 @@ fn test_tree_text() {
     let serialized = make_lockfile_with_tree();
     let path = write_temp_file("tree_text.hlock", &serialized);
     let output = Command::new(hlock_bin())
+        .arg("--color").arg("never")
         .arg("tree").arg("--root").arg("my-app")
         .arg(&path)
         .output()

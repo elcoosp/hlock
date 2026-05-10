@@ -59,6 +59,7 @@ fn test_deps_direct() {
     let serialized = make_lockfile_with_deps();
     let path = write_temp_file("deps_direct.hlock", &serialized);
     let output = Command::new(hlock_bin())
+        .arg("--color").arg("never")
         .arg("deps")
         .arg(&path)
         .arg("my-app")
@@ -75,6 +76,7 @@ fn test_deps_transitive() {
     let serialized = make_lockfile_with_deps();
     let path = write_temp_file("deps_transitive.hlock", &serialized);
     let output = Command::new(hlock_bin())
+        .arg("--color").arg("never")
         .arg("deps")
         .arg(&path)
         .arg("my-app")
@@ -91,6 +93,7 @@ fn test_deps_not_found() {
     let serialized = make_lockfile_with_deps();
     let path = write_temp_file("deps_notfound.hlock", &serialized);
     let output = Command::new(hlock_bin())
+        .arg("--color").arg("never")
         .arg("deps")
         .arg(&path)
         .arg("nonexistent")

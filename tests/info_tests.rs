@@ -13,6 +13,28 @@ fn write_temp_file(name: &str, content: &str) -> PathBuf {
     path
 }
 
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while let Some(&next) = chars.peek() {
+                    if next.is_ascii_alphabetic() {
+                        chars.next();
+                        break;
+                    }
+                    chars.next();
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 fn make_lockfile_with_packages() -> String {
     let mut lf = hlock::Lockfile {
         sources: vec![
@@ -87,9 +109,11 @@ fn test_info_text_output() {
     let output = Command::new(hlock_bin())
         .arg("info")
         .arg(&path)
+        .arg("--color=never")
         .output()
         .expect("failed to run hlock");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let raw_stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = strip_ansi(&raw_stdout);
     assert!(output.status.success(), "info should succeed, stderr: {}", String::from_utf8_lossy(&output.stderr));
     assert!(stdout.contains("Packages:"), "should contain Packages header, got: {}", stdout);
     assert!(stdout.contains("Sources:"), "should contain Sources header");

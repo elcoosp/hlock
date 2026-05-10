@@ -16,12 +16,13 @@ pub enum OutputFormat {
 #[allow(dead_code)]
 pub struct ColorConfig {
     when: ColorWhen,
+    pub enabled: bool,
 }
 
-#[allow(dead_code)]
 impl ColorConfig {
+    #[allow(dead_code)]
     pub fn new(when: ColorWhen) -> Self {
-        let cfg = Self { when };
+        let cfg = Self { when, enabled: true };
         cfg.apply_override();
         cfg
     }
@@ -41,17 +42,19 @@ impl ColorConfig {
         } else {
             when
         };
-        let cfg = Self { when };
+        let enabled = match when {
+            ColorWhen::Always => true,
+            ColorWhen::Never => false,
+            ColorWhen::Auto => std::io::stdout().is_terminal(),
+        };
+        let cfg = Self { when, enabled };
         cfg.apply_override();
         cfg
     }
 
+    #[allow(dead_code)]
     pub fn should_color(&self) -> bool {
-        match self.when {
-            ColorWhen::Always => true,
-            ColorWhen::Never => false,
-            ColorWhen::Auto => std::io::stdout().is_terminal(),
-        }
+        self.enabled
     }
 
     fn apply_override(&self) {
@@ -65,10 +68,26 @@ impl ColorConfig {
 
 pub fn parse_format(format: &str) -> OutputFormat {
     match format {
-        "json" => {
-            owo_colors::set_override(false);
-            OutputFormat::Json
-        }
+        "json" => OutputFormat::Json,
         _ => OutputFormat::Text,
     }
+}
+
+pub struct C<'a> {
+    pub text: &'a str,
+    pub on: bool,
+}
+
+impl<'a> C<'a> {
+    pub fn gb(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.green().bold().to_string() } else { self.text.to_string() } }
+    pub fn rb(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.red().bold().to_string() } else { self.text.to_string() } }
+    pub fn yb(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.yellow().bold().to_string() } else { self.text.to_string() } }
+    pub fn bl(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.blue().to_string() } else { self.text.to_string() } }
+    pub fn b(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.bold().to_string() } else { self.text.to_string() } }
+    #[allow(dead_code)]
+    pub fn g(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.green().to_string() } else { self.text.to_string() } }
+    #[allow(dead_code)]
+    pub fn y(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.yellow().to_string() } else { self.text.to_string() } }
+    #[allow(dead_code)]
+    pub fn r(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.red().to_string() } else { self.text.to_string() } }
 }

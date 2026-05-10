@@ -52,6 +52,7 @@ fn test_dependents_direct() {
     let serialized = make_lockfile_with_dependents();
     let path = write_temp_file("dependents_direct.hlock", &serialized);
     let output = Command::new(hlock_bin())
+        .arg("--color").arg("never")
         .arg("dependents")
         .arg(&path)
         .arg("lodash")
@@ -67,6 +68,7 @@ fn test_dependents_transitive() {
     let serialized = make_lockfile_with_dependents();
     let path = write_temp_file("dependents_transitive.hlock", &serialized);
     let output = Command::new(hlock_bin())
+        .arg("--color").arg("never")
         .arg("dependents")
         .arg(&path)
         .arg("lodash")
@@ -83,6 +85,7 @@ fn test_dependents_not_found() {
     let serialized = make_lockfile_with_dependents();
     let path = write_temp_file("dependents_notfound.hlock", &serialized);
     let output = Command::new(hlock_bin())
+        .arg("--color").arg("never")
         .arg("dependents")
         .arg(&path)
         .arg("nonexistent")

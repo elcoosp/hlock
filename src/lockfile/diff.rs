@@ -1,6 +1,7 @@
 //! Lockfile diff functionality
 
 use super::types::{Package, PackageChange, LockfileDiff, DiffFormat};
+use owo_colors::OwoColorize;
 
 fn version_string(pkg: &Package) -> String {
     format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch)
@@ -26,15 +27,15 @@ fn serialize_diff_text(diff: &LockfileDiff) -> String {
 
     out.push_str(&format!("  added: {}\n", added.len()));
     for p in &added {
-        out.push_str(&format!("    + {}@{}\n", p.name, version_string(p)));
+        out.push_str(&format!("    + {}@{}\n", p.name.green().bold(), version_string(p).cyan()));
     }
     out.push_str(&format!("  removed: {}\n", removed.len()));
     for p in &removed {
-        out.push_str(&format!("    - {}@{}\n", p.name, version_string(p)));
+        out.push_str(&format!("    - {}@{}\n", p.name.red().bold(), version_string(p).cyan()));
     }
     out.push_str(&format!("  altered: {}\n", altered.len()));
     for (old, new) in &altered {
-        out.push_str(&format!("    ~ {}@{} -> {}@{}\n", old.name, version_string(old), new.name, version_string(new)));
+        out.push_str(&format!("    ~ {}@{} -> {}@{}\n", old.name.yellow().bold(), version_string(old).cyan(), new.name.yellow().bold(), version_string(new).cyan()));
     }
     out
 }

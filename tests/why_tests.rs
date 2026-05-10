@@ -92,6 +92,8 @@ fn test_why_text() {
     let serialized = make_lockfile_with_chain();
     let path = write_temp_file("why_text.hlock", &serialized);
     let output = Command::new(hlock_bin())
+        .arg("--color")
+        .arg("never")
         .arg("why")
         .arg(&path)
         .arg("lodash")

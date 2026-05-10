@@ -50,6 +50,7 @@ fn test_licenses_text() {
     let serialized = make_lockfile_with_licenses();
     let path = write_temp_file("licenses_text.hlock", &serialized);
     let output = Command::new(hlock_bin())
+        .arg("--color").arg("never")
         .arg("licenses")
         .arg(&path)
         .output()
@@ -82,6 +83,7 @@ fn test_licenses_missing() {
     let serialized = make_lockfile_with_licenses();
     let path = write_temp_file("licenses_missing.hlock", &serialized);
     let output = Command::new(hlock_bin())
+        .arg("--color").arg("never")
         .arg("licenses")
         .arg(&path)
         .arg("--missing")

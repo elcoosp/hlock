@@ -3,6 +3,29 @@ use hlock::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while let Some(&next) = chars.peek() {
+                    if next.is_ascii_alphabetic() {
+                        chars.next();
+                        break;
+                    }
+                    chars.next();
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 #[test]
 fn test_e2e_write_and_read_v5() {
     let temp_path = PathBuf::from("target/test_e2e_v5.hlock");
@@ -1745,9 +1768,9 @@ fn test_e2e_diff_serialization_text() {
 
     let diff = diff_lockfiles(&parsed_v1, &v2);
     let text = serialize_diff(&diff, DiffFormat::Text);
-    assert!(text.contains("LOCKFILE DIFF"));
-    assert!(text.contains("+ utils@1.0.0"));
-    assert!(text.contains("~ core@1.0.0 -> core@2.0.0"));
+    assert!(strip_ansi(&text).contains("LOCKFILE DIFF"), "should contain LOCKFILE DIFF, got: {}", strip_ansi(&text));
+    assert!(strip_ansi(&text).contains("+ utils@1.0.0"), "should contain + utils@1.0.0, got: {}", strip_ansi(&text));
+    assert!(strip_ansi(&text).contains("~ core@1.0.0 -> core@2.0.0"), "should contain altered, got: {}", strip_ansi(&text));
 }
 
 #[test]

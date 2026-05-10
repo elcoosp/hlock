@@ -41,6 +41,7 @@ fn test_dedup_with_opportunities() {
     let serialized = make_lockfile_with_dupes();
     let path = write_temp_file("dedup_dupes.hlock", &serialized);
     let output = Command::new(hlock_bin())
+        .arg("--color").arg("never")
         .arg("dedup")
         .arg(&path)
         .output()
@@ -55,6 +56,7 @@ fn test_dedup_no_opportunities() {
     let serialized = make_lockfile_no_dupes();
     let path = write_temp_file("dedup_clean.hlock", &serialized);
     let output = Command::new(hlock_bin())
+        .arg("--color").arg("never")
         .arg("dedup")
         .arg(&path)
         .output()

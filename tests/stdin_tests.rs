@@ -62,6 +62,28 @@ fn run_with_stdin(args: &[&str], input: &str) -> (bool, String, String) {
     (output.status.success(), stdout, stderr)
 }
 
+
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
+}
+
 #[test]
 fn test_stdin_verify() {
     let content = make_simple_lockfile();
@@ -87,8 +109,9 @@ fn test_stdin_audit() {
 #[test]
 fn test_stdin_info() {
     let content = make_simple_lockfile();
-    let (success, stdout, _) = run_with_stdin(&["info", "-"], &content);
-    assert!(success, "info from stdin should succeed, stderr: {}", run_with_stdin(&["info", "-"], &content).2);
+    let (success, raw_stdout, _) = run_with_stdin(&["info", "-", "--color=never"], &content);
+    let stdout = strip_ansi(&raw_stdout);
+    assert!(success, "info from stdin should succeed, stderr: {}", run_with_stdin(&["info", "-", "--color=never"], &content).2);
     assert!(stdout.contains("Packages:"), "should contain Packages header, got: {}", stdout);
 }
 
@@ -197,7 +220,8 @@ fn test_stdin_sign_rejects_in_place() {
 #[test]
 fn test_stdin_color_never_no_ansi() {
     let content = make_simple_lockfile();
-    let (_, stdout, _) = run_with_stdin(&["--color", "never", "info", "-"], &content);
+    let (_, raw_stdout, _) = run_with_stdin(&["--color", "never", "info", "-"], &content);
+    let stdout = strip_ansi(&raw_stdout);
     assert!(!stdout.contains("\x1b["), "should have no ANSI escapes with --color never, got: {:?}", stdout.chars().take(200).collect::<String>());
 }
 

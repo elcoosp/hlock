@@ -309,11 +309,12 @@ fn main() {
 
     let quiet = cli.quiet;
     let verbose = cli.verbose && !quiet;
-    let _color_config = output::ColorConfig::from_cli_args(
+    let color_config = output::ColorConfig::from_cli_args(
         &cli.color,
         cli.no_color,
         output::OutputFormat::Text,
     );
+    let color_enabled = color_config.should_color();
 
     match cli.command {
         Commands::Verify { file, trusted_key, time } => {
@@ -323,11 +324,13 @@ fn main() {
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
             };
 
+            let t_vd = std::time::Instant::now();
             if let Err(e) = validate_digest(&content) {
-                eprintln!("{} {}", "✗".red().bold(), e);
+                eprintln!("{} {}", output::C { text: "✗", on: color_enabled }.rb(), e);
                 std::process::exit(1);
             }
-            if !quiet { println!("{} digest valid", "✓".green().bold()); }
+            if verbose { eprintln!("[verbose] Validating digest... {:?}", t_vd.elapsed()); }
+            if !quiet { println!("{} digest valid", output::C { text: "✓", on: color_enabled }.gb()); }
 
             let mut trusted: HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> = HashMap::new();
             for spec in &trusted_key {
@@ -337,11 +340,13 @@ fn main() {
             }
 
             if !trusted.is_empty() {
+                let t_vs = std::time::Instant::now();
                 if let Err(e) = verify_signature(&content, &trusted) {
-                    eprintln!("{} {}", "✗".red().bold(), e);
+                    eprintln!("{} {}", output::C { text: "✗", on: color_enabled }.rb(), e);
                     std::process::exit(1);
                 }
-                if !quiet { println!("{} signature valid", "✓".green().bold()); }
+                if verbose { eprintln!("[verbose] Verifying signature... {:?}", t_vs.elapsed()); }
+                if !quiet { println!("{} signature valid", output::C { text: "✓", on: color_enabled }.gb()); }
             }
 
             let lockfile = match deserialize(&content) {
@@ -354,10 +359,10 @@ fn main() {
             let now = if time > 0 { time } else { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) };
             if !lockfile.trust_roots.is_empty() {
                 if let Err(e) = lockfile.validate_trust_chain(now) {
-                    eprintln!("{} {}", "✗".red().bold(), e);
+                    eprintln!("{} {}", output::C { text: "✗", on: color_enabled }.rb(), e);
                     std::process::exit(1);
                 }
-                if !quiet { println!("{} trust chain valid", "✓".green().bold()); }
+                if !quiet { println!("{} trust chain valid", output::C { text: "✓", on: color_enabled }.gb()); }
             }
         }
 
@@ -415,9 +420,9 @@ fn main() {
             } else {
                 for f in &report.findings {
                     let sev_str = match f.severity {
-                        lint::LintSeverity::Error => "ERROR".red().bold().to_string(),
-                        lint::LintSeverity::Warning => "WARN".yellow().bold().to_string(),
-                        lint::LintSeverity::Info => "INFO".blue().to_string(),
+                        lint::LintSeverity::Error => output::C { text: "ERROR", on: color_enabled }.rb(),
+                        lint::LintSeverity::Warning => output::C { text: "WARN", on: color_enabled }.yb(),
+                        lint::LintSeverity::Info => output::C { text: "INFO", on: color_enabled }.bl(),
                     };
                     let pkg = f.package.as_deref().unwrap_or("-");
                     let skip = match min_sev {
@@ -490,10 +495,10 @@ fn main() {
             } else {
                 for adv in report.all_advisories() {
                     let sev_str = match adv.severity {
-                        policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High => adv.severity.as_str().to_uppercase().red().bold().to_string(),
-                        policy::AdvisorySeverity::Medium => adv.severity.as_str().to_uppercase().yellow().bold().to_string(),
-                        policy::AdvisorySeverity::Low => adv.severity.as_str().to_uppercase().yellow().to_string(),
-                        policy::AdvisorySeverity::Info => adv.severity.as_str().to_uppercase().blue().to_string(),
+                        policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High => if color_enabled { adv.severity.as_str().to_uppercase().red().bold().to_string() } else { adv.severity.as_str().to_uppercase() },
+                        policy::AdvisorySeverity::Medium => if color_enabled { adv.severity.as_str().to_uppercase().yellow().bold().to_string() } else { adv.severity.as_str().to_uppercase() },
+                        policy::AdvisorySeverity::Low => if color_enabled { adv.severity.as_str().to_uppercase().yellow().to_string() } else { adv.severity.as_str().to_uppercase() },
+                        policy::AdvisorySeverity::Info => if color_enabled { adv.severity.as_str().to_uppercase().blue().to_string() } else { adv.severity.as_str().to_uppercase() },
                     };
                     if !quiet { println!("{:10}{:16}{}   {}   {}", sev_str, adv.package, adv.advisory_id, adv.affected_versions, adv.url); }
                 }
@@ -707,6 +712,7 @@ fn main() {
 
             let fmt = output::parse_format(&format);
 
+            owo_colors::set_override(color_enabled);
             if fmt == output::OutputFormat::Json {
                 let mut sources_json = Vec::new();
                 for (idx, source) in lockfile.sources.iter().enumerate() {
@@ -764,7 +770,8 @@ fn main() {
                 if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
             } else {
                 if !quiet {
-                    println!("hlock v{} lockfile", env!("CARGO_PKG_VERSION"));
+                    use owo_colors::OwoColorize;
+                    println!("{} v{} lockfile", output::C { text: "hlock", on: color_enabled }.b(), env!("CARGO_PKG_VERSION"));
                     println!("────────────────────────");
 
                     let mut parts = Vec::new();
@@ -775,9 +782,9 @@ fn main() {
                     if cas_count > 0 { parts.push(format!("{} cas-http", cas_count)); }
                     if ipfs_count > 0 { parts.push(format!("{} ipfs", ipfs_count)); }
                     let pkg_detail = if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) };
-                    println!("Packages:       {}{}", lockfile.packages.len(), pkg_detail);
+                    println!("{}:       {}{}", "Packages".bold(), lockfile.packages.len(), pkg_detail);
 
-                    println!("Sources:        {}", lockfile.sources.len());
+                    println!("{}:        {}", "Sources".bold(), lockfile.sources.len());
                     for (idx, source) in lockfile.sources.iter().enumerate() {
                         let (url, type_str) = match source {
                             hlock::Source::Registry(u) => (u.as_str(), "registry"),
@@ -791,17 +798,17 @@ fn main() {
                     }
 
                     if !lockfile.mirrors.is_empty() {
-                        println!("Mirrors:        {}", lockfile.mirrors.len());
+                        println!("{}:        {}", "Mirrors".bold(), lockfile.mirrors.len());
                         for m in &lockfile.mirrors { println!("  {} -> {}", m.scope, m.url); }
                     }
 
                     if !lockfile.policies.is_empty() {
-                        println!("Policies:       {}", lockfile.policies.len());
+                        println!("{}:       {}", "Policies".bold(), lockfile.policies.len());
                         for p in &lockfile.policies { println!("  {} {} {}", p.policy_type.as_str(), p.package_pattern, p.value); }
                     }
 
                     if !lockfile.trust_roots.is_empty() {
-                        println!("Trust Roots:    {}", lockfile.trust_roots.len());
+                        println!("{}:    {}", "Trust Roots".bold(), lockfile.trust_roots.len());
                         for tr in &lockfile.trust_roots {
                             let algo_str = match tr.algorithm { hlock::signature::SignatureAlgorithm::Ed25519 => "ed25519", hlock::signature::SignatureAlgorithm::MlDsa65 => "mldsa65" };
                             let expires_str = if tr.expires_epoch == 0 { "never expires".to_string() } else { format!("expires epoch {}", tr.expires_epoch) };
@@ -810,42 +817,42 @@ fn main() {
                     }
 
                     if !lockfile.overrides.is_empty() {
-                        println!("Overrides:      {}", lockfile.overrides.len());
+                        println!("{}:      {}", "Overrides".bold(), lockfile.overrides.len());
                         for o in &lockfile.overrides { println!("  {} {} -> {}", o.name, o.from_version, o.to_version); }
                     }
 
                     if !lockfile.features.is_empty() {
-                        println!("Features:       {}", lockfile.features.len());
+                        println!("{}:       {}", "Features".bold(), lockfile.features.len());
                         for (name, flags) in &lockfile.features { println!("  {} -> {}", name, flags.join(", ")); }
                     }
 
                     let adv_report = lockfile.audit();
                     if adv_report.total_count() > 0 {
-                        println!("Advisories:     {} ({} critical, {} high, {} medium, {} low, {} info)", adv_report.total_count(), adv_report.critical.len(), adv_report.high.len(), adv_report.medium.len(), adv_report.low.len(), adv_report.info.len());
+                        println!("{}:     {} ({} critical, {} high, {} medium, {} low, {} info)", "Advisories".bold(), adv_report.total_count(), adv_report.critical.len(), adv_report.high.len(), adv_report.medium.len(), adv_report.low.len(), adv_report.info.len());
                         println!("  Run `hlock audit` for details.");
                     }
 
                     if !lockfile.vex_entries.is_empty() {
-                        println!("VEX Entries:    {}", lockfile.vex_entries.len());
+                        println!("{}:    {}", "VEX Entries".bold(), lockfile.vex_entries.len());
                         for v in &lockfile.vex_entries { println!("  {} / {} -> {}", v.package, v.advisory_id, v.status.as_str()); }
                     }
 
                     let declared = lockfile.licenses.len();
                     let total = lockfile.packages.len();
-                    println!("Licenses:       {}/{} declared", declared, total);
+                    println!("{}:       {}/{} declared", "Licenses".bold(), declared, total);
                     if declared < total { println!("  Run `hlock licenses` for details."); }
 
                     if let Some(ref root) = lockfile.workspace_root {
-                        println!("Workspace:      {}", root);
+                        println!("{}:      {}", "Workspace".bold(), root);
                         for wp in &lockfile.workspace_pkgs { println!("  └── {} ({})", wp.name, wp.manifest_path); }
                     }
 
                     if !lockfile.hoist_boundaries.is_empty() {
-                        println!("Hoist Boundaries:");
+                        println!("{}:", "Hoist Boundaries".bold());
                         for hb in &lockfile.hoist_boundaries { println!("  {} -> [{}]", hb.cosine, hb.allowed_deps.join(", ")); }
                     }
 
-                    if digest_valid { println!("✓ Digest valid (blake3)"); } else { println!("✗ Digest invalid"); }
+                    if digest_valid { println!("{} Digest valid (blake3)", output::C { text: "✓", on: color_enabled }.gb()); } else { println!("{} Digest invalid", output::C { text: "✗", on: color_enabled }.rb()); }
                 }
             }
         }
@@ -870,15 +877,16 @@ fn main() {
                 if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
             } else {
                 if !quiet {
+                    use owo_colors::OwoColorize;
                     if opportunities.is_empty() {
                         println!("No deduplication opportunities found.");
                     } else {
-                        println!("Deduplication Opportunities:");
+                        println!("{}:", "Deduplication Opportunities".bold());
                         println!();
-                        println!("{:12}{:24}{:16}", "Package", "Versions", "Est. Saving");
+                        println!("{:12}{:24}{:16}", "Package".bold(), "Versions".bold(), "Est. Saving".bold());
                         println!("{:12}{:24}{:16}", "---------", "------------------------", "--------------");
                         for o in &opportunities {
-                            println!("{:12}{:24}~{} bytes", o.package_name, o.versions.join(", "), o.potential_saving_bytes);
+                            println!("{:12}{:24}{} bytes", o.package_name.bold(), o.versions.join(", ").cyan(), format!("~{}", o.potential_saving_bytes).yellow());
                         }
                     }
                 }
@@ -1123,7 +1131,7 @@ fn main() {
             let declared_count = entries.iter().filter(|e| e.license.is_some()).count();
             let undeclared_count = entries.iter().filter(|e| e.license.is_none() && !e.is_workspace).count();
             let workspace_count = entries.iter().filter(|e| e.is_workspace).count();
-            let copyleft_keywords = ["GPL", "AGPL", "LGPL", "CPAL", "EUPL", "Ms-PL"];
+            let copyleft_keywords = ["GPL", "AGPL", "LGPL", "CPAL", "EUPL", "CC-BY-SA"];
             let copyleft_count = entries.iter().filter(|e| {
                 e.license.as_ref().map_or(false, |l| copyleft_keywords.iter().any(|k| l.contains(k)))
             }).count();
@@ -1200,12 +1208,13 @@ fn main() {
                             println!("No license declarations found.");
                         }
                     } else {
-                        println!("{:24}{:16}{:16}{}", "Package", "License", "Source", if missing { "Status" } else { "" });
+                        use owo_colors::OwoColorize;
+                        println!("{:24}{:16}{:16}{}", "Package".bold(), "License".bold(), "Source".bold(), if missing { "Status".bold() } else { "".bold() });
                         println!("{:24}{:16}{:16}{}", "────────────────────────", "────────────────", "────────────────", if missing { "──────" } else { "" });
                         for entry in filtered_entries {
-                            let lic_str = match &entry.license {
-                                Some(l) => l.clone(),
-                                None => "⚠ UNDECLARED".to_string(),
+                            let lic_display = match &entry.license {
+                                Some(l) => l.green().to_string(),
+                                None => "⚠ UNDECLARED".yellow().bold().to_string(),
                             };
                             let src_short = if entry.source.is_empty() { entry.source_type.clone() } else {
                                 let url = &entry.source;
@@ -1216,9 +1225,9 @@ fn main() {
                                 }
                             };
                             if missing {
-                                println!("{:24}{:16}{:16}MISSING", entry.name, lic_str, src_short);
+                                println!("{:24}{:16}{:16}{}", entry.name.bold(), lic_display, src_short, "MISSING".red().bold());
                             } else {
-                                println!("{:24}{:16}{}", entry.name, lic_str, src_short);
+                                println!("{:24}{:16}{}", entry.name.bold(), lic_display, src_short);
                             }
                         }
                         println!();
@@ -1233,12 +1242,17 @@ fn main() {
         }
 
         Commands::Check { file, trusted_key, time, severity, rule, vex, format } => {
+            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
+            let t_read = std::time::Instant::now();
             let content = match read_input(&file) {
                 Ok(c) => c,
                 Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
             };
+            if verbose { eprintln!("[verbose] Read {} bytes in {:?}", content.len(), t_read.elapsed()); }
 
+            let t_digest = std::time::Instant::now();
             let digest_valid = validate_digest(&content).is_ok();
+            if verbose { eprintln!("[verbose] Validating digest... {:?} ({})", t_digest.elapsed(), if digest_valid { "ok" } else { "FAILED" }); }
 
             let lockfile = match deserialize(&content) {
                 Ok(lf) => lf,
@@ -1257,7 +1271,7 @@ fn main() {
                         }
                     } else {
                         if !quiet {
-                            println!("{} parse error: {}", "✗".red().bold(), e);
+                            println!("{} parse error: {}", output::C { text: "✗", on: color_enabled }.rb(), e);
                         }
                     }
                     std::process::exit(2);
@@ -1266,11 +1280,13 @@ fn main() {
 
             let now = if time > 0 { time } else { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) };
 
+            let t_trust = std::time::Instant::now();
             let trust_chain_valid = if !lockfile.trust_roots.is_empty() {
                 lockfile.validate_trust_chain(now).is_ok()
             } else {
                 true
             };
+            if verbose { eprintln!("[verbose] Trust chain validation... {:?} ({})", t_trust.elapsed(), if trust_chain_valid { "ok" } else { "FAILED" }); }
 
             let mut trusted: HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> = HashMap::new();
             for spec in &trusted_key {
@@ -1299,8 +1315,11 @@ fn main() {
                 (false, true, false, String::new(), signature::SignatureAlgorithm::Ed25519, 0u64)
             };
 
+            let t_lint = std::time::Instant::now();
             let rules = build_rule_set(&rule);
+            if verbose { eprintln!("[verbose] Running lint ({} rules)...", rules.len()); }
             let lint_report = hlock::lint::lint(&lockfile, &rules);
+            if verbose { eprintln!("[verbose] Lint complete... {:?}", t_lint.elapsed()); }
 
             let min_sev = match severity.as_str() {
                 "warning" => lint::LintSeverity::Warning,
@@ -1316,11 +1335,13 @@ fn main() {
                 })
                 .collect();
 
+            let t_audit = std::time::Instant::now();
             let audit_report = if vex {
                 lockfile.audit()
             } else {
                 lockfile.effective_advisories()
             };
+            if verbose { eprintln!("[verbose] Audit complete... {:?}", t_audit.elapsed()); }
 
             let audit_has_critical_or_high = audit_report.has_critical_or_high();
 
@@ -1396,37 +1417,37 @@ fn main() {
                 }
             } else {
                 if !quiet {
-                    if digest_valid { println!("{} Digest valid", "✓".green().bold()); }
-                    else { println!("{} Digest invalid", "✗".red().bold()); }
+                    if digest_valid { println!("{} Digest valid", output::C { text: "✓", on: color_enabled }.gb()); }
+                    else { println!("{} Digest invalid", output::C { text: "✗", on: color_enabled }.rb()); }
 
                     if sig_present {
                         if sig_expired {
-                            println!("{} Signature expired ({}, expired epoch {})", "✗".red().bold(), sig_key_id, sig_expires_epoch);
+                            println!("{} Signature expired ({}, expired epoch {})", output::C { text: "✗", on: color_enabled }.rb(), sig_key_id, sig_expires_epoch);
                         } else if sig_valid {
                             let algo_str = match sig_algo { signature::SignatureAlgorithm::Ed25519 => "ed25519", signature::SignatureAlgorithm::MlDsa65 => "mldsa65" };
-                            println!("{} Signature valid ({}, {})", "✓".green().bold(), sig_key_id, algo_str);
+                            println!("{} Signature valid ({}, {})", output::C { text: "✓", on: color_enabled }.gb(), sig_key_id, algo_str);
                         } else {
-                            println!("{} Signature invalid", "✗".red().bold());
+                            println!("{} Signature invalid", output::C { text: "✗", on: color_enabled }.rb());
                         }
                     } else {
                         println!("  No signature found (use --trusted-key to verify signatures)");
                     }
 
-                    if trust_chain_valid { println!("{} Trust chain valid", "✓".green().bold()); }
-                    else { println!("{} Trust chain invalid", "✗".red().bold()); }
+                    if trust_chain_valid { println!("{} Trust chain valid", output::C { text: "✓", on: color_enabled }.gb()); }
+                    else { println!("{} Trust chain invalid", output::C { text: "✗", on: color_enabled }.rb()); }
 
                     let err_count = lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Error).count();
                     let warn_count = lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Warning).count();
                     let info_count = lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Info).count();
                     if err_count == 0 && warn_count == 0 && info_count == 0 {
-                        println!("{} Lint: 0 errors, 0 warnings, 0 info", "✓".green().bold());
+                        println!("{} Lint: 0 errors, 0 warnings, 0 info", output::C { text: "✓", on: color_enabled }.gb());
                     } else {
                         println!("Lint: {} error(s), {} warning(s), {} info(s)", err_count, warn_count, info_count);
                         for f in &lint_errors {
                             let sev_str = match f.severity {
-                                lint::LintSeverity::Error => "ERROR".red().bold().to_string(),
-                                lint::LintSeverity::Warning => "WARN".yellow().bold().to_string(),
-                                lint::LintSeverity::Info => "INFO".blue().to_string(),
+                                lint::LintSeverity::Error => output::C { text: "ERROR", on: color_enabled }.rb(),
+                                lint::LintSeverity::Warning => output::C { text: "WARN", on: color_enabled }.yb(),
+                                lint::LintSeverity::Info => output::C { text: "INFO", on: color_enabled }.bl(),
                             };
                             let pkg = f.package.as_deref().unwrap_or("-");
                             println!("  {} {:20} {:12} {}", sev_str, f.rule, pkg, f.message);
@@ -1434,9 +1455,9 @@ fn main() {
                     }
 
                     if !audit_has_critical_or_high && audit_report.total_count() == 0 {
-                        println!("{} Audit: 0 vulnerabilities", "✓".green().bold());
+                        println!("{} Audit: 0 vulnerabilities", output::C { text: "✓", on: color_enabled }.gb());
                     } else if !audit_has_critical_or_high {
-                        println!("{} Audit: {} (no critical/high)", "✓".green().bold(), audit_report.total_count());
+                        println!("{} Audit: {} (no critical/high)", output::C { text: "✓", on: color_enabled }.gb(), audit_report.total_count());
                     } else {
                         let crit_count = audit_report.critical.len();
                         let high_count = audit_report.high.len();
@@ -1455,10 +1476,10 @@ fn main() {
                         println!();
                         for adv in audit_report.all_advisories() {
                             let sev_str = match adv.severity {
-                                policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High => adv.severity.as_str().to_uppercase().red().bold().to_string(),
-                                policy::AdvisorySeverity::Medium => adv.severity.as_str().to_uppercase().yellow().bold().to_string(),
-                                policy::AdvisorySeverity::Low => adv.severity.as_str().to_uppercase().yellow().to_string(),
-                                policy::AdvisorySeverity::Info => adv.severity.as_str().to_uppercase().blue().to_string(),
+                                policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High => if color_enabled { adv.severity.as_str().to_uppercase().red().bold().to_string() } else { adv.severity.as_str().to_uppercase() },
+                                policy::AdvisorySeverity::Medium => if color_enabled { adv.severity.as_str().to_uppercase().yellow().bold().to_string() } else { adv.severity.as_str().to_uppercase() },
+                                policy::AdvisorySeverity::Low => if color_enabled { adv.severity.as_str().to_uppercase().yellow().to_string() } else { adv.severity.as_str().to_uppercase() },
+                                policy::AdvisorySeverity::Info => if color_enabled { adv.severity.as_str().to_uppercase().blue().to_string() } else { adv.severity.as_str().to_uppercase() },
                             };
                             println!("  {} {:12} {:16} {}", sev_str, adv.package, adv.advisory_id, adv.affected_versions);
                         }
@@ -1480,7 +1501,7 @@ fn main() {
                         if !trust_chain_valid { fail_parts.push("trust chain invalid".to_string()); }
                         if !lint_errors.is_empty() { fail_parts.push(format!("{} lint errors", lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Error).count())); }
                         if audit_has_critical_or_high { fail_parts.push(format!("{} critical/high advisory", audit_report.critical.len() + audit_report.high.len())); }
-                        println!("{} {}", "✗".red().bold(), fail_parts.join(", "));
+                        println!("{} {}", output::C { text: "✗", on: color_enabled }.rb(), fail_parts.join(", "));
                     }
                 }
             }
@@ -1563,19 +1584,19 @@ fn main() {
                 if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
             } else {
                 if !quiet {
-                    println!("Direct dependents of {}:", package);
+                    println!("Direct dependents of {}:", package.bold());
                     if direct.is_empty() {
                         println!("  (none)");
                     } else {
                         for (name, ver, dt) in &direct {
-                            println!("  {}@{} ({})", name, ver, dt);
+                            println!("  {}@{} ({})", name.bold(), ver.cyan(), dt);
                         }
                     }
                     if transitive && !transitive_list.is_empty() {
                         println!();
                         println!("Transitive dependents:");
                         for (name, ver) in &transitive_list {
-                            println!("  {}@{}", name, ver);
+                            println!("  {}@{}", name.bold(), ver.cyan());
                         }
                     }
                 }
@@ -1654,19 +1675,20 @@ fn main() {
             } else {
                 if !quiet {
                     if verbose { eprintln!("[verbose] {} direct, {} transitive deps", direct.len(), transitive_list.len()); }
-                    println!("Direct dependencies of {}:", package);
+                    use owo_colors::OwoColorize;
+                    println!("Direct dependencies of {}:", package.bold());
                     if direct.is_empty() {
                         println!("  (none)");
                     } else {
                         for (name, ver, dt) in &direct {
-                            println!("  {}@{} ({})", name, ver, dt);
+                            println!("  {}@{} ({})", name.bold(), ver.cyan(), dt);
                         }
                     }
                     if transitive && !transitive_list.is_empty() {
                         println!();
                         println!("Transitive dependencies:");
                         for (name, ver) in &transitive_list {
-                            println!("  {}@{}", name, ver);
+                            println!("  {}@{}", name.bold(), ver.cyan());
                         }
                     }
                 }
@@ -1785,32 +1807,40 @@ fn main() {
                 if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
             } else {
                 if !quiet {
+                    use owo_colors::OwoColorize;
                     if verbose { eprintln!("[verbose] Building dependency chains for '{}'...", package); }
-                    println!("{}@{}", package, version);
+                    let is_workspace = matches!(lockfile.sources.get(pkg.source_idx), Some(hlock::Source::Workspace));
+                    println!("{}@{}", package.bold(), version.cyan());
 
-                    for (i, chain) in chains.iter().enumerate() {
-                        if chains.len() > 1 {
-                            println!();
-                            println!("Chain {}:", i + 1);
-                        }
-                        for (j, name) in chain.iter().enumerate() {
-                            let pkg_ver = lockfile.packages.iter().find(|p| p.name == *name)
-                                .map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch))
-                                .unwrap_or_default();
-                            let constraint = lockfile.provenance_for(name).map(|p| p.constraint.as_str()).unwrap_or("");
-                            let dep_type_str = lockfile.provenance_for(name).map(|p| match p.dep_type {
-                                hlock::DepType::Runtime => "runtime",
-                                hlock::DepType::Dev => "dev",
-                                _ => "other"
-                            }).unwrap_or("");
-                            if j == 0 {
-                                println!("  {}@{}", name, pkg_ver);
-                            } else {
-                                let prefix = if j == chain.len() - 1 { "└──" } else { "├──" };
+                    if is_workspace && chains.iter().all(|c| c.len() <= 1) {
+                        println!("  (workspace root)");
+                    } else {
+                        for (i, chain) in chains.iter().enumerate() {
+                            if chains.len() > 1 {
+                                if i > 0 { println!(); }
+                                println!("Chain {}:", i + 1);
+                            }
+                            if chain.len() <= 1 {
+                                continue;
+                            }
+                            let mut display_chain = chain.clone();
+                            display_chain.reverse();
+                            for (j, name) in display_chain.iter().enumerate() {
+                                if name == &package { continue; }
+                                let pkg_ver = lockfile.packages.iter().find(|p| p.name == *name)
+                                    .map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch))
+                                    .unwrap_or_default();
+                                let constraint = lockfile.provenance_for(name).map(|p| p.constraint.as_str()).unwrap_or("");
+                                let dep_type_str = lockfile.provenance_for(name).map(|p| match p.dep_type {
+                                    hlock::DepType::Runtime => "runtime",
+                                    hlock::DepType::Dev => "dev",
+                                    _ => "other"
+                                }).unwrap_or("");
+                                let indent = if j == 0 { String::new() } else { format!("{}{}", "│   ".repeat(j - 1), "└── ") };
                                 if constraint.is_empty() {
-                                    println!("  {} {}@{}", prefix, name, pkg_ver);
+                                    println!("{}{}@{}", indent, name.bold(), pkg_ver.cyan());
                                 } else {
-                                    println!("  {} {}@{} ({}, {})", prefix, name, pkg_ver, constraint, dep_type_str);
+                                    println!("{}{}@{} ({}, {})", indent, name.bold(), pkg_ver.cyan(), constraint, dep_type_str);
                                 }
                             }
                         }
@@ -1818,14 +1848,20 @@ fn main() {
 
                     println!();
                     println!("Source: {}", source_str);
-                    println!("License: {}", license.unwrap_or_else(|| "—".to_string()));
-                    println!("Integrity: {}", integrity.unwrap_or_else(|| "—".to_string()));
+                    println!("License: {}", license.as_deref().unwrap_or("—").green());
+                    println!("Integrity: {}", integrity.as_deref().unwrap_or("—").dimmed());
                     if advisories.is_empty() {
                         println!("Advisories: none");
                     } else {
                         println!("Advisories:");
                         for a in &advisories {
-                            println!("  {} {} ({})", a.severity.as_str().to_uppercase(), a.advisory_id, a.affected_versions);
+                            let sev_str = match a.severity {
+                                hlock::policy::AdvisorySeverity::Critical | hlock::policy::AdvisorySeverity::High => a.severity.as_str().to_uppercase().red().bold().to_string(),
+                                hlock::policy::AdvisorySeverity::Medium => a.severity.as_str().to_uppercase().yellow().bold().to_string(),
+                                hlock::policy::AdvisorySeverity::Low => a.severity.as_str().to_uppercase().yellow().to_string(),
+                                hlock::policy::AdvisorySeverity::Info => a.severity.as_str().to_uppercase().blue().to_string(),
+                            };
+                            println!("  {} {} ({})", sev_str, a.advisory_id, a.affected_versions);
                         }
                     }
 
