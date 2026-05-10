@@ -19,6 +19,8 @@ pub mod outdated;
 pub mod import;
 pub mod fix;
 pub mod explain;
+pub mod scorecard;
+pub mod sigstore;
 
 pub use error::Error;
 pub use lockfile::{
@@ -64,3 +66,5 @@ pub use outdated::{OutdatedInfo, UpdateType, SourceType as OutdatedSourceType, c
 pub use import::{ImportFormat, ImportResult, import_yarn, import_npm};
 pub use fix::{FixPlan, FixEntry, FixType, build_fix_plan, apply_fixes};
 pub use explain::{Explanation, ExplanationKind, explain_rule, explain_advisory};
+pub use scorecard::{ScorecardResult, ScorecardCheck, fetch_scorecard, format_scorecard};
+pub use sigstore::verify_sigstore;
