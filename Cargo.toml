@@ -1,6 +1,6 @@
 [package]
 name = "hlock"
-version = "0.17.0"
+version = "0.18.0"
 edition = "2024"
 
 [dependencies]
@@ -8,10 +8,14 @@ thiserror = "2"
 ed25519-dalek = "2.2"
 blake3 = "1"
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
 fips204 = { version = "0.4", features = ["ml-dsa-65", "default-rng"] }
 clap = { version = "4", features = ["derive"] }
 owo-colors = { version = "4", features = ["supports-colors"] }
 clap_complete = "4"
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], default-features = false }
+toml = "0.8"
+sha2 = "0.10"
 
 [[bin]]
 name = "hlock"
