@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/logo.png" alt="hlock Logo" width="200"/>
+  <img src="docs/logo.png" alt="hlock Logo" width="300"/>
   <p>
     <strong>Trust But Verify</strong> — supply-chain lockfile integrity for the npm ecosystem.<br/>
     A Rust library and CLI tool providing binary lockfile serialization, BLAKE3 integrity digests, Ed25519/ML-DSA-65 signature verification, policy enforcement, SBOM generation, and vulnerability auditing.
