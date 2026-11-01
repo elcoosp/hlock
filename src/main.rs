@@ -1,13 +1,22 @@
 mod output;
 
-use clap::{CommandFactory, Parser, Subcommand};
-use hlock::*;
-use owo_colors::OwoColorize;
-use std::collections::{HashMap, HashSet};
+use clap::{Parser, Subcommand};
+pub(crate) use hlock::{
+    ExplanationKind, FixType, HlockConfig, ImportFormat, Lockfile, OutdatedSourceType, UpdateType,
+    apply_fixes, build_fix_plan, check_outdated, deserialize, diff_lockfiles, explain_advisory,
+    explain_rule, extract_subgraph, extract_subgraph_platform, fnv, generate_sbom, import_npm,
+    import_yarn, lint, lockfile, merge, merge_lockfiles, policy, sbom, serialize, serialize_diff,
+    sign_lockfile, signature, validate_digest, verify_signature,
+};
+
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "hlock", version, about = "Supply-chain lockfile integrity tool")]
+#[command(
+    name = "hlock",
+    version,
+    about = "Supply-chain lockfile integrity tool"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -21,7 +30,12 @@ struct Cli {
     #[arg(long, global = true, help = "Disable colored output")]
     no_color: bool,
 
-    #[arg(long, default_value = "auto", global = true, help = "When to colorize: auto, always, never")]
+    #[arg(
+        long,
+        default_value = "auto",
+        global = true,
+        help = "When to colorize: auto, always, never"
+    )]
     color: String,
 
     #[arg(long, global = true, help = "Path to config file")]
@@ -29,7 +43,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
-enum Commands {
+pub(crate) enum Commands {
     Verify {
         #[arg(value_name = "FILE")]
         file: PathBuf,
@@ -101,6 +115,11 @@ enum Commands {
         platform: Option<String>,
         #[arg(long)]
         output: Option<PathBuf>,
+        #[arg(
+            long,
+            help = "Export the full graph as Graphviz DOT instead of extracting a subgraph"
+        )]
+        dot: bool,
     },
     Merge {
         #[arg(long)]
@@ -256,2046 +275,305 @@ enum Commands {
         #[arg(long, default_value = "text")]
         format: String,
     },
+    Keygen {
+        #[arg(long, default_value = "ed25519", help = "ed25519 or ml-dsa-65")]
+        algorithm: String,
+        #[arg(long, default_value = "ci@example.com")]
+        key_id: String,
+        #[arg(long, default_value_t = 0, help = "Expiry as unix epoch (0 = never)")]
+        expires: u64,
+        #[arg(long, help = "Write the private key to this file instead of stdout")]
+        output: Option<PathBuf>,
+    },
+    Stats {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+    Digest {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(
+            long,
+            help = "Verify the @digest line instead of printing the computed digest"
+        )]
+        check: bool,
+    },
+    PolicyTest {
+        #[arg(value_name = "FILE")]
+        file: PathBuf,
+        #[arg(long)]
+        package: String,
+        #[arg(long)]
+        hook: Option<String>,
+        #[arg(long)]
+        script: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
 }
 
-// --- Helper functions (unchanged) ---
-
-fn parse_trusted_key(spec: &str) -> Option<(String, (Vec<u8>, signature::SignatureAlgorithm))> {
-    let parts: Vec<&str> = spec.splitn(3, ':').collect();
-    if parts.len() != 3 { return None; }
-    let key_id = parts[0].to_string();
-    let algo = match parts[1] {
-        "ed25519" => signature::SignatureAlgorithm::Ed25519,
-        "mldsa65" => signature::SignatureAlgorithm::MlDsa65,
-        _ => return None,
-    };
-    let hex_key = parts[2];
-    let pubkey: Vec<u8> = (0..hex_key.len())
-        .step_by(2)
-        .filter_map(|i| u8::from_str_radix(&hex_key[i..i+2], 16).ok())
-        .collect();
-    Some((key_id, (pubkey, algo)))
-}
-
-fn parse_platform(spec: &str) -> Option<(lockfile::TargetOS, lockfile::TargetArch)> {
-    let parts: Vec<&str> = spec.splitn(2, '-').collect();
-    if parts.len() != 2 { return None; }
-    let os = match parts[0] {
-        "linux" => lockfile::TargetOS::Linux,
-        "macos" => lockfile::TargetOS::MacOS,
-        "windows" => lockfile::TargetOS::Windows,
-        "freebsd" => lockfile::TargetOS::FreeBSD,
-        "android" => lockfile::TargetOS::Android,
-        "ios" => lockfile::TargetOS::IOS,
-        "any" => lockfile::TargetOS::Any,
-        _ => return None,
-    };
-    let arch = match parts[1] {
-        "x86_64" => lockfile::TargetArch::X86_64,
-        "aarch64" => lockfile::TargetArch::Aarch64,
-        "wasm32" => lockfile::TargetArch::Wasm32,
-        "arm" => lockfile::TargetArch::Arm,
-        "s390x" => lockfile::TargetArch::S390x,
-        "ppc64le" => lockfile::TargetArch::Ppc64le,
-        "any" => lockfile::TargetArch::Any,
-        _ => return None,
-    };
-    Some((os, arch))
-}
-
-fn build_rule_set(rule_args: &[String]) -> Vec<Box<dyn hlock::lint::LintRule>> {
-    use hlock::lint::*;
-
-    let all_rules: Vec<(&str, Box<dyn LintRule>)> = vec![
-        ("no-git-urls", Box::new(NoGitUrls) as Box<dyn LintRule>),
-        ("require-integrity", Box::new(RequireIntegrity)),
-        ("no-sha1", Box::new(NoSha1)),
-        ("no-peer-as-runtime", Box::new(NoPeerAsRuntime)),
-        ("max-depth", Box::new(MaxDepth { max: 5 })),
-        ("require-attestation", Box::new(RequireAttestation)),
-        ("no-known-vulnerabilities", Box::new(NoKnownVulnerabilities)),
-        ("require-license", Box::new(RequireLicense)),
-        ("deny-copyleft", Box::new(DenyCopyleft)),
-        ("require-trust-root", Box::new(RequireTrustRoot)),
-        ("no-expired-keys", Box::new(NoExpiredKeys)),
-        ("deny-postinstall", Box::new(DenyPostinstall)),
-    ];
-
-    let mut includes: HashSet<String> = HashSet::new();
-    let mut excludes: HashSet<String> = HashSet::new();
-
-    for arg in rule_args {
-        if let Some(name) = arg.strip_prefix('-') {
-            excludes.insert(name.to_string());
-        } else {
-            includes.insert(arg.clone());
-        }
-    }
-
-    if includes.is_empty() && excludes.is_empty() {
-        return all_rules.into_iter().map(|(_, r)| r).collect();
-    }
-
-    let valid_names: HashSet<&str> = all_rules.iter().map(|(n, _)| *n).collect();
-    for name in includes.iter().chain(excludes.iter()) {
-        if !valid_names.contains(name.as_str()) {
-            eprintln!("Error: unknown rule '{}'. Available rules: {}", name, valid_names.iter().cloned().collect::<Vec<&str>>().join(", "));
-            std::process::exit(2);
-        }
-    }
-
-    all_rules.into_iter()
-        .filter(|(name, _)| {
-            if !includes.is_empty() {
-                includes.contains(*name)
-            } else {
-                true
-            }
-        })
-        .filter(|(name, _)| !excludes.contains(*name))
-        .map(|(_, r)| r)
-        .collect()
-}
-
-fn read_input(path: &std::path::Path) -> Result<String, hlock::Error> {
-    if path == std::path::Path::new("-") {
-        std::io::read_to_string(std::io::stdin())
-            .map_err(hlock::Error::Io)
-    } else {
-        std::fs::read_to_string(path)
-            .map_err(hlock::Error::Io)
-    }
-}
+mod commands;
 
 fn main() {
     let cli = Cli::parse();
 
     let quiet = cli.quiet;
     let verbose = cli.verbose && !quiet;
-    let color_config = output::ColorConfig::from_cli_args(
-        &cli.color,
-        cli.no_color,
-        output::OutputFormat::Text,
-    );
+    let color_config =
+        output::ColorConfig::from_cli_args(&cli.color, cli.no_color, output::OutputFormat::Text);
     let color_enabled = color_config.should_color();
 
     // Load config file (unused for now, but available)
     let _config = HlockConfig::load(cli.config.as_deref());
 
-    match cli.command {
-        // --- VERIFY ---
-        Commands::Verify { file, trusted_key, time, sigstore: _ } => {
-            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
+    let ctx = commands::Ctx {
+        quiet,
+        verbose,
+        color_enabled,
+    };
+
+    dispatch(cli.command, ctx);
+}
+
+/// Routes a parsed command to its implementation.
+fn dispatch(command: Commands, ctx: commands::Ctx) {
+    match command {
+        // Maintenance, graph, signing and tooling commands are handled first;
+        // everything else falls through to the inspection dispatcher. The
+        // wildcard patterns bind nothing, so `command` is not moved.
+        Commands::Graph { .. }
+        | Commands::Tree { .. }
+        | Commands::Merge { .. }
+        | Commands::Import { .. }
+        | Commands::Fix { .. }
+        | Commands::Sign { .. }
+        | Commands::Keygen { .. }
+        | Commands::Completions { .. } => dispatch_mutation(command, ctx),
+        _ => dispatch_inspection(command, ctx),
+    }
+}
+
+/// Runs the graph-structure and maintenance commands.
+fn dispatch_mutation(command: Commands, ctx: commands::Ctx) {
+    match command {
+        Commands::Graph {
+            file,
+            root,
+            platform,
+            output,
+            dot,
+        } => commands::graph::run(
+            &file,
+            &root,
+            platform.as_deref(),
+            output.as_deref(),
+            dot,
+            ctx,
+        ),
+        Commands::Tree {
+            file,
+            root,
+            depth,
+            dep_type,
+            format,
+        } => commands::tree::run(&file, &root, depth, &dep_type, &format, ctx),
+        Commands::Merge {
+            base,
+            ours,
+            theirs,
+            strategy,
+            output,
+        } => commands::merge_cmd::run(&base, &ours, &theirs, &strategy, output.as_deref(), ctx),
+        Commands::Import {
+            source,
+            from,
+            output,
+            registry,
+        } => commands::import::run(&source, &from, output.as_deref(), &registry, ctx),
+        Commands::Fix {
+            file,
+            audit,
+            outdated,
+            all,
+            dry_run,
+            interactive,
+            format,
+            timeout,
+        } => {
+            // `--all` implies the audit path (pre-v0.19 behavior kept verbatim).
+            let mode = if outdated && !audit && !all {
+                commands::fix::FixMode::Outdated
+            } else {
+                commands::fix::FixMode::Audit
             };
-
-            let t_vd = std::time::Instant::now();
-            if let Err(e) = validate_digest(&content) {
-                eprintln!("{} {}", output::C { text: "✗", on: color_enabled }.rb(), e);
-                std::process::exit(1);
-            }
-            if verbose { eprintln!("[verbose] Validating digest... {:?}", t_vd.elapsed()); }
-            if !quiet { println!("{} digest valid", output::C { text: "✓", on: color_enabled }.gb()); }
-
-            let mut trusted: HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> = HashMap::new();
-            for spec in &trusted_key {
-                if let Some((key_id, (pubkey, algo))) = parse_trusted_key(spec) {
-                    trusted.insert(key_id, (pubkey, algo));
-                }
-            }
-
-            if !trusted.is_empty() {
-                let t_vs = std::time::Instant::now();
-                if let Err(e) = verify_signature(&content, &trusted) {
-                    eprintln!("{} {}", output::C { text: "✗", on: color_enabled }.rb(), e);
-                    std::process::exit(1);
-                }
-                if verbose { eprintln!("[verbose] Verifying signature... {:?}", t_vs.elapsed()); }
-                if !quiet { println!("{} signature valid", output::C { text: "✓", on: color_enabled }.gb()); }
-            }
-
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("✗ [{}] parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-
-            if verbose { eprintln!("[verbose] Parsed lockfile: {} packages", lockfile.packages.len()); }
-
-            let now = if time > 0 { time } else { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) };
-            if !lockfile.trust_roots.is_empty() {
-                if let Err(e) = lockfile.validate_trust_chain(now) {
-                    eprintln!("{} {}", output::C { text: "✗", on: color_enabled }.rb(), e);
-                    std::process::exit(1);
-                }
-                if !quiet { println!("{} trust chain valid", output::C { text: "✓", on: color_enabled }.gb()); }
-            }
+            let _ = all;
+            commands::fix::run(
+                &commands::fix::FixArgs {
+                    file: &file,
+                    mode,
+                    dry_run,
+                    interactive,
+                    format: &format,
+                    timeout,
+                },
+                ctx,
+            );
         }
-
-        // --- LINT ---
-        Commands::Lint { file, rule, severity, format } => {
-            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-
-            let rules = build_rule_set(&rule);
-            if verbose { eprintln!("[verbose] Running lint ({} rules)...", rules.len()); }
-            let report = hlock::lint::lint(&lockfile, &rules);
-            if verbose { eprintln!("[verbose] Lint complete: {} findings", report.findings.len()); }
-
-            let min_sev = match severity.as_str() {
-                "error" => lint::LintSeverity::Error,
-                "warning" => lint::LintSeverity::Warning,
-                "info" => lint::LintSeverity::Info,
-                _ => lint::LintSeverity::Error,
-            };
-
-            if format == "json" {
-                owo_colors::set_override(false);
-                let findings: Vec<serde_json::Value> = report.findings.iter()
-                    .filter(|f| match min_sev {
-                        lint::LintSeverity::Error => f.severity == lint::LintSeverity::Error,
-                        lint::LintSeverity::Warning => matches!(f.severity, lint::LintSeverity::Error | lint::LintSeverity::Warning),
-                        lint::LintSeverity::Info => true,
-                    })
-                    .map(|f| serde_json::json!({
-                        "rule": f.rule,
-                        "severity": match f.severity {
-                            lint::LintSeverity::Error => "error",
-                            lint::LintSeverity::Warning => "warning",
-                            lint::LintSeverity::Info => "info",
-                        },
-                        "package": f.package,
-                        "message": f.message,
-                    }))
-                    .collect();
-                let error_count = findings.iter().filter(|f| f["severity"] == "error").count();
-                let warning_count = findings.iter().filter(|f| f["severity"] == "warning").count();
-                let info_count = findings.iter().filter(|f| f["severity"] == "info").count();
-                if !quiet { println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                    "findings": findings,
-                    "error_count": error_count,
-                    "warning_count": warning_count,
-                    "info_count": info_count,
-                })).unwrap()); }
-            } else {
-                for f in &report.findings {
-                    let sev_str = match f.severity {
-                        lint::LintSeverity::Error => output::C { text: "ERROR", on: color_enabled }.rb(),
-                        lint::LintSeverity::Warning => output::C { text: "WARN", on: color_enabled }.yb(),
-                        lint::LintSeverity::Info => output::C { text: "INFO", on: color_enabled }.bl(),
-                    };
-                    let pkg = f.package.as_deref().unwrap_or("-");
-                    let skip = match min_sev {
-                        lint::LintSeverity::Error => f.severity != lint::LintSeverity::Error,
-                        lint::LintSeverity::Warning => !matches!(f.severity, lint::LintSeverity::Error | lint::LintSeverity::Warning),
-                        lint::LintSeverity::Info => false,
-                    };
-                    if skip { continue; }
-                    if !quiet { println!("{:8}{:24}{:12}{}", sev_str, f.rule, pkg, f.message); }
-                }
-            }
-
-            if report.has_errors() { std::process::exit(1); }
-        }
-
-        // --- DIFF ---
-        Commands::Diff { old_file, new_file, format } => {
-            if verbose { eprintln!("[verbose] Reading {} and {}...", old_file.display(), new_file.display()); }
-            let old_content = match read_input(&old_file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", old_file.display(), e); std::process::exit(2); }
-            };
-            let new_content = match read_input(&new_file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", new_file.display(), e); std::process::exit(2); }
-            };
-            let old_lf = match deserialize(&old_content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error in old file: {}", e.error_code(), e); std::process::exit(2); }
-            };
-            let new_lf = match deserialize(&new_content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error in new file: {}", e.error_code(), e); std::process::exit(2); }
-            };
-
-            let diff = diff_lockfiles(&old_lf, &new_lf);
-            if verbose { eprintln!("[verbose] Diff: {} changes, {} unchanged", diff.changes.len(), diff.unchanged_count); }
-            let fmt = match format.as_str() {
-                "json" => {
-                    owo_colors::set_override(false);
-                    lockfile::DiffFormat::Json
-                }
-                _ => lockfile::DiffFormat::Text,
-            };
-            if !quiet { print!("{}", serialize_diff(&diff, fmt)); }
-        }
-
-        // --- AUDIT (updated with --online and --merge) ---
-        Commands::Audit { file, online, merge, format, timeout } => {
-            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-            if verbose { eprintln!("[verbose] Running audit (online={})...", online); }
-            let report = lockfile.audit();
-            if verbose { eprintln!("[verbose] Audit complete: {} advisories", report.total_count()); }
-
-            let mut online_vulns: Vec<hlock::osv::OsvVulnerability> = Vec::new();
-            let mut online_errors: Vec<String> = Vec::new();
-
-            if online {
-                if verbose { eprintln!("[verbose] Querying OSV for {} packages...", lockfile.packages.len()); }
-                for pkg in &lockfile.packages {
-                    let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
-                    match hlock::osv::query_osv(&pkg.name, &version, timeout) {
-                        Ok(response) => {
-                            online_vulns.extend(response.vulns);
-                        }
-                        Err(e) => {
-                            online_errors.push(format!("{}@{}: {}", pkg.name, version, e));
-                        }
-                    }
-                }
-                if verbose { eprintln!("[verbose] OSV returned {} vulnerabilities, {} errors", online_vulns.len(), online_errors.len()); }
-            }
-
-            if format == "json" {
-                owo_colors::set_override(false);
-                let embedded: Vec<serde_json::Value> = report.all_advisories().map(|a| serde_json::json!({
-                    "package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(),
-                    "url": a.url, "affected": a.affected_versions, "source": "embedded"
-                })).collect();
-                let online_json: Vec<serde_json::Value> = online_vulns.iter().map(|v| {
-                    let sev = hlock::osv::osv_severity(v);
-                    let fixed = hlock::osv::find_fixed_version(v);
-                    serde_json::json!({
-                        "id": v.id,
-                        "summary": v.summary,
-                        "severity": sev.as_str(),
-                        "fixed": fixed,
-                        "source": "online"
-                    })
-                }).collect();
-                if !quiet { println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                    "critical": report.critical.len(),
-                    "high": report.high.len(),
-                    "medium": report.medium.len(),
-                    "low": report.low.len(),
-                    "info": report.info.len(),
-                    "embedded": embedded,
-                    "online": online_json,
-                    "online_errors": online_errors,
-                })).unwrap()); }
-            } else {
-                for adv in report.all_advisories() {
-                    let sev_str = match adv.severity {
-                        policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High => if color_enabled { adv.severity.as_str().to_uppercase().red().bold().to_string() } else { adv.severity.as_str().to_uppercase() },
-                        policy::AdvisorySeverity::Medium => if color_enabled { adv.severity.as_str().to_uppercase().yellow().bold().to_string() } else { adv.severity.as_str().to_uppercase() },
-                        policy::AdvisorySeverity::Low => if color_enabled { adv.severity.as_str().to_uppercase().yellow().to_string() } else { adv.severity.as_str().to_uppercase() },
-                        policy::AdvisorySeverity::Info => if color_enabled { adv.severity.as_str().to_uppercase().blue().to_string() } else { adv.severity.as_str().to_uppercase() },
-                    };
-                    if !quiet { println!("{:10}{:16}{}   {}   (embedded)", sev_str, adv.package, adv.advisory_id, adv.affected_versions); }
-                }
-
-                if online {
-                    let embedded_ids: HashSet<String> = lockfile.advisories.iter().map(|a| a.advisory_id.clone()).collect();
-                    for vuln in &online_vulns {
-                        if merge && embedded_ids.contains(&vuln.id) {
-                            continue;
-                        }
-                        let sev = hlock::osv::osv_severity(vuln);
-                        let sev_str = match sev {
-                            policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High => if color_enabled { sev.as_str().to_uppercase().red().bold().to_string() } else { sev.as_str().to_uppercase() },
-                            policy::AdvisorySeverity::Medium => if color_enabled { sev.as_str().to_uppercase().yellow().bold().to_string() } else { sev.as_str().to_uppercase() },
-                            policy::AdvisorySeverity::Low => if color_enabled { sev.as_str().to_uppercase().yellow().to_string() } else { sev.as_str().to_uppercase() },
-                            policy::AdvisorySeverity::Info => if color_enabled { sev.as_str().to_uppercase().blue().to_string() } else { sev.as_str().to_uppercase() },
-                        };
-                        let fixed = hlock::osv::find_fixed_version(vuln);
-                        let fixed_str = fixed.as_deref().unwrap_or("—");
-                        if !quiet { println!("{:10}{}   {}   (online, fixed: {})", sev_str, vuln.id, vuln.summary, fixed_str); }
-                    }
-                }
-
-                if !quiet {
-                    println!("---");
-                    let crit_high = report.critical.len() + report.high.len();
-                    let online_crit_high = online_vulns.iter().filter(|v| {
-                        let sev = hlock::osv::osv_severity(v);
-                        matches!(sev, policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High)
-                    }).count();
-                    println!("Total: {} critical/high, {} medium, {} low, {} info", crit_high + online_crit_high, report.medium.len(), report.low.len(), report.info.len());
-                    println!("Sources: {} embedded, {} online", lockfile.advisories.len(), online_vulns.len());
-                    if !online_errors.is_empty() {
-                        for e in &online_errors {
-                            eprintln!("  Warning: OSV query failed: {}", e);
-                        }
-                    }
-                }
-            }
-
-            let has_critical_or_high = report.has_critical_or_high() || online_vulns.iter().any(|v| {
-                let sev = hlock::osv::osv_severity(v);
-                matches!(sev, policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High)
-            });
-            if has_critical_or_high { std::process::exit(1); }
-        }
-
-        // --- SBOM ---
-        Commands::Sbom { file, namespace, format } => {
-            owo_colors::set_override(false);
-            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-            let fmt = match format.as_str() {
-                "cyclonedx-json" => sbom::SbomFormat::CycloneDxJson,
-                _ => sbom::SbomFormat::SpdxJson,
-            };
-            match generate_sbom(&lockfile, fmt, &namespace) {
-                Ok(s) => { if !quiet { print!("{}", s); } }
-                Err(e) => { eprintln!("[{}] SBOM generation error: {}", e.error_code(), e); std::process::exit(1); }
-            }
-        }
-
-        // --- SIGN ---
-        Commands::Sign { file, key_id, algorithm, private_key, expires, in_place } => {
-            if in_place && file == std::path::Path::new("-") {
-                eprintln!("Error: --in-place cannot be used with stdin input");
-                std::process::exit(2);
-            }
-            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let mut lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-            let serialized = match serialize(&mut lockfile) {
-                Ok(s) => s,
-                Err(e) => { eprintln!("[{}] Serialize error: {}", e.error_code(), e); std::process::exit(1); }
-            };
-
-            let algo = match algorithm.as_str() {
-                "mldsa65" => signature::SignatureAlgorithm::MlDsa65,
-                _ => signature::SignatureAlgorithm::Ed25519,
-            };
-
-            let key_hex = if let Some(path) = private_key.strip_prefix('@') {
-                match std::fs::read_to_string(path) {
-                    Ok(h) => h.trim().to_string(),
-                    Err(e) => { eprintln!("Error reading key file: {}", e); std::process::exit(2); }
-                }
-            } else {
-                private_key.clone()
-            };
-
-            let key_bytes: Vec<u8> = (0..key_hex.len())
-                .step_by(2)
-                .filter_map(|i| u8::from_str_radix(&key_hex[i..i+2], 16).ok())
-                .collect();
-
-            match sign_lockfile(&serialized, &key_id, algo, &key_bytes, expires) {
-                Ok(signed) => {
-                    if in_place {
-                        if let Err(e) = std::fs::write(&file, &signed) {
-                            eprintln!("Error writing {}: {}", file.display(), e); std::process::exit(1);
-                        }
-                    } else if !quiet {
-                        print!("{}", signed);
-                    }
-                }
-                Err(e) => { eprintln!("Signing error: {}", e); std::process::exit(1); }
-            }
-        }
-
-        // --- GRAPH ---
-        Commands::Graph { file, root, platform, output } => {
-            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-
-            let root_cids: Vec<u64> = root.iter()
-                .filter_map(|name| {
-                    lockfile.packages.iter()
-                        .find(|p| p.name == *name)
-                        .map(|p| fnv::calculate(&format!("{}@{}.{}.{}", p.name, p.major, p.minor, p.patch)))
-                })
-                .collect();
-
-            if root_cids.len() != root.len() {
-                eprintln!("Some root packages not found in lockfile");
-                std::process::exit(1);
-            }
-
-            let result = if let Some(ref plat) = platform {
-                if let Some((os, arch)) = parse_platform(plat) {
-                    extract_subgraph_platform(&lockfile, &root_cids, os, arch)
-                } else {
-                    eprintln!("Invalid platform format. Use <os>-<arch> (e.g. linux-x86_64)");
-                    std::process::exit(1);
-                }
-            } else {
-                extract_subgraph(&lockfile, &root_cids)
-            };
-
-            match result {
-                Ok(mut sub) => {
-                    let serialized = serialize(&mut sub).unwrap();
-                    if let Some(out) = output {
-                        if let Err(e) = std::fs::write(&out, &serialized) {
-                            eprintln!("Error writing {}: {}", out.display(), e); std::process::exit(1);
-                        }
-                    } else if !quiet {
-                        print!("{}", serialized);
-                    }
-                }
-                Err(e) => { eprintln!("[{}] Extraction error: {}", e.error_code(), e); std::process::exit(1); }
-            }
-        }
-
-        // --- MERGE ---
-        Commands::Merge { base, ours, theirs, strategy, output } => {
-            let read_file = |path: &PathBuf| -> Result<Lockfile, String> {
-                let content = read_input(path).map_err(|e| format!("Error reading {}: {}", path.display(), e))?;
-                deserialize(&content).map_err(|e| format!("[{}] Parse error in {}: {}", e.error_code(), path.display(), e))
-            };
-
-            let base_lf = match read_file(&base) { Ok(lf) => lf, Err(e) => { eprintln!("{}", e); std::process::exit(2); } };
-            let ours_lf = match read_file(&ours) { Ok(lf) => lf, Err(e) => { eprintln!("{}", e); std::process::exit(2); } };
-            let theirs_lf = match read_file(&theirs) { Ok(lf) => lf, Err(e) => { eprintln!("{}", e); std::process::exit(2); } };
-
-            let strat = match strategy.as_str() {
-                "ours" => merge::ConflictStrategy::Ours,
-                "theirs" => merge::ConflictStrategy::Theirs,
-                _ => merge::ConflictStrategy::Fail,
-            };
-
-            match merge_lockfiles(&base_lf, &ours_lf, &theirs_lf, strat) {
-                Ok(result) => {
-                    for conflict in &result.conflicts {
-                        eprintln!("CONFLICT: {} (base: {:?}, ours: {}.{}, theirs: {}.{})",
-                            conflict.package_name,
-                            conflict.base.as_ref().map(|b| b.name.clone()),
-                            conflict.ours.major, conflict.ours.minor,
-                            conflict.theirs.major, conflict.theirs.minor);
-                    }
-                    let mut merged = result.lockfile;
-                    let serialized = serialize(&mut merged).unwrap();
-                    if let Some(out) = output {
-                        if let Err(e) = std::fs::write(&out, &serialized) {
-                            eprintln!("Error writing {}: {}", out.display(), e); std::process::exit(1);
-                        }
-                    } else if !quiet {
-                        print!("{}", serialized);
-                    }
-                    if !result.conflicts.is_empty() && strat == merge::ConflictStrategy::Fail {
-                        std::process::exit(2);
-                    } else if !result.conflicts.is_empty() {
-                        std::process::exit(1);
-                    }
-                }
-                Err(e) => { eprintln!("[{}] Merge error: {}", e.error_code(), e); std::process::exit(2); }
-            }
-        }
-
-        // --- COMPLETIONS ---
-        Commands::Completions { shell } => {
-            use clap_complete::{generate, Shell};
-            let shell_type = match shell.as_str() {
-                "bash" => Shell::Bash,
-                "zsh" => Shell::Zsh,
-                "fish" => Shell::Fish,
-                "elvish" => Shell::Elvish,
-                "powershell" => Shell::PowerShell,
-                _ => {
-                    eprintln!("Error: unknown shell '{}'. Supported: bash, zsh, fish, elvish, powershell", shell);
-                    std::process::exit(2);
-                }
-            };
-            let mut cmd = Cli::command();
-            let name = "hlock";
-            if !quiet {
-                generate(shell_type, &mut cmd, name, &mut std::io::stdout());
-            }
-        }
-
-        // --- INFO ---
-        Commands::Info { file, format } => {
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-
-            let digest_valid = validate_digest(&content).is_ok();
-
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-
-            if verbose { eprintln!("[verbose] Parsed lockfile: {} packages, {} sources", lockfile.packages.len(), lockfile.sources.len()); }
-
-            let mut registry_count = 0usize;
-            let mut git_count = 0usize;
-            let mut workspace_count = 0usize;
-            let mut local_count = 0usize;
-            let mut cas_count = 0usize;
-            let mut ipfs_count = 0usize;
-
-            for pkg in &lockfile.packages {
-                if let Some(source) = lockfile.sources.get(pkg.source_idx) {
-                    match source {
-                        hlock::Source::Registry(_) => registry_count += 1,
-                        hlock::Source::Git(_) => git_count += 1,
-                        hlock::Source::Workspace => workspace_count += 1,
-                        hlock::Source::Local(_) => local_count += 1,
-                        hlock::Source::CasHttp(_) => cas_count += 1,
-                        hlock::Source::Ipfs(_) => ipfs_count += 1,
-                    }
-                }
-            }
-
-            let fmt = output::parse_format(&format);
-
-            owo_colors::set_override(color_enabled);
-            if fmt == output::OutputFormat::Json {
-                let mut sources_json = Vec::new();
-                for (idx, source) in lockfile.sources.iter().enumerate() {
-                    let mut obj = serde_json::json!({"index": idx});
-                    match source {
-                        hlock::Source::Registry(u) => { obj["url"] = serde_json::Value::String(u.clone()); obj["type"] = serde_json::Value::String("registry".to_string()); }
-                        hlock::Source::Git(u) => { obj["url"] = serde_json::Value::String(u.clone()); obj["type"] = serde_json::Value::String("git".to_string()); }
-                        hlock::Source::Local(u) => { obj["url"] = serde_json::Value::String(u.clone()); obj["type"] = serde_json::Value::String("local".to_string()); }
-                        hlock::Source::Workspace => { obj["type"] = serde_json::Value::String("workspace".to_string()); }
-                        hlock::Source::CasHttp(u) => { obj["url"] = serde_json::Value::String(u.clone()); obj["type"] = serde_json::Value::String("cas-http".to_string()); }
-                        hlock::Source::Ipfs(u) => { obj["url"] = serde_json::Value::String(u.clone()); obj["type"] = serde_json::Value::String("ipfs".to_string()); }
-                    }
-                    sources_json.push(obj);
-                }
-
-                let policies_json: Vec<serde_json::Value> = lockfile.policies.iter().map(|p| serde_json::json!({"type": p.policy_type.as_str(), "pattern": p.package_pattern, "value": p.value})).collect();
-                let trust_roots_json: Vec<serde_json::Value> = lockfile.trust_roots.iter().map(|tr| serde_json::json!({"key_id": tr.key_id, "algorithm": match tr.algorithm { hlock::signature::SignatureAlgorithm::Ed25519 => "ed25519", hlock::signature::SignatureAlgorithm::MlDsa65 => "mldsa65" }, "role": tr.role.as_str(), "expires_epoch": tr.expires_epoch})).collect();
-                let overrides_json: Vec<serde_json::Value> = lockfile.overrides.iter().map(|o| serde_json::json!({"name": o.name, "from": o.from_version, "to": o.to_version})).collect();
-                let features_json: Vec<serde_json::Value> = lockfile.features.iter().map(|(n, f)| serde_json::json!({"name": n, "flags": f})).collect();
-
-                let adv_report = lockfile.audit();
-                let advisory_summary = serde_json::json!({"critical": adv_report.critical.len(), "high": adv_report.high.len(), "medium": adv_report.medium.len(), "low": adv_report.low.len(), "info": adv_report.info.len()});
-
-                let vex_json: Vec<serde_json::Value> = lockfile.vex_entries.iter().map(|v| serde_json::json!({"package": v.package, "advisory_id": v.advisory_id, "status": v.status.as_str()})).collect();
-
-                let mut pbs_map = serde_json::Map::new();
-                if registry_count > 0 { pbs_map.insert("registry".into(), serde_json::Value::Number(registry_count.into())); }
-                if git_count > 0 { pbs_map.insert("git".into(), serde_json::Value::Number(git_count.into())); }
-                if workspace_count > 0 { pbs_map.insert("workspace".into(), serde_json::Value::Number(workspace_count.into())); }
-                if local_count > 0 { pbs_map.insert("local".into(), serde_json::Value::Number(local_count.into())); }
-                if cas_count > 0 { pbs_map.insert("cas_http".into(), serde_json::Value::Number(cas_count.into())); }
-                if ipfs_count > 0 { pbs_map.insert("ipfs".into(), serde_json::Value::Number(ipfs_count.into())); }
-                let packages_by_source = serde_json::Value::Object(pbs_map);
-
-                let json = serde_json::json!({
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "package_count": lockfile.packages.len(),
-                    "packages_by_source": packages_by_source,
-                    "sources": sources_json,
-                    "mirrors": lockfile.mirrors.iter().map(|m| serde_json::json!({"scope": m.scope, "url": m.url})).collect::<Vec<_>>(),
-                    "policy_count": lockfile.policies.len(),
-                    "policies": policies_json,
-                    "trust_roots": trust_roots_json,
-                    "overrides": overrides_json,
-                    "features": features_json,
-                    "advisory_summary": advisory_summary,
-                    "vex_entries": vex_json,
-                    "license_summary": {"declared": lockfile.licenses.len(), "total": lockfile.packages.len()},
-                    "workspace_root": lockfile.workspace_root,
-                    "workspace_pkgs": lockfile.workspace_pkgs.iter().map(|wp| serde_json::json!({"name": wp.name, "manifest_path": wp.manifest_path})).collect::<Vec<_>>(),
-                    "hoist_boundaries": lockfile.hoist_boundaries.iter().map(|hb| serde_json::json!({"consumer": hb.cosine, "allowed_deps": hb.allowed_deps})).collect::<Vec<_>>(),
-                    "digest_valid": digest_valid,
-                });
-
-                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
-            } else {
-                if !quiet {
-                    use owo_colors::OwoColorize;
-                    let b = |s: &str| -> String { if color_enabled { s.bold().to_string() } else { s.to_string() } };
-                    println!("{} v{} lockfile", output::C { text: "hlock", on: color_enabled }.b(), env!("CARGO_PKG_VERSION"));
-                    println!("────────────────────────");
-
-                    let mut parts = Vec::new();
-                    if registry_count > 0 { parts.push(format!("{} registry", registry_count)); }
-                    if git_count > 0 { parts.push(format!("{} git", git_count)); }
-                    if workspace_count > 0 { parts.push(format!("{} workspace", workspace_count)); }
-                    if local_count > 0 { parts.push(format!("{} local", local_count)); }
-                    if cas_count > 0 { parts.push(format!("{} cas-http", cas_count)); }
-                    if ipfs_count > 0 { parts.push(format!("{} ipfs", ipfs_count)); }
-                    let pkg_detail = if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) };
-                    println!("{}:       {}{}", b("Packages"), lockfile.packages.len(), pkg_detail);
-
-                    println!("{}:        {}", b("Sources"), lockfile.sources.len());
-                    for (idx, source) in lockfile.sources.iter().enumerate() {
-                        let (url, type_str) = match source {
-                            hlock::Source::Registry(u) => (u.as_str(), "registry"),
-                            hlock::Source::Git(u) => (u.as_str(), "git"),
-                            hlock::Source::Local(u) => (u.as_str(), "local"),
-                            hlock::Source::Workspace => ("", "workspace"),
-                            hlock::Source::CasHttp(u) => (u.as_str(), "cas-http"),
-                            hlock::Source::Ipfs(u) => (u.as_str(), "ipfs"),
-                        };
-                        if url.is_empty() { println!("  [{}] {}", idx, type_str); } else { println!("  [{}] {} ({})", idx, url, type_str); }
-                    }
-
-                    if !lockfile.mirrors.is_empty() {
-                        println!("{}:        {}", b("Mirrors"), lockfile.mirrors.len());
-                        for m in &lockfile.mirrors { println!("  {} -> {}", m.scope, m.url); }
-                    }
-
-                    if !lockfile.policies.is_empty() {
-                        println!("{}:       {}", b("Policies"), lockfile.policies.len());
-                        for p in &lockfile.policies { println!("  {} {} {}", p.policy_type.as_str(), p.package_pattern, p.value); }
-                    }
-
-                    if !lockfile.trust_roots.is_empty() {
-                        println!("{}:    {}", b("Trust Roots"), lockfile.trust_roots.len());
-                        for tr in &lockfile.trust_roots {
-                            let algo_str = match tr.algorithm { hlock::signature::SignatureAlgorithm::Ed25519 => "ed25519", hlock::signature::SignatureAlgorithm::MlDsa65 => "mldsa65" };
-                            let expires_str = if tr.expires_epoch == 0 { "never expires".to_string() } else { format!("expires epoch {}", tr.expires_epoch) };
-                            println!("  {} ({}, {}, {})", tr.key_id, algo_str, tr.role.as_str(), expires_str);
-                        }
-                    }
-
-                    if !lockfile.overrides.is_empty() {
-                        println!("{}:      {}", b("Overrides"), lockfile.overrides.len());
-                        for o in &lockfile.overrides { println!("  {} {} -> {}", b(&o.name), o.from_version, o.to_version); }
-                    }
-
-                    if !lockfile.features.is_empty() {
-                        println!("{}:       {}", b("Features"), lockfile.features.len());
-                        for (name, flags) in &lockfile.features { println!("  {} -> {}", b(name), flags.join(", ")); }
-                    }
-
-                    let adv_report = lockfile.audit();
-                    if adv_report.total_count() > 0 {
-                        println!("{}:     {} ({} critical, {} high, {} medium, {} low, {} info)", b("Advisories"), adv_report.total_count(), adv_report.critical.len(), adv_report.high.len(), adv_report.medium.len(), adv_report.low.len(), adv_report.info.len());
-                        println!("  Run `hlock audit` for details.");
-                    }
-
-                    if !lockfile.vex_entries.is_empty() {
-                        println!("{}:    {}", b("VEX Entries"), lockfile.vex_entries.len());
-                        for v in &lockfile.vex_entries { println!("  {} / {} -> {}", v.package, v.advisory_id, v.status.as_str()); }
-                    }
-
-                    let declared = lockfile.licenses.len();
-                    let total = lockfile.packages.len();
-                    println!("{}:       {}/{} declared", b("Licenses"), declared, total);
-                    if declared < total { println!("  Run `hlock licenses` for details."); }
-
-                    if let Some(ref root) = lockfile.workspace_root {
-                        println!("{}:      {}", b("Workspace"), root);
-                        for wp in &lockfile.workspace_pkgs { println!("  └── {} ({})", b(&wp.name), wp.manifest_path); }
-                    }
-
-                    if !lockfile.hoist_boundaries.is_empty() {
-                        println!("{}:", b("Hoist Boundaries"));
-                        for hb in &lockfile.hoist_boundaries { println!("  {} -> [{}]", b(&hb.cosine), hb.allowed_deps.join(", ")); }
-                    }
-
-                    if digest_valid { println!("{} Digest valid (blake3)", output::C { text: "✓", on: color_enabled }.gb()); } else { println!("{} Digest invalid", output::C { text: "✗", on: color_enabled }.rb()); }
-                }
-            }
-        }
-
-        // --- DEDUP ---
-        Commands::Dedup { file, format } => {
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-
-            let opportunities = lockfile.dedup_opportunities();
-            let fmt = output::parse_format(&format);
-
-            if fmt == output::OutputFormat::Json {
-                let json = serde_json::json!({
-                    "opportunities": opportunities.iter().map(|o| serde_json::json!({"package": o.package_name, "versions": o.versions, "potential_saving_bytes": o.potential_saving_bytes})).collect::<Vec<_>>(),
-                });
-                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
-            } else {
-                if !quiet {
-                    use owo_colors::OwoColorize;
-                    if opportunities.is_empty() {
-                        println!("No deduplication opportunities found.");
-                    } else {
-                        println!("{}:", "Deduplication Opportunities".bold());
-                        println!();
-                        println!("{:12}{:24}{:16}", "Package".bold(), "Versions".bold(), "Est. Saving".bold());
-                        println!("{:12}{:24}{:16}", "---------", "------------------------", "--------------");
-                        for o in &opportunities {
-                            println!("{:12}{:24}{} bytes", o.package_name.bold(), o.versions.join(", ").cyan(), format!("~{}", o.potential_saving_bytes).yellow());
-                        }
-                    }
-                }
-            }
-        }
-
-        // --- WHY ---
-        Commands::Why { file, package, format } => {
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-
-            let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
-                Some(p) => p,
-                None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
-            };
-
-            let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
-            let fmt = output::parse_format(&format);
-
-            if fmt == output::OutputFormat::Json {
-                let chains = hlock::graph::all_paths_to_roots(&lockfile, &package, 5);
-                let json = serde_json::json!({
-                    "package": package,
-                    "version": version,
-                    "chains": chains,
-                });
-                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
-            } else {
-                if !quiet {
-                    println!("{}@{}", package.bold(), version.cyan());
-                    let chains = hlock::graph::all_paths_to_roots(&lockfile, &package, 5);
-                    for chain in &chains {
-                        let mut rev = chain.clone();
-                        rev.reverse();
-                        for (j, name) in rev.iter().enumerate() {
-                            let indent = "  ".repeat(j);
-                            println!("{}{}", indent, name.bold());
-                        }
-                        println!();
-                    }
-                }
-            }
-        }
-
-        // --- DEPS ---
-        Commands::Deps { file, package, transitive, dep_type, format } => {
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-
-            let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
-                Some(p) => p,
-                None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
-            };
-
-            let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
-            let fmt = output::parse_format(&format);
-
-            let direct: Vec<(String, String, String)> = pkg.dependencies.iter()
-                .filter(|d| dep_type == "all" || match dep_type.as_str() {
-                    "runtime" => matches!(d.dep_type, hlock::DepType::Runtime),
-                    "dev" => matches!(d.dep_type, hlock::DepType::Dev),
-                    "peer" => matches!(d.dep_type, hlock::DepType::Peer),
-                    _ => true,
-                })
-                .filter_map(|d| {
-                    lockfile.packages.iter().find(|p| p.name == d.name).map(|p| {
-                        let v = format!("{}.{}.{}", p.major, p.minor, p.patch);
-                        let dt = match d.dep_type {
-                            hlock::DepType::Runtime => "runtime",
-                            hlock::DepType::Dev => "dev",
-                            hlock::DepType::Peer => "peer",
-                            hlock::DepType::Optional => "optional",
-                            hlock::DepType::OptionalTarget(_, _) => "optional-target",
-                        };
-                        (d.name.clone(), v, dt.to_string())
-                    })
-                })
-                .collect();
-
-            let transitive_names: HashSet<String> = if transitive {
-                match dep_type.as_str() {
-                    "runtime" => hlock::runtime_deps(&lockfile, &package),
-                    "dev" => hlock::dev_deps(&lockfile, &package),
-                    _ => hlock::transitive_deps(&lockfile, &package),
-                }
-            } else {
-                HashSet::new()
-            };
-
-            let transitive_list: Vec<(String, String)> = transitive_names.iter()
-                .filter(|name| !direct.iter().any(|(n, _, _)| n == *name))
-                .filter_map(|name| {
-                    lockfile.packages.iter().find(|p| p.name == *name).map(|p| {
-                        (name.clone(), format!("{}.{}.{}", p.major, p.minor, p.patch))
-                    })
-                })
-                .collect();
-
-            if fmt == output::OutputFormat::Json {
-                let json = serde_json::json!({
-                    "package": package,
-                    "version": version,
-                    "direct": direct.iter().map(|(n, v, dt)| serde_json::json!({"name": n, "version": v, "dep_type": dt})).collect::<Vec<_>>(),
-                    "transitive": transitive_list.iter().map(|(n, v)| serde_json::json!({"name": n, "version": v})).collect::<Vec<_>>(),
-                });
-                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
-            } else {
-                if !quiet {
-                    if verbose { eprintln!("[verbose] {} direct, {} transitive deps", direct.len(), transitive_list.len()); }
-                    use owo_colors::OwoColorize;
-                    println!("Direct dependencies of {}:", package.bold());
-                    if direct.is_empty() {
-                        println!("  (none)");
-                    } else {
-                        for (name, ver, dt) in &direct {
-                            println!("  {}@{} ({})", name.bold(), ver.cyan(), dt);
-                        }
-                    }
-                    if transitive && !transitive_list.is_empty() {
-                        println!();
-                        println!("Transitive dependencies:");
-                        for (name, ver) in &transitive_list {
-                            println!("  {}@{}", name.bold(), ver.cyan());
-                        }
-                    }
-                }
-            }
-        }
-
-        // --- DEPENDENTS ---
-        Commands::Dependents { file, package, transitive, dep_type, format } => {
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-
-            let pkg = match lockfile.packages.iter().find(|p| p.name == package) {
-                Some(p) => p,
-                None => { eprintln!("Error: package '{}' not found in lockfile", package); std::process::exit(1); }
-            };
-
-            let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
-            let fmt = output::parse_format(&format);
-
-            let direct: Vec<(String, String, String)> = lockfile.packages.iter()
-                .filter(|p| p.dependencies.iter().any(|d| {
-                    d.name == package &&
-                    (dep_type == "all" || match dep_type.as_str() {
-                        "runtime" => matches!(d.dep_type, hlock::DepType::Runtime),
-                        "dev" => matches!(d.dep_type, hlock::DepType::Dev),
-                        _ => true,
-                    })
-                }))
-                .map(|p| {
-                    let dep = p.dependencies.iter().find(|d| d.name == package).unwrap();
-                    let dt = match dep.dep_type {
-                        hlock::DepType::Runtime => "runtime",
-                        hlock::DepType::Dev => "dev",
-                        hlock::DepType::Peer => "peer",
-                        hlock::DepType::Optional => "optional",
-                        hlock::DepType::OptionalTarget(_, _) => "optional-target",
-                    };
-                    (p.name.clone(), format!("{}.{}.{}", p.major, p.minor, p.patch), dt.to_string())
-                })
-                .collect();
-
-            let transitive_names: Vec<String> = if transitive {
-                match dep_type.as_str() {
-                    "runtime" => hlock::runtime_dependents_of(&lockfile, &package),
-                    "dev" => hlock::dev_dependents_of(&lockfile, &package),
-                    _ => hlock::dependents_of(&lockfile, &package),
-                }
-            } else {
-                Vec::new()
-            };
-
-            let transitive_list: Vec<(String, String)> = transitive_names.iter()
-                .filter(|name| !direct.iter().any(|(n, _, _)| n == *name))
-                .filter_map(|name| {
-                    lockfile.packages.iter().find(|p| p.name == *name).map(|p| {
-                        (name.clone(), format!("{}.{}.{}", p.major, p.minor, p.patch))
-                    })
-                })
-                .collect();
-
-            if fmt == output::OutputFormat::Json {
-                let json = serde_json::json!({
-                    "package": package,
-                    "version": version,
-                    "direct": direct.iter().map(|(n, v, dt)| serde_json::json!({"name": n, "version": v, "dep_type": dt})).collect::<Vec<_>>(),
-                    "transitive": transitive_list.iter().map(|(n, v)| serde_json::json!({"name": n, "version": v})).collect::<Vec<_>>(),
-                });
-                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
-            } else {
-                if !quiet {
-                    println!("Direct dependents of {}:", package.bold());
-                    if direct.is_empty() {
-                        println!("  (none)");
-                    } else {
-                        for (name, ver, dt) in &direct {
-                            println!("  {}@{} ({})", name.bold(), ver.cyan(), dt);
-                        }
-                    }
-                    if transitive && !transitive_list.is_empty() {
-                        println!();
-                        println!("Transitive dependents:");
-                        for (name, ver) in &transitive_list {
-                            println!("  {}@{}", name.bold(), ver.cyan());
-                        }
-                    }
-                }
-            }
-        }
-
-        // --- CHECK ---
-        Commands::Check { file, trusted_key, time, severity, rule, vex, format } => {
-            if verbose { eprintln!("[verbose] Reading {}...", file.display()); }
-            let t_read = std::time::Instant::now();
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            if verbose { eprintln!("[verbose] Read {} bytes in {:?}", content.len(), t_read.elapsed()); }
-
-            let t_digest = std::time::Instant::now();
-            let digest_valid = validate_digest(&content).is_ok();
-            if verbose { eprintln!("[verbose] Validating digest... {:?} ({})", t_digest.elapsed(), if digest_valid { "ok" } else { "FAILED" }); }
-
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => {
-                    let fmt = output::parse_format(&format);
-                    if fmt == output::OutputFormat::Json {
-                        if !quiet {
-                            println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                                "digest_valid": digest_valid,
-                                "signature": { "present": false, "valid": false },
-                                "trust_chain_valid": false,
-                                "lint": { "error_count": 0, "warning_count": 0, "info_count": 0, "findings": [] },
-                                "audit": { "critical": [], "high": [], "medium": [], "low": [], "info": [], "vex_suppressed": [] },
-                                "passed": false,
-                            })).unwrap());
-                        }
-                    } else {
-                        if !quiet {
-                            println!("{} [{}] parse error: {}", output::C { text: "✗", on: color_enabled }.rb(), e.error_code(), e);
-                        }
-                    }
-                    std::process::exit(2);
-                }
-            };
-
-            let now = if time > 0 { time } else { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) };
-
-            let t_trust = std::time::Instant::now();
-            let trust_chain_valid = if !lockfile.trust_roots.is_empty() {
-                lockfile.validate_trust_chain(now).is_ok()
-            } else {
-                true
-            };
-            if verbose { eprintln!("[verbose] Trust chain validation... {:?} ({})", t_trust.elapsed(), if trust_chain_valid { "ok" } else { "FAILED" }); }
-
-            let mut trusted: HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> = HashMap::new();
-            for spec in &trusted_key {
-                if let Some((key_id, (pubkey, algo))) = parse_trusted_key(spec) {
-                    trusted.insert(key_id, (pubkey, algo));
-                }
-            }
-
-            let (sig_present, sig_valid, sig_expired, sig_key_id, sig_algo, sig_expires_epoch) = if !trusted.is_empty() {
-                match verify_signature(&content, &trusted) {
-                    Ok(()) => {
-                        let first_key = trusted.keys().next().cloned().unwrap_or_default();
-                        let first_algo = trusted.values().next().map(|(_, a)| *a).unwrap_or(signature::SignatureAlgorithm::Ed25519);
-                        (true, true, false, first_key, first_algo, 0u64)
-                    }
-                    Err(signature::SignatureError::SignatureExpired { key_id, expires_epoch }) => {
-                        (true, false, true, key_id, signature::SignatureAlgorithm::Ed25519, expires_epoch)
-                    }
-                    Err(_) => {
-                        let first_key = trusted.keys().next().cloned().unwrap_or_default();
-                        let first_algo = trusted.values().next().map(|(_, a)| *a).unwrap_or(signature::SignatureAlgorithm::Ed25519);
-                        (true, false, false, first_key, first_algo, 0u64)
-                    }
-                }
-            } else {
-                (false, true, false, String::new(), signature::SignatureAlgorithm::Ed25519, 0u64)
-            };
-
-            let t_lint = std::time::Instant::now();
-            let rules = build_rule_set(&rule);
-            if verbose { eprintln!("[verbose] Running lint ({} rules)...", rules.len()); }
-            let lint_report = hlock::lint::lint(&lockfile, &rules);
-            if verbose { eprintln!("[verbose] Lint complete... {:?}", t_lint.elapsed()); }
-
-            let min_sev = match severity.as_str() {
-                "warning" => lint::LintSeverity::Warning,
-                "info" => lint::LintSeverity::Info,
-                _ => lint::LintSeverity::Error,
-            };
-
-            let lint_errors: Vec<&lint::LintFinding> = lint_report.findings.iter()
-                .filter(|f| match min_sev {
-                    lint::LintSeverity::Error => f.severity == lint::LintSeverity::Error,
-                    lint::LintSeverity::Warning => matches!(f.severity, lint::LintSeverity::Error | lint::LintSeverity::Warning),
-                    lint::LintSeverity::Info => true,
-                })
-                .collect();
-
-            let t_audit = std::time::Instant::now();
-            let audit_report = if vex {
-                lockfile.audit()
-            } else {
-                lockfile.effective_advisories()
-            };
-            if verbose { eprintln!("[verbose] Audit complete... {:?}", t_audit.elapsed()); }
-
-            let audit_has_critical_or_high = audit_report.has_critical_or_high();
-
-            let hard_failure = !digest_valid || (sig_present && !sig_valid) || !trust_chain_valid;
-            let soft_failure = !lint_errors.is_empty() || audit_has_critical_or_high;
-
-            let fmt = output::parse_format(&format);
-
-            if fmt == output::OutputFormat::Json {
-                let sig_algo_str = match sig_algo {
-                    signature::SignatureAlgorithm::Ed25519 => "ed25519",
-                    signature::SignatureAlgorithm::MlDsa65 => "mldsa65",
-                };
-                let lint_findings: Vec<serde_json::Value> = lint_report.findings.iter()
-                    .filter(|f| match min_sev {
-                        lint::LintSeverity::Error => f.severity == lint::LintSeverity::Error,
-                        lint::LintSeverity::Warning => matches!(f.severity, lint::LintSeverity::Error | lint::LintSeverity::Warning),
-                        lint::LintSeverity::Info => true,
-                    })
-                    .map(|f| serde_json::json!({
-                        "rule": f.rule,
-                        "severity": match f.severity {
-                            lint::LintSeverity::Error => "error",
-                            lint::LintSeverity::Warning => "warning",
-                            lint::LintSeverity::Info => "info",
-                        },
-                        "package": f.package,
-                        "message": f.message,
-                    }))
-                    .collect();
-                let vex_suppressed: Vec<serde_json::Value> = if !vex {
-                    let full_audit = lockfile.audit();
-                    let effective_ids: std::collections::HashSet<String> = audit_report.all_advisories().map(|a| a.advisory_id.clone()).collect();
-                    full_audit.all_advisories()
-                        .filter(|a| !effective_ids.contains(&a.advisory_id))
-                        .map(|a| serde_json::json!({
-                            "package": a.package,
-                            "id": a.advisory_id,
-                            "status": lockfile.vex_for(&a.package, &a.advisory_id).map(|v| v.status.as_str()).unwrap_or("unknown"),
-                        }))
-                        .collect()
-                } else {
-                    vec![]
-                };
-                if !quiet {
-                    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-                        "digest_valid": digest_valid,
-                        "signature": {
-                            "present": sig_present,
-                            "valid": sig_valid,
-                            "expired": sig_expired,
-                            "key_id": sig_key_id,
-                            "algorithm": sig_algo_str,
-                            "expires_epoch": sig_expires_epoch,
-                        },
-                        "trust_chain_valid": trust_chain_valid,
-                        "lint": {
-                            "error_count": lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Error).count(),
-                            "warning_count": lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Warning).count(),
-                            "info_count": lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Info).count(),
-                            "findings": lint_findings,
-                        },
-                        "audit": {
-                            "critical": audit_report.critical.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
-                            "high": audit_report.high.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
-                            "medium": audit_report.medium.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
-                            "low": audit_report.low.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
-                            "info": audit_report.info.iter().map(|a| serde_json::json!({"package": a.package, "id": a.advisory_id, "severity": a.severity.as_str(), "url": a.url, "affected": a.affected_versions})).collect::<Vec<_>>(),
-                            "vex_suppressed": vex_suppressed,
-                        },
-                        "passed": !hard_failure && !soft_failure,
-                    })).unwrap());
-                }
-            } else {
-                if !quiet {
-                    if digest_valid { println!("{} Digest valid", output::C { text: "✓", on: color_enabled }.gb()); }
-                    else { println!("{} Digest invalid", output::C { text: "✗", on: color_enabled }.rb()); }
-
-                    if sig_present {
-                        if sig_expired {
-                            println!("{} Signature expired ({}, expired epoch {})", output::C { text: "✗", on: color_enabled }.rb(), sig_key_id, sig_expires_epoch);
-                        } else if sig_valid {
-                            let algo_str = match sig_algo { signature::SignatureAlgorithm::Ed25519 => "ed25519", signature::SignatureAlgorithm::MlDsa65 => "mldsa65" };
-                            println!("{} Signature valid ({}, {})", output::C { text: "✓", on: color_enabled }.gb(), sig_key_id, algo_str);
-                        } else {
-                            println!("{} Signature invalid", output::C { text: "✗", on: color_enabled }.rb());
-                        }
-                    } else {
-                        println!("  No signature found (use --trusted-key to verify signatures)");
-                    }
-
-                    if trust_chain_valid { println!("{} Trust chain valid", output::C { text: "✓", on: color_enabled }.gb()); }
-                    else { println!("{} Trust chain invalid", output::C { text: "✗", on: color_enabled }.rb()); }
-
-                    let err_count = lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Error).count();
-                    let warn_count = lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Warning).count();
-                    let info_count = lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Info).count();
-                    if err_count == 0 && warn_count == 0 && info_count == 0 {
-                        println!("{} Lint: 0 errors, 0 warnings, 0 info", output::C { text: "✓", on: color_enabled }.gb());
-                    } else {
-                        println!("Lint: {} error(s), {} warning(s), {} info(s)", err_count, warn_count, info_count);
-                        for f in &lint_errors {
-                            let sev_str = match f.severity {
-                                lint::LintSeverity::Error => output::C { text: "ERROR", on: color_enabled }.rb(),
-                                lint::LintSeverity::Warning => output::C { text: "WARN", on: color_enabled }.yb(),
-                                lint::LintSeverity::Info => output::C { text: "INFO", on: color_enabled }.bl(),
-                            };
-                            let pkg = f.package.as_deref().unwrap_or("-");
-                            println!("  {} {:20} {:12} {}", sev_str, f.rule, pkg, f.message);
-                        }
-                    }
-
-                    if !audit_has_critical_or_high && audit_report.total_count() == 0 {
-                        println!("{} Audit: 0 vulnerabilities", output::C { text: "✓", on: color_enabled }.gb());
-                    } else if !audit_has_critical_or_high {
-                        println!("{} Audit: {} (no critical/high)", output::C { text: "✓", on: color_enabled }.gb(), audit_report.total_count());
-                    } else {
-                        let crit_count = audit_report.critical.len();
-                        let high_count = audit_report.high.len();
-                        let med_count = audit_report.medium.len();
-                        let low_count = audit_report.low.len();
-                        let info_count = audit_report.info.len();
-                        print!("Audit: {} critical, {} high, {} medium, {} low, {} info", crit_count, high_count, med_count, low_count, info_count);
-                        if !vex {
-                            let full_audit = lockfile.audit();
-                            let effective_ids: std::collections::HashSet<String> = audit_report.all_advisories().map(|a| a.advisory_id.clone()).collect();
-                            let suppressed: Vec<_> = full_audit.all_advisories().filter(|a| !effective_ids.contains(&a.advisory_id)).collect();
-                            if !suppressed.is_empty() {
-                                print!(" ({} VEX-suppressed)", suppressed.len());
-                            }
-                        }
-                        println!();
-                        for adv in audit_report.all_advisories() {
-                            let sev_str = match adv.severity {
-                                policy::AdvisorySeverity::Critical | policy::AdvisorySeverity::High => if color_enabled { adv.severity.as_str().to_uppercase().red().bold().to_string() } else { adv.severity.as_str().to_uppercase() },
-                                policy::AdvisorySeverity::Medium => if color_enabled { adv.severity.as_str().to_uppercase().yellow().bold().to_string() } else { adv.severity.as_str().to_uppercase() },
-                                policy::AdvisorySeverity::Low => if color_enabled { adv.severity.as_str().to_uppercase().yellow().to_string() } else { adv.severity.as_str().to_uppercase() },
-                                policy::AdvisorySeverity::Info => if color_enabled { adv.severity.as_str().to_uppercase().blue().to_string() } else { adv.severity.as_str().to_uppercase() },
-                            };
-                            println!("  {} {:12} {:16} {}", sev_str, adv.package, adv.advisory_id, adv.affected_versions);
-                        }
-                        if !vex {
-                            let full_audit = lockfile.audit();
-                            let effective_ids: std::collections::HashSet<String> = audit_report.all_advisories().map(|a| a.advisory_id.clone()).collect();
-                            let suppressed: Vec<_> = full_audit.all_advisories().filter(|a| !effective_ids.contains(&a.advisory_id)).collect();
-                            if !suppressed.is_empty() {
-                                println!("({} advisory suppressed by VEX{})", suppressed.len(), suppressed.iter().map(|a| format!(": {}/{} → {}", a.package, a.advisory_id, lockfile.vex_for(&a.package, &a.advisory_id).map(|v| v.status.as_str()).unwrap_or("unknown"))).collect::<Vec<_>>().join(", "));
-                            }
-                        }
-                    }
-
-                    if hard_failure || soft_failure {
-                        println!();
-                        let mut fail_parts = Vec::new();
-                        if !digest_valid { fail_parts.push("digest invalid".to_string()); }
-                        if sig_present && !sig_valid { fail_parts.push("signature invalid".to_string()); }
-                        if !trust_chain_valid { fail_parts.push("trust chain invalid".to_string()); }
-                        if !lint_errors.is_empty() { fail_parts.push(format!("{} lint errors", lint_errors.iter().filter(|f| f.severity == lint::LintSeverity::Error).count())); }
-                        if audit_has_critical_or_high { fail_parts.push(format!("{} critical/high advisory", audit_report.critical.len() + audit_report.high.len())); }
-                        println!("{} {}", output::C { text: "✗", on: color_enabled }.rb(), fail_parts.join(", "));
-                    }
-                }
-            }
-
-            if hard_failure {
-                std::process::exit(2);
-            } else if soft_failure {
-                std::process::exit(1);
-            }
-        }
-
-        // --- TREE ---
-        Commands::Tree { file, root, depth, dep_type, format } => {
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-
-            let fmt = output::parse_format(&format);
-            let max_depth = depth;
-            let filter_dep_type = dep_type.clone();
-
-            let root_names = root;
-
-            struct TreeNode {
-                name: String,
-                version: String,
-                dep_type: Option<String>,
-                dependencies: Vec<TreeNode>,
-            }
-
-            impl TreeNode {
-                fn to_json(&self) -> serde_json::Value {
-                    let deps: Vec<serde_json::Value> = self.dependencies.iter().map(|d| d.to_json()).collect();
-                    let mut obj = serde_json::json!({
-                        "name": self.name,
-                        "version": self.version,
-                    });
-                    if let Some(ref dt) = self.dep_type {
-                        obj["dep_type"] = serde_json::Value::String(dt.clone());
-                    }
-                    obj["dependencies"] = serde_json::Value::Array(deps);
-                    obj
-                }
-            }
-
-            fn build_tree(
-                lockfile: &hlock::Lockfile,
-                name: &str,
-                current_depth: u32,
-                max_depth: Option<u32>,
-                dep_type_filter: &str,
-                visited: &mut HashSet<String>,
-            ) -> TreeNode {
-                let pkg = lockfile.packages.iter().find(|p| p.name == name);
-                let version = pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
-                let mut node = TreeNode {
-                    name: name.to_string(),
-                    version,
-                    dep_type: None,
-                    dependencies: Vec::new(),
-                };
-
-                if max_depth.is_some_and(|max| current_depth >= max) {
-                    return node;
-                }
-
-                if visited.contains(name) {
-                    return node;
-                }
-                visited.insert(name.to_string());
-
-                if let Some(pkg) = pkg {
-                    for dep in &pkg.dependencies {
-                        let follows = match dep_type_filter {
-                            "runtime" => matches!(dep.dep_type, hlock::DepType::Runtime),
-                            "dev" => matches!(dep.dep_type, hlock::DepType::Dev),
-                            "peer" => matches!(dep.dep_type, hlock::DepType::Peer),
-                            _ => true,
-                        };
-                        if !follows { continue; }
-
-                        if visited.contains(&dep.name) {
-                            let dep_pkg = lockfile.packages.iter().find(|p| p.name == dep.name);
-                            let dep_ver = dep_pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
-                            let dt = match dep.dep_type {
-                                hlock::DepType::Runtime => "runtime",
-                                hlock::DepType::Dev => "dev",
-                                hlock::DepType::Peer => "peer",
-                                hlock::DepType::Optional => "optional",
-                                hlock::DepType::OptionalTarget(_, _) => "optional-target",
-                            };
-                            node.dependencies.push(TreeNode {
-                                name: format!("{} ↻", dep.name),
-                                version: dep_ver,
-                                dep_type: Some(dt.to_string()),
-                                dependencies: Vec::new(),
-                            });
-                            continue;
-                        }
-
-                        let dt = match dep.dep_type {
-                            hlock::DepType::Runtime => "runtime",
-                            hlock::DepType::Dev => "dev",
-                            hlock::DepType::Peer => "peer",
-                            hlock::DepType::Optional => "optional",
-                            hlock::DepType::OptionalTarget(_, _) => "optional-target",
-                        };
-                        let mut child = build_tree(lockfile, &dep.name, current_depth + 1, max_depth, dep_type_filter, visited);
-                        child.dep_type = Some(dt.to_string());
-                        node.dependencies.push(child);
-                    }
-                }
-
-                visited.remove(name);
-                node
-            }
-
-            fn render_tree_text(
-                node: &TreeNode,
-                prefix: &str,
-                is_last: bool,
-                show_dep_type: bool,
-            ) {
-                let connector = if is_last { "└" } else { "├" };
-                let is_cycle = node.name.contains(" ↻");
-                let display_name = if is_cycle {
-                    node.name.clone()
-                } else {
-                    format!("{}@{}", node.name, node.version)
-                };
-                let type_suffix = if show_dep_type {
-                    if let Some(ref dt) = node.dep_type {
-                        format!(" ({})", dt)
-                    } else {
-                        String::new()
-                    }
-                } else {
-                    String::new()
-                };
-                println!("{}{}── {}{}", prefix, connector, display_name, type_suffix);
-
-                let child_prefix = format!("{}{}", prefix, if is_last { "    " } else { "│   " });
-                let dep_count = node.dependencies.len();
-                for (i, child) in node.dependencies.iter().enumerate() {
-                    let is_last_child = i == dep_count - 1;
-                    render_tree_text(child, &child_prefix, is_last_child, show_dep_type);
-                }
-            }
-
-            if fmt == output::OutputFormat::Json {
-                let mut trees = Vec::new();
-                for root_name in &root_names {
-                    let mut visited = HashSet::new();
-                    let tree = build_tree(&lockfile, root_name, 0, max_depth, &filter_dep_type, &mut visited);
-                    trees.push(tree);
-                }
-
-                let root_pkg = lockfile.packages.iter().find(|p| root_names.first().map(|rn| p.name == *rn).unwrap_or(false));
-                let root_version = root_pkg.map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch)).unwrap_or_default();
-
-                let json = if root_names.len() == 1 {
-                    serde_json::json!({
-                        "root": root_names[0],
-                        "root_version": root_version,
-                        "tree": trees[0].to_json(),
-                    })
-                } else {
-                    serde_json::json!({
-                        "roots": root_names,
-                        "trees": trees.iter().map(|t| t.to_json()).collect::<Vec<_>>(),
-                    })
-                };
-                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
-            } else {
-                if !quiet {
-                    for (i, root_name) in root_names.iter().enumerate() {
-                        if root_names.len() > 1 && i > 0 {
-                            println!();
-                        }
-                        let mut visited = HashSet::new();
-                        let tree = build_tree(&lockfile, root_name, 0, max_depth, &filter_dep_type, &mut visited);
-                        let show_dep_type = filter_dep_type == "all";
-                        println!("{}@{}", tree.name, tree.version);
-                        let dep_count = tree.dependencies.len();
-                        for (j, child) in tree.dependencies.iter().enumerate() {
-                            let is_last = j == dep_count - 1;
-                            render_tree_text(child, "", is_last, show_dep_type);
-                        }
-                    }
-                }
-            }
-        }
-
-        // --- LICENSES ---
-        Commands::Licenses { file, missing, allow, deny, strict, format } => {
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-
-            let fmt = output::parse_format(&format);
-
-            let licensed_map: std::collections::HashMap<&str, &str> = lockfile.licenses.iter()
-                .map(|l| (l.package.as_str(), l.expression.as_str()))
-                .collect();
-
-            let allowed_licenses: Vec<String> = allow.as_ref().map(|s| s.split(',').map(|x| x.trim().to_string()).collect()).unwrap_or_default();
-            let denied_licenses: Vec<String> = deny.as_ref().map(|s| s.split(',').map(|x| x.trim().to_string()).collect()).unwrap_or_default();
-
-            struct LicenseEntry {
-                name: String,
-                license: Option<String>,
-                source: String,
-                source_type: String,
-                is_workspace: bool,
-            }
-
-            let mut entries: Vec<LicenseEntry> = Vec::new();
-            for pkg in &lockfile.packages {
-                let lic = licensed_map.get(pkg.name.as_str()).cloned();
-                let (source, source_type) = match lockfile.sources.get(pkg.source_idx) {
-                    Some(hlock::Source::Registry(u)) => (u.clone(), "registry".to_string()),
-                    Some(hlock::Source::Git(u)) => (u.clone(), "git".to_string()),
-                    Some(hlock::Source::Workspace) => (String::new(), "workspace".to_string()),
-                    Some(hlock::Source::Local(u)) => (u.clone(), "local".to_string()),
-                    Some(hlock::Source::CasHttp(u)) => (u.clone(), "cas-http".to_string()),
-                    Some(hlock::Source::Ipfs(u)) => (u.clone(), "ipfs".to_string()),
-                    None => (String::new(), "unknown".to_string()),
-                };
-                let is_workspace = source_type == "workspace";
-                entries.push(LicenseEntry { name: pkg.name.clone(), license: lic.map(String::from), source, source_type, is_workspace });
-            }
-
-            let filtered_entries: Vec<&LicenseEntry> = if missing {
-                entries.iter().filter(|e| e.license.is_none() && !e.is_workspace).collect()
-            } else {
-                entries.iter().collect()
-            };
-
-            let declared_count = entries.iter().filter(|e| e.license.is_some()).count();
-            let undeclared_count = entries.iter().filter(|e| e.license.is_none() && !e.is_workspace).count();
-            let workspace_count = entries.iter().filter(|e| e.is_workspace).count();
-            let copyleft_keywords = ["GPL", "AGPL", "LGPL", "CPAL", "EUPL", "CC-BY-SA"];
-            let copyleft_count = entries.iter().filter(|e| {
-                e.license.as_ref().is_some_and(|l| copyleft_keywords.iter().any(|k| l.contains(k)))
-            }).count();
-            let permissive_count = declared_count - copyleft_count;
-
-            let mut violations: Vec<serde_json::Value> = Vec::new();
-
-            for entry in &entries {
-                if entry.is_workspace { continue; }
-                if let Some(ref lic) = entry.license {
-                    for denied in &denied_licenses {
-                        if lic.contains(denied) {
-                            violations.push(serde_json::json!({
-                                "package": entry.name,
-                                "reason": "denied",
-                                "license": lic,
-                            }));
-                        }
-                    }
-                    if !allowed_licenses.is_empty() {
-                        let is_allowed = allowed_licenses.iter().any(|a| lic.contains(a) || a == lic);
-                        if !is_allowed {
-                            violations.push(serde_json::json!({
-                                "package": entry.name,
-                                "reason": "not-allowed",
-                                "license": lic,
-                            }));
-                        }
-                    }
-                } else if strict || !allowed_licenses.is_empty() {
-                    violations.push(serde_json::json!({
-                        "package": entry.name,
-                        "reason": "undeclared",
-                    }));
-                }
-            }
-
-            let has_violations = !violations.is_empty();
-
-            if fmt == output::OutputFormat::Json {
-                let pkgs_json: Vec<serde_json::Value> = filtered_entries.iter().map(|e| {
-                    serde_json::json!({
-                        "name": e.name,
-                        "license": e.license,
-                        "source": e.source,
-                        "source_type": e.source_type,
-                    })
-                }).collect();
-                let json = serde_json::json!({
-                    "packages": pkgs_json,
-                    "summary": {
-                        "declared": declared_count,
-                        "total": entries.len(),
-                        "undeclared": undeclared_count,
-                        "workspace": workspace_count,
-                        "copyleft": copyleft_count,
-                        "permissive": permissive_count,
-                    },
-                    "violations": violations,
-                    "total_packages": entries.len(),
-                });
-                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
-            } else {
-                if !quiet {
-                    if filtered_entries.is_empty() {
-                        if missing {
-                            println!("All packages have license declarations.");
-                        } else {
-                            println!("No license declarations found.");
-                        }
-                    } else {
-                        use owo_colors::OwoColorize;
-                        println!("{:24}{:16}{:16}{}", "Package".bold(), "License".bold(), "Source".bold(), if missing { "Status".bold() } else { "".bold() });
-                        println!("{:24}{:16}{:16}{}", "────────────────────────", "────────────────", "────────────────", if missing { "──────" } else { "" });
-                        for entry in filtered_entries {
-                            let lic_display = match &entry.license {
-                                Some(l) => l.green().to_string(),
-                                None => "⚠ UNDECLARED".yellow().bold().to_string(),
-                            };
-                            let src_short = if entry.source.is_empty() { entry.source_type.clone() } else {
-                                let url = &entry.source;
-                                if let Some(stripped) = url.strip_prefix("https://") {
-                                    stripped.split('/').next().unwrap_or(stripped).to_string()
-                                } else {
-                                    url.clone()
-                                }
-                            };
-                            if missing {
-                                println!("{:24}{:16}{:16}{}", entry.name.bold(), lic_display, src_short, "MISSING".red().bold());
-                            } else {
-                                println!("{:24}{:16}{}", entry.name.bold(), lic_display, src_short);
-                            }
-                        }
-                        println!();
-                        println!("Summary: {}/{} declared, {} copyleft, {} permissive, {} undeclared, {} workspace", declared_count, entries.len(), copyleft_count, permissive_count, undeclared_count, workspace_count);
-                    }
-                }
-            }
-
-            if has_violations {
-                std::process::exit(1);
-            }
-        }
-
-        // ==========================================
-        // NEW v0.18.0 COMMANDS
-        // ==========================================
-
-        // --- OUTDATED (G01) ---
-        Commands::Outdated { file, major, dep_type: _, format, timeout } => {
-            let content = match read_input(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-
-            if verbose { eprintln!("[verbose] Checking {} packages for updates...", lockfile.packages.len()); }
-
-            let mut outdated_list = Vec::new();
-            let mut skipped_list = Vec::new();
-
-            for pkg in &lockfile.packages {
-                let current = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
-                let source = lockfile.sources.get(pkg.source_idx);
-                let source_type = OutdatedSourceType::from_source(source);
-
-                if let Some(label) = source_type.skip_label() {
-                    skipped_list.push(serde_json::json!({ "package": pkg.name, "reason": label }));
-                    continue;
-                }
-
-                match check_outdated(&pkg.name, &current, source_type, timeout) {
-                    Ok(info) => {
-                        if let Some(latest) = &info.latest {
-                            let update_type = info.update_type;
-                            if !major && matches!(update_type, UpdateType::Major) {
-                                skipped_list.push(serde_json::json!({ "package": pkg.name, "reason": "major (use --major to show)" }));
-                                continue;
-                            }
-                            outdated_list.push(serde_json::json!({
-                                "package": pkg.name,
-                                "current": current,
-                                "latest": latest,
-                                "update_type": update_type.to_string(),
-                                "source_type": "registry",
-                            }));
-                        }
-                    }
-                    Err(e) => {
-                        if verbose { eprintln!("[verbose] Failed to check {}: {}", pkg.name, e); }
-                    }
-                }
-            }
-
-            let fmt = output::parse_format(&format);
-
-            if fmt == output::OutputFormat::Json {
-                owo_colors::set_override(false);
-                let major_count = outdated_list.iter().filter(|o| o["update_type"] == "major").count();
-                let minor_count = outdated_list.iter().filter(|o| o["update_type"] == "minor").count();
-                let patch_count = outdated_list.iter().filter(|o| o["update_type"] == "patch").count();
-                let json = serde_json::json!({
-                    "outdated": outdated_list,
-                    "skipped": skipped_list,
-                    "summary": {
-                        "total": lockfile.packages.len(),
-                        "outdated": outdated_list.len(),
-                        "major": major_count,
-                        "minor": minor_count,
-                        "patch": patch_count,
-                        "skipped": skipped_list.len(),
-                    }
-                });
-                if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
-            } else {
-                owo_colors::set_override(color_enabled);
-                if outdated_list.is_empty() {
-                    if !quiet { println!("No outdated packages found."); }
-                } else {
-                    if !quiet {
-                        use owo_colors::OwoColorize;
-                        println!("{:16}{:12}{:12}{}", "Package".bold(), "Current".bold(), "Latest".bold(), "Type".bold());
-                        println!("{:16}{:12}{:12}{}", "────────────────", "────────────", "────────────", "─────");
-                        for entry in &outdated_list {
-                            let name = entry["package"].as_str().unwrap_or("");
-                            let current = entry["current"].as_str().unwrap_or("");
-                            let latest = entry["latest"].as_str().unwrap_or("");
-                            let update_type = entry["update_type"].as_str().unwrap_or("");
-                            let type_colored = match update_type {
-                                "major" => update_type.red().to_string(),
-                                "minor" => update_type.yellow().to_string(),
-                                "patch" => update_type.green().to_string(),
-                                _ => update_type.to_string(),
-                            };
-                            println!("{:16}{:12}{:12}{}", name.bold(), current.cyan(), latest.green(), type_colored);
-                        }
-                        println!();
-                        let major_count = outdated_list.iter().filter(|o| o["update_type"] == "major").count();
-                        let minor_count = outdated_list.iter().filter(|o| o["update_type"] == "minor").count();
-                        let patch_count = outdated_list.iter().filter(|o| o["update_type"] == "patch").count();
-                        println!("{} outdated ({} major, {} minor, {} patch)",
-                            outdated_list.len().to_string().bold(),
-                            major_count, minor_count, patch_count);
-                    }
-                }
-            }
-
-            if !outdated_list.is_empty() { std::process::exit(1); }
-        }
-
-        // --- FIX (G03) ---
-        Commands::Fix { file, audit, outdated, all, dry_run, interactive, format, timeout } => {
-            if file == std::path::Path::new("-") {
-                eprintln!("Error: fix requires a real file path (not stdin)");
-                std::process::exit(2);
-            }
-
-            let fix_type = if all || (audit && outdated) {
-                FixType::Audit
-            } else if audit {
-                FixType::Audit
-            } else if outdated {
-                FixType::Outdated
-            } else {
-                FixType::Audit
-            };
-
-            let content = match std::fs::read_to_string(&file) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", file.display(), e); std::process::exit(2); }
-            };
-            let mut lockfile = match deserialize(&content) {
-                Ok(lf) => lf,
-                Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-            };
-
-            if verbose { eprintln!("[verbose] Building fix plan..."); }
-
-            let plan = match build_fix_plan(&lockfile, fix_type, timeout) {
-                Ok(p) => p,
-                Err(e) => { eprintln!("Error building fix plan: {}", e); std::process::exit(2); }
-            };
-
-            if plan.fixes.is_empty() {
-                if !quiet { println!("No fixes needed."); }
-                std::process::exit(1);
-            }
-
-            let fmt = output::parse_format(&format);
-
-            if dry_run {
-                if fmt == output::OutputFormat::Json {
-                    owo_colors::set_override(false);
-                    let json = serde_json::json!({
-                        "would_fix": plan.fixes.iter().map(|f| serde_json::json!({
-                            "package": f.package, "current": f.current, "fixed": f.fixed,
-                            "advisory_id": f.advisory_id, "type": match f.fix_type { FixType::Audit => "audit", FixType::Outdated => "outdated" }
-                        })).collect::<Vec<_>>(),
-                        "total_vulnerabilities": plan.total_vulnerabilities,
-                    });
-                    if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
-                } else {
-                    if !quiet {
-                        println!("Would fix {} vulnerabilities:", plan.fixes.len());
-                        println!();
-                        println!("{:12}{:12}{:12}{}", "Package".bold(), "Current".bold(), "Fixed".bold(), "Advisory".bold());
-                        println!("{:12}{:12}{:12}{}", "────────────", "────────────", "────────────", "────────────");
-                        for fix in &plan.fixes {
-                            println!("{:12}{:12}{:12}{}", fix.package.bold(), fix.current.cyan(), fix.fixed.green(), fix.advisory_id);
-                        }
-                        println!();
-                        println!("Run without --dry-run to apply.");
-                    }
-                }
-                std::process::exit(0);
-            }
-
-            if interactive {
-                let mut selected = vec![false; plan.fixes.len()];
-                let stdin = std::io::stdin();
-                for (i, fix) in plan.fixes.iter().enumerate() {
-                    print!("Fix {} {} → {}? [y/n/a/q] ", fix.package.bold(), fix.current.cyan(), fix.fixed.green());
-                    use std::io::Write;
-                    std::io::stdout().flush().ok();
-                    let mut input = String::new();
-                    if stdin.read_line(&mut input).is_ok() {
-                        let answer = input.trim().to_lowercase();
-                        match answer.as_str() {
-                            "y" | "yes" => { selected[i] = true; }
-                            "a" | "all" => { for s in &mut selected { *s = true; } break; }
-                            "q" | "quit" => { break; }
-                            _ => { if !quiet { eprintln!("  Skipped {} (major update)", fix.package); } }
-                        }
-                    }
-                }
-
-                let applied = apply_fixes(&mut lockfile, &plan, &selected);
-                if !quiet { eprintln!("Applied {} fix(es). Re-serialize and re-validate...", applied); }
-            } else {
-                let selected: Vec<bool> = plan.fixes.iter().map(|_| true).collect();
-                let applied = apply_fixes(&mut lockfile, &plan, &selected);
-                if !quiet { eprintln!("Applied {} fix(es).", applied); }
-            }
-
-            let serialized = match serialize(&mut lockfile) {
-                Ok(s) => s,
-                Err(e) => { eprintln!("[{}] Serialize error: {}", e.error_code(), e); std::process::exit(1); }
-            };
-
-            if validate_digest(&serialized).is_ok() {
-                if !quiet { eprintln!("{} Digest updated.", output::C { text: "✓", on: color_enabled }.gb()); }
-            }
-
-            if let Err(e) = std::fs::write(&file, &serialized) {
-                eprintln!("Error writing {}: {}", file.display(), e);
-                std::process::exit(1);
-            }
-
-            if !quiet { println!("Fix applied to {}", file.display()); }
-        }
-
-        // --- IMPORT (G04) ---
-        Commands::Import { source, from, output, registry } => {
-            let source_content = match std::fs::read_to_string(&source) {
-                Ok(c) => c,
-                Err(e) => { eprintln!("Error reading {}: {}", source.display(), e); std::process::exit(2); }
-            };
-
-            let format = match from.as_str() {
-                "yarn" => ImportFormat::Yarn,
-                "npm" => ImportFormat::Npm,
-                "pnpm" => ImportFormat::Pnpm,
-                _ => {
-                    eprintln!("Error: unknown format '{}'. Supported: yarn, npm, pnpm", from);
-                    std::process::exit(2);
-                }
-            };
-
-            let (mut lockfile, result) = match format {
-                ImportFormat::Yarn | ImportFormat::Pnpm => {
-                    match import_yarn(&source_content, &registry) {
-                        Ok(r) => r,
-                        Err(e) => { eprintln!("[{}] Import failed: {}", e.error_code(), e); std::process::exit(2); }
-                    }
-                }
-                ImportFormat::Npm => {
-                    match import_npm(&source_content, &registry) {
-                        Ok(r) => r,
-                        Err(e) => { eprintln!("[{}] Import failed: {}", e.error_code(), e); std::process::exit(2); }
-                    }
-                }
-            };
-
-            let serialized = match serialize(&mut lockfile) {
-                Ok(s) => s,
-                Err(e) => { eprintln!("[{}] Serialize error: {}", e.error_code(), e); std::process::exit(1); }
-            };
-
-            if let Some(ref out) = output {
-                if let Err(e) = std::fs::write(out, &serialized) {
-                    eprintln!("Error writing {}: {}", out.display(), e); std::process::exit(1);
-                }
-                if !quiet { eprintln!("Imported {} packages to {}", result.imported, out.display()); }
-            } else {
-                print!("{}", serialized);
-            }
-
-            if !quiet && output.is_none() {
-                eprintln!("Imported {} packages from {} ({})", result.imported, source.display(), result.source_format);
-                if !result.warnings.is_empty() {
-                    eprintln!("Warnings:");
-                    for w in &result.warnings { eprintln!("  - {}", w); }
-                }
-            }
-        }
-
-        // --- EXPLAIN (G06) ---
-        Commands::Explain { rule_or_id, file, format } => {
-            if let Some(explanation) = explain_rule(&rule_or_id) {
-                let fmt = output::parse_format(&format);
-                if fmt == output::OutputFormat::Json {
-                    owo_colors::set_override(false);
-                    let json = serde_json::json!({
-                        "name": explanation.name,
-                        "kind": match explanation.kind { ExplanationKind::Rule => "rule", ExplanationKind::Advisory => "advisory" },
-                        "severity": explanation.severity,
-                        "category": explanation.category,
-                        "description": explanation.description,
-                        "why_it_matters": explanation.why_it_matters,
-                        "how_to_fix": explanation.how_to_fix,
-                        "related": explanation.related,
-                        "references": explanation.references,
-                    });
-                    if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
-                } else {
-                    owo_colors::set_override(color_enabled);
-                    use owo_colors::OwoColorize;
-                    println!("{}: {}", "Rule".bold(), rule_or_id);
-                    if let Some(ref sev) = explanation.severity {
-                        println!("{}: {}", "Severity".bold(), sev);
-                    }
-                    if let Some(ref cat) = explanation.category {
-                        println!("{}: {}", "Category".bold(), cat);
-                    }
-                    println!();
-                    println!("{}", explanation.description);
-                    println!();
-                    if !explanation.why_it_matters.is_empty() {
-                        println!("{}:", "Why it matters".bold());
-                        for item in &explanation.why_it_matters {
-                            println!("  - {}", item);
-                        }
-                        println!();
-                    }
-                    if !explanation.how_to_fix.is_empty() {
-                        println!("{}:", "How to fix".bold());
-                        for item in &explanation.how_to_fix {
-                            println!("  - {}", item);
-                        }
-                        println!();
-                    }
-                    if !explanation.related.is_empty() {
-                        println!("{}: {}", "Related rules".bold(), explanation.related.join(", "));
-                    }
-                    if !explanation.references.is_empty() {
-                        println!("{}:", "References".bold());
-                        for r in &explanation.references {
-                            println!("  - {}", r.cyan());
-                        }
-                    }
-                }
-                return;
-            }
-
-            if let Some(ref path) = file {
-                let content = match read_input(path) {
-                    Ok(c) => c,
-                    Err(e) => { eprintln!("Error reading {}: {}", path.display(), e); std::process::exit(2); }
-                };
-                let lockfile = match deserialize(&content) {
-                    Ok(lf) => lf,
-                    Err(e) => { eprintln!("[{}] Parse error: {}", e.error_code(), e); std::process::exit(2); }
-                };
-
-                if let Some(explanation) = explain_advisory(&rule_or_id, &lockfile) {
-                    let fmt = output::parse_format(&format);
-                    if fmt == output::OutputFormat::Json {
-                        owo_colors::set_override(false);
-                        let json = serde_json::json!({
-                            "name": explanation.name,
-                            "kind": "advisory",
-                            "severity": explanation.severity,
-                            "category": explanation.category,
-                            "description": explanation.description,
-                            "why_it_matters": explanation.why_it_matters,
-                            "how_to_fix": explanation.how_to_fix,
-                            "references": explanation.references,
-                        });
-                        if !quiet { println!("{}", serde_json::to_string_pretty(&json).unwrap()); }
-                    } else {
-                        owo_colors::set_override(color_enabled);
-                        use owo_colors::OwoColorize;
-                        println!("{}: {}", "Advisory".bold(), rule_or_id);
-                        if let Some(ref sev) = explanation.severity {
-                            println!("{}: {}", "Severity".bold(), sev.red().bold());
-                        }
-                        println!();
-                        println!("{}", explanation.description);
-                        println!();
-                        if !explanation.how_to_fix.is_empty() {
-                            println!("{}:", "How to fix".bold());
-                            for item in &explanation.how_to_fix {
-                                println!("  - {}", item);
-                            }
-                        }
-                        if !explanation.references.is_empty() {
-                            println!("{}:", "References".bold());
-                            for r in &explanation.references {
-                                println!("  - {}", r.cyan());
-                            }
-                        }
-                    }
-                    return;
-                }
-            }
-
-            eprintln!("Error: '{}' not found as a rule or advisory.", rule_or_id);
-            eprintln!("Hint: Use --file <lockfile> to look up advisory IDs.");
-            std::process::exit(1);
-        }
+        Commands::Sign {
+            file,
+            key_id,
+            algorithm,
+            private_key,
+            expires,
+            in_place,
+        } => commands::sign::run(
+            &file,
+            &key_id,
+            &algorithm,
+            &private_key,
+            expires,
+            in_place,
+            ctx,
+        ),
+        Commands::Keygen {
+            algorithm,
+            key_id,
+            expires,
+            output,
+        } => commands::keygen::run(&algorithm, &key_id, expires, output.as_deref(), ctx),
+        Commands::Completions { shell } => commands::completions::run(&shell, ctx),
+        // `dispatch` only routes the eight commands above here.
+        _ => unreachable!("non-maintenance command reached dispatch_mutation"),
+    }
+}
+
+/// Runs the inspection commands (read-only lockfile analysis).
+fn dispatch_inspection(command: Commands, ctx: commands::Ctx) {
+    match command {
+        Commands::Verify {
+            file,
+            trusted_key,
+            time,
+            sigstore,
+        } => commands::verify::run(&file, &trusted_key, time, sigstore, ctx),
+        Commands::Lint {
+            file,
+            rule,
+            severity,
+            format,
+        } => commands::lint_cmd::run(&file, &rule, &severity, &format, ctx),
+        Commands::Diff {
+            old_file,
+            new_file,
+            format,
+        } => commands::diff::run(&old_file, &new_file, &format, ctx),
+        Commands::Audit {
+            file,
+            online,
+            merge,
+            format,
+            timeout,
+        } => commands::audit::run(&file, online, merge, &format, timeout, ctx),
+        Commands::Sbom {
+            file,
+            namespace,
+            format,
+        } => commands::sbom_cmd::run(&file, &namespace, &format, ctx),
+        other => dispatch_reports(other, ctx),
+    }
+}
+
+/// Runs the report-style commands (summaries, listings and explanations).
+fn dispatch_reports(command: Commands, ctx: commands::Ctx) {
+    match command {
+        Commands::Info { file, format } => commands::info::run(&file, &format, ctx),
+        Commands::Dedup { file, format } => commands::dedup::run(&file, &format, ctx),
+        Commands::Why {
+            file,
+            package,
+            format,
+        } => commands::why::run(&file, &package, &format, ctx),
+        Commands::Deps {
+            file,
+            package,
+            transitive,
+            dep_type,
+            format,
+        } => commands::deps::run(&file, &package, transitive, &dep_type, &format, ctx),
+        Commands::Dependents {
+            file,
+            package,
+            transitive,
+            dep_type,
+            format,
+        } => commands::dependents::run(&file, &package, transitive, &dep_type, &format, ctx),
+        Commands::Check {
+            file,
+            trusted_key,
+            time,
+            severity,
+            rule,
+            vex,
+            format,
+        } => commands::check::run(
+            &commands::check::CheckArgs {
+                file: &file,
+                trusted_key: &trusted_key,
+                time,
+                severity: &severity,
+                rule: &rule,
+                vex,
+                format: &format,
+            },
+            ctx,
+        ),
+        Commands::Licenses {
+            file,
+            missing,
+            allow,
+            deny,
+            strict,
+            format,
+        } => commands::licenses::run(
+            &file,
+            missing,
+            allow.as_deref(),
+            deny.as_deref(),
+            strict,
+            &format,
+            ctx,
+        ),
+        Commands::Outdated {
+            file,
+            major,
+            dep_type,
+            format,
+            timeout,
+        } => commands::outdated::run(&file, major, &dep_type, &format, timeout, ctx),
+        Commands::Explain {
+            rule_or_id,
+            file,
+            format,
+        } => commands::explain::run(&rule_or_id, file.as_deref(), &format, ctx),
+        Commands::Stats { file, format } => commands::stats::run(&file, &format, ctx),
+        Commands::Digest { file, check } => commands::digest::run(&file, check, ctx),
+        Commands::PolicyTest {
+            file,
+            package,
+            hook,
+            script,
+            format,
+        } => commands::policy_test::run(
+            &file,
+            &package,
+            hook.as_deref(),
+            script.as_deref(),
+            &format,
+            ctx,
+        ),
+        // `dispatch_inspection` only routes the report commands above here.
+        _ => unreachable!("non-report command reached dispatch_reports"),
     }
 }
