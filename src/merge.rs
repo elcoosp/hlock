@@ -24,6 +24,16 @@ pub struct MergeResult {
     pub conflicts: Vec<MergeConflict>,
 }
 
+/// Three-way merge of `base`, `ours` and `theirs` lockfiles under the given
+/// conflict strategy. Package-level conflicts are recorded in the result;
+/// provenance entries are carried over for every package name present in the
+/// merged package set.
+///
+/// # Errors
+///
+/// Returns [`Error::MergeFailed`] when `strategy` is
+/// [`ConflictStrategy::Fail`] and at least one package-level conflict was
+/// detected between `ours` and `theirs`.
 pub fn merge_lockfiles(
     base: &Lockfile,
     ours: &Lockfile,
@@ -32,11 +42,14 @@ pub fn merge_lockfiles(
 ) -> Result<MergeResult, Error> {
     let mut conflicts: Vec<MergeConflict> = Vec::new();
 
-    let (merged_sources, ours_source_map, theirs_source_map) = merge_sources(base, ours, theirs)?;
+    let (merged_sources, ours_source_map, theirs_source_map) = merge_sources(base, ours, theirs);
 
     let (merged_packages, pkg_conflicts) = merge_packages(
-        base, ours, theirs,
-        &ours_source_map, &theirs_source_map,
+        base,
+        ours,
+        theirs,
+        &ours_source_map,
+        &theirs_source_map,
         strategy,
     );
     conflicts.extend(pkg_conflicts);
@@ -47,7 +60,10 @@ pub fn merge_lockfiles(
 
     let merged_metadata = merge_metadata(base, ours, theirs);
 
-    let merged_workspace_root = ours.workspace_root.clone().or(theirs.workspace_root.clone());
+    let merged_workspace_root = ours
+        .workspace_root
+        .clone()
+        .or(theirs.workspace_root.clone());
 
     let merged_workspace_pkgs = merge_workspace_pkgs(ours, theirs);
 
@@ -57,12 +73,25 @@ pub fn merge_lockfiles(
 
     let merged_patches = merge_patches(base, ours, theirs);
 
-    let merged_pkg_names: HashSet<String> = merged_packages.iter().map(|p| p.name.clone()).collect();
+    let merged_pkg_names: HashSet<String> =
+        merged_packages.iter().map(|p| p.name.clone()).collect();
     let mut merged_provenance: Vec<ResolutionProvenance> = Vec::new();
-    for prov in base.provenance.iter().chain(ours.provenance.iter()).chain(theirs.provenance.iter()) {
+    for prov in base
+        .provenance
+        .iter()
+        .chain(ours.provenance.iter())
+        .chain(theirs.provenance.iter())
+    {
         if merged_pkg_names.contains(&prov.package_name) {
-            if let Some(existing) = merged_provenance.iter().position(|p| p.package_name == prov.package_name) {
-                if !base.provenance.iter().any(|bp| bp.package_name == prov.package_name) {
+            if let Some(existing) = merged_provenance
+                .iter()
+                .position(|p| p.package_name == prov.package_name)
+            {
+                if !base
+                    .provenance
+                    .iter()
+                    .any(|bp| bp.package_name == prov.package_name)
+                {
                     merged_provenance[existing] = prov.clone();
                 }
             } else {
@@ -72,7 +101,9 @@ pub fn merge_lockfiles(
     }
 
     if strategy == ConflictStrategy::Fail && !conflicts.is_empty() {
-        return Err(Error::MergeFailed { count: conflicts.len() });
+        return Err(Error::MergeFailed {
+            count: conflicts.len(),
+        });
     }
 
     let mut merged_packages = merged_packages;
@@ -104,12 +135,11 @@ pub fn merge_lockfiles(
     })
 }
 
-#[allow(clippy::type_complexity)]
 fn merge_sources(
     base: &Lockfile,
     ours: &Lockfile,
     theirs: &Lockfile,
-) -> Result<(Vec<Source>, HashMap<usize, usize>, HashMap<usize, usize>), Error> {
+) -> (Vec<Source>, HashMap<usize, usize>, HashMap<usize, usize>) {
     let mut merged = base.sources.clone();
     let mut ours_map: HashMap<usize, usize> = (0..ours.sources.len()).map(|i| (i, i)).collect();
     let mut theirs_map: HashMap<usize, usize> = (0..theirs.sources.len()).map(|i| (i, i)).collect();
@@ -124,7 +154,7 @@ fn merge_sources(
         merged.push(theirs.sources[i].clone());
     }
 
-    Ok((merged, ours_map, theirs_map))
+    (merged, ours_map, theirs_map)
 }
 
 fn remap_package(pkg: &Package, source_map: &HashMap<usize, usize>) -> Package {
@@ -143,11 +173,18 @@ fn merge_packages(
     theirs_source_map: &HashMap<usize, usize>,
     strategy: ConflictStrategy,
 ) -> (Vec<Package>, Vec<MergeConflict>) {
-    let base_map: BTreeMap<&str, &Package> = base.packages.iter().map(|p| (p.name.as_str(), p)).collect();
-    let ours_map: BTreeMap<&str, &Package> = ours.packages.iter().map(|p| (p.name.as_str(), p)).collect();
-    let theirs_map: BTreeMap<&str, &Package> = theirs.packages.iter().map(|p| (p.name.as_str(), p)).collect();
+    let base_map: BTreeMap<&str, &Package> =
+        base.packages.iter().map(|p| (p.name.as_str(), p)).collect();
+    let ours_map: BTreeMap<&str, &Package> =
+        ours.packages.iter().map(|p| (p.name.as_str(), p)).collect();
+    let theirs_map: BTreeMap<&str, &Package> = theirs
+        .packages
+        .iter()
+        .map(|p| (p.name.as_str(), p))
+        .collect();
 
-    let all_keys: BTreeSet<&str> = base_map.keys()
+    let all_keys: BTreeSet<&str> = base_map
+        .keys()
         .chain(ours_map.keys())
         .chain(theirs_map.keys())
         .copied()
@@ -157,123 +194,145 @@ fn merge_packages(
     let mut conflicts = Vec::new();
 
     for key in all_keys {
-        let in_base = base_map.get(key).copied();
-        let in_ours = ours_map.get(key).copied();
-        let in_theirs = theirs_map.get(key).copied();
-
-        match (in_base, in_ours, in_theirs) {
-            (Some(b), Some(o), Some(t)) if o == b && t == b => {
-                result.push(remap_package(o, ours_source_map));
-            }
-            (Some(_b), Some(o), Some(t)) if t == _b => {
-                result.push(remap_package(o, ours_source_map));
-            }
-            (Some(_b), Some(o), Some(t)) if o == _b => {
-                result.push(remap_package(t, theirs_source_map));
-            }
-            (Some(_b), Some(o), Some(t)) if o == t => {
-                result.push(remap_package(o, ours_source_map));
-            }
-            (Some(b), Some(o), Some(t)) => {
-                let resolved = match strategy {
-                    ConflictStrategy::Ours => remap_package(o, ours_source_map),
-                    ConflictStrategy::Theirs => remap_package(t, theirs_source_map),
-                    ConflictStrategy::Fail => remap_package(o, ours_source_map),
-                };
-                conflicts.push(MergeConflict {
-                    package_name: key.to_string(),
-                    base: Some(b.clone()),
-                    ours: remap_package(o, ours_source_map),
-                    theirs: remap_package(t, theirs_source_map),
-                });
-                result.push(resolved);
-            }
-            (Some(_b), None, Some(t)) if t == _b => { }
-            (Some(_b), Some(o), None) if o == _b => { }
-            (Some(_), None, None) => { }
-            (Some(b), None, Some(t)) => {
-                let resolved = match strategy {
-                    ConflictStrategy::Theirs => remap_package(t, theirs_source_map),
-                    _ => {
-                        conflicts.push(MergeConflict {
-                            package_name: key.to_string(),
-                            base: Some(b.clone()),
-                            ours: Package::default(),
-                            theirs: remap_package(t, theirs_source_map),
-                        });
-                        continue;
-                    }
-                };
-                conflicts.push(MergeConflict {
-                    package_name: key.to_string(),
-                    base: Some(b.clone()),
-                    ours: Package::default(),
-                    theirs: remap_package(t, theirs_source_map),
-                });
-                result.push(resolved);
-            }
-            (Some(b), Some(o), None) => {
-                let resolved = match strategy {
-                    ConflictStrategy::Ours => remap_package(o, ours_source_map),
-                    _ => {
-                        conflicts.push(MergeConflict {
-                            package_name: key.to_string(),
-                            base: Some(b.clone()),
-                            ours: remap_package(o, ours_source_map),
-                            theirs: Package::default(),
-                        });
-                        continue;
-                    }
-                };
-                conflicts.push(MergeConflict {
-                    package_name: key.to_string(),
-                    base: Some(b.clone()),
-                    ours: remap_package(o, ours_source_map),
-                    theirs: Package::default(),
-                });
-                result.push(resolved);
-            }
-            (None, Some(o), None) => {
-                result.push(remap_package(o, ours_source_map));
-            }
-            (None, None, Some(t)) => {
-                result.push(remap_package(t, theirs_source_map));
-            }
-            (None, Some(o), Some(t)) if o == t => {
-                result.push(remap_package(o, ours_source_map));
-            }
-            (None, Some(o), Some(t)) => {
-                let resolved = match strategy {
-                    ConflictStrategy::Ours => remap_package(o, ours_source_map),
-                    ConflictStrategy::Theirs => remap_package(t, theirs_source_map),
-                    ConflictStrategy::Fail => remap_package(o, ours_source_map),
-                };
-                conflicts.push(MergeConflict {
-                    package_name: key.to_string(),
-                    base: None,
-                    ours: remap_package(o, ours_source_map),
-                    theirs: remap_package(t, theirs_source_map),
-                });
-                result.push(resolved);
-            }
-            (None, None, None) => { }
+        let (package, conflict) = reconcile_package(
+            key,
+            base_map.get(key).copied(),
+            ours_map.get(key).copied(),
+            theirs_map.get(key).copied(),
+            ours_source_map,
+            theirs_source_map,
+            strategy,
+        );
+        if let Some(package) = package {
+            result.push(package);
+        }
+        if let Some(conflict) = conflict {
+            conflicts.push(conflict);
         }
     }
 
     (result, conflicts)
 }
 
+/// Reconcile one package name present in any of the three lockfiles.
+///
+/// Returns the package to include in the merged output (if any) plus the
+/// conflict to record (if any). A conflict and a kept package can co-occur:
+/// under `Ours`/`Theirs` the losing side is still reported as a conflict.
+fn reconcile_package(
+    key: &str,
+    in_base: Option<&Package>,
+    in_ours: Option<&Package>,
+    in_theirs: Option<&Package>,
+    ours_source_map: &HashMap<usize, usize>,
+    theirs_source_map: &HashMap<usize, usize>,
+    strategy: ConflictStrategy,
+) -> (Option<Package>, Option<MergeConflict>) {
+    match (in_base, in_ours, in_theirs) {
+        // Present everywhere and identical in all three, or changed only on
+        // one side (the other two agreeing).
+        (Some(b), Some(o), Some(t)) if o == b && t == b => {
+            (Some(remap_package(o, ours_source_map)), None)
+        }
+        (Some(b), Some(o), Some(t)) if t == b => (Some(remap_package(o, ours_source_map)), None),
+        (Some(b), Some(o), Some(t)) if o == b => (Some(remap_package(t, theirs_source_map)), None),
+        (Some(_), Some(o), Some(t)) if o == t => (Some(remap_package(o, ours_source_map)), None),
+        // Altered on both sides: resolve per strategy and record the conflict.
+        (Some(b), Some(o), Some(t)) => {
+            let resolved = resolve_conflict(strategy, o, t, ours_source_map, theirs_source_map);
+            let conflict = MergeConflict {
+                package_name: key.to_string(),
+                base: Some(b.clone()),
+                ours: remap_package(o, ours_source_map),
+                theirs: remap_package(t, theirs_source_map),
+            };
+            (Some(resolved), Some(conflict))
+        }
+        // Deleted on one side and untouched on the other, or gone everywhere.
+        (Some(b), None, Some(t)) if t == b => (None, None),
+        (Some(b), Some(o), None) if o == b => (None, None),
+        (_, None, None) => (None, None),
+        // Delete/alter conflict: only `Theirs` keeps the altered package.
+        (Some(b), None, Some(t)) => {
+            let conflict = MergeConflict {
+                package_name: key.to_string(),
+                base: Some(b.clone()),
+                ours: Package::default(),
+                theirs: remap_package(t, theirs_source_map),
+            };
+            let package = if strategy == ConflictStrategy::Theirs {
+                Some(remap_package(t, theirs_source_map))
+            } else {
+                None
+            };
+            (package, Some(conflict))
+        }
+        // Delete/alter conflict: only `Ours` keeps the altered package.
+        (Some(b), Some(o), None) => {
+            let conflict = MergeConflict {
+                package_name: key.to_string(),
+                base: Some(b.clone()),
+                ours: remap_package(o, ours_source_map),
+                theirs: Package::default(),
+            };
+            let package = if strategy == ConflictStrategy::Ours {
+                Some(remap_package(o, ours_source_map))
+            } else {
+                None
+            };
+            (package, Some(conflict))
+        }
+        // Added on one side only.
+        (None, Some(o), None) => (Some(remap_package(o, ours_source_map)), None),
+        (None, None, Some(t)) => (Some(remap_package(t, theirs_source_map)), None),
+        // Added on both sides.
+        (None, Some(o), Some(t)) if o == t => (Some(remap_package(o, ours_source_map)), None),
+        (None, Some(o), Some(t)) => {
+            let resolved = resolve_conflict(strategy, o, t, ours_source_map, theirs_source_map);
+            let conflict = MergeConflict {
+                package_name: key.to_string(),
+                base: None,
+                ours: remap_package(o, ours_source_map),
+                theirs: remap_package(t, theirs_source_map),
+            };
+            (Some(resolved), Some(conflict))
+        }
+    }
+}
+
+/// Pick the winning side of a genuine ours/theirs conflict. `Fail` keeps
+/// `ours` in the output; the failure itself is reported by the caller.
+fn resolve_conflict(
+    strategy: ConflictStrategy,
+    ours: &Package,
+    theirs: &Package,
+    ours_source_map: &HashMap<usize, usize>,
+    theirs_source_map: &HashMap<usize, usize>,
+) -> Package {
+    match strategy {
+        ConflictStrategy::Theirs => remap_package(theirs, theirs_source_map),
+        ConflictStrategy::Ours | ConflictStrategy::Fail => remap_package(ours, ours_source_map),
+    }
+}
+
 fn merge_overrides(base: &Lockfile, ours: &Lockfile, theirs: &Lockfile) -> Vec<Override> {
     let mut result = base.overrides.clone();
     for ovr in ours.overrides.iter().chain(theirs.overrides.iter()) {
-        if !result.iter().any(|o| o.name == ovr.name && o.from_version == ovr.from_version) {
+        if !result
+            .iter()
+            .any(|o| o.name == ovr.name && o.from_version == ovr.from_version)
+        {
             result.push(ovr.clone());
         }
     }
     result
 }
 
-fn merge_features(base: &Lockfile, ours: &Lockfile, theirs: &Lockfile) -> Vec<(String, Vec<String>)> {
+fn merge_features(
+    base: &Lockfile,
+    ours: &Lockfile,
+    theirs: &Lockfile,
+) -> Vec<(String, Vec<String>)> {
     let mut result = base.features.clone();
     for (name, flags) in ours.features.iter().chain(theirs.features.iter()) {
         if !result.iter().any(|(n, _)| n == name) {
@@ -303,11 +362,21 @@ fn merge_workspace_pkgs(ours: &Lockfile, theirs: &Lockfile) -> Vec<crate::lockfi
     result
 }
 
-fn merge_hoist_boundaries(base: &Lockfile, ours: &Lockfile, theirs: &Lockfile) -> Vec<crate::lockfile::HoistBoundary> {
+fn merge_hoist_boundaries(
+    base: &Lockfile,
+    ours: &Lockfile,
+    theirs: &Lockfile,
+) -> Vec<crate::lockfile::HoistBoundary> {
     let mut result = base.hoist_boundaries.clone();
-    for hb in ours.hoist_boundaries.iter().chain(theirs.hoist_boundaries.iter()) {
+    for hb in ours
+        .hoist_boundaries
+        .iter()
+        .chain(theirs.hoist_boundaries.iter())
+    {
         if let Some(existing) = result.iter_mut().find(|h| h.cosine == hb.cosine) {
-            existing.allowed_deps = existing.allowed_deps.iter()
+            existing.allowed_deps = existing
+                .allowed_deps
+                .iter()
                 .filter(|d| hb.allowed_deps.contains(d))
                 .cloned()
                 .collect();
@@ -318,20 +387,33 @@ fn merge_hoist_boundaries(base: &Lockfile, ours: &Lockfile, theirs: &Lockfile) -
     result
 }
 
-fn merge_artifacts(base: &Lockfile, ours: &Lockfile, theirs: &Lockfile) -> Vec<crate::lockfile::ArtifactDirective> {
+fn merge_artifacts(
+    base: &Lockfile,
+    ours: &Lockfile,
+    theirs: &Lockfile,
+) -> Vec<crate::lockfile::ArtifactDirective> {
     let mut result = base.artifacts.clone();
     for art in ours.artifacts.iter().chain(theirs.artifacts.iter()) {
-        if !result.iter().any(|a| a.content_id == art.content_id && a.os_id == art.os_id && a.arch_id == art.arch_id) {
+        if !result.iter().any(|a| {
+            a.content_id == art.content_id && a.os_id == art.os_id && a.arch_id == art.arch_id
+        }) {
             result.push(art.clone());
         }
     }
     result
 }
 
-fn merge_patches(base: &Lockfile, ours: &Lockfile, theirs: &Lockfile) -> Vec<crate::lockfile::PatchDirective> {
+fn merge_patches(
+    base: &Lockfile,
+    ours: &Lockfile,
+    theirs: &Lockfile,
+) -> Vec<crate::lockfile::PatchDirective> {
     let mut result = base.patches.clone();
     for p in ours.patches.iter().chain(theirs.patches.iter()) {
-        if !result.iter().any(|r| r.content_id == p.content_id && r.patch_type == p.patch_type) {
+        if !result
+            .iter()
+            .any(|r| r.content_id == p.content_id && r.patch_type == p.patch_type)
+        {
             result.push(p.clone());
         }
     }
@@ -353,16 +435,14 @@ mod tests {
             workspace_root: None,
             workspace_pkgs: vec![],
             hoist_boundaries: vec![],
-            packages: vec![
-                Package {
-                    name: "core".to_string(),
-                    source_idx: 0,
-                    major: 1,
-                    minor: 0,
-                    patch: 0,
-                    ..Package::default()
-                },
-            ],
+            packages: vec![Package {
+                name: "core".to_string(),
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
+                ..Package::default()
+            }],
             artifacts: vec![],
             patches: vec![],
             provenance: vec![],
@@ -383,7 +463,7 @@ mod tests {
         let ours = base.clone();
         let theirs = base.clone();
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Fail).unwrap();
-        assert!(result.conflicts.is_empty());
+        assert_eq!(result.conflicts, [] as [MergeConflict; 0]);
         assert_eq!(result.lockfile.packages.len(), 1);
         assert_eq!(result.lockfile.packages[0].name, "core");
     }
@@ -395,7 +475,7 @@ mod tests {
         ours.packages[0].major = 2;
         let theirs = base.clone();
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Fail).unwrap();
-        assert!(result.conflicts.is_empty());
+        assert_eq!(result.conflicts, [] as [MergeConflict; 0]);
         assert_eq!(result.lockfile.packages[0].major, 2);
     }
 
@@ -406,7 +486,7 @@ mod tests {
         let mut theirs = base.clone();
         theirs.packages[0].major = 3;
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Fail).unwrap();
-        assert!(result.conflicts.is_empty());
+        assert_eq!(result.conflicts, [] as [MergeConflict; 0]);
         assert_eq!(result.lockfile.packages[0].major, 3);
     }
 
@@ -418,7 +498,7 @@ mod tests {
         let mut theirs = base.clone();
         theirs.packages[0].major = 2;
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Fail).unwrap();
-        assert!(result.conflicts.is_empty());
+        assert_eq!(result.conflicts, [] as [MergeConflict; 0]);
         assert_eq!(result.lockfile.packages[0].major, 2);
     }
 
@@ -465,13 +545,20 @@ mod tests {
         ours.packages.push(Package {
             name: "utils".to_string(),
             source_idx: 0,
-            major: 1, minor: 0, patch: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
             ..Package::default()
         });
         let theirs = base.clone();
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Fail).unwrap();
-        assert!(result.conflicts.is_empty());
-        let names: Vec<&str> = result.lockfile.packages.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(result.conflicts, [] as [MergeConflict; 0]);
+        let names: Vec<&str> = result
+            .lockfile
+            .packages
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert!(names.contains(&"utils"));
     }
 
@@ -483,12 +570,19 @@ mod tests {
         theirs.packages.push(Package {
             name: "utils".to_string(),
             source_idx: 0,
-            major: 1, minor: 0, patch: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
             ..Package::default()
         });
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Fail).unwrap();
-        assert!(result.conflicts.is_empty());
-        let names: Vec<&str> = result.lockfile.packages.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(result.conflicts, [] as [MergeConflict; 0]);
+        let names: Vec<&str> = result
+            .lockfile
+            .packages
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         assert!(names.contains(&"utils"));
     }
 
@@ -499,18 +593,22 @@ mod tests {
         ours.packages.push(Package {
             name: "utils".to_string(),
             source_idx: 0,
-            major: 1, minor: 0, patch: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
             ..Package::default()
         });
         let mut theirs = base.clone();
         theirs.packages.push(Package {
             name: "utils".to_string(),
             source_idx: 0,
-            major: 1, minor: 0, patch: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
             ..Package::default()
         });
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Fail).unwrap();
-        assert!(result.conflicts.is_empty());
+        assert_eq!(result.conflicts, [] as [MergeConflict; 0]);
     }
 
     #[test]
@@ -520,14 +618,18 @@ mod tests {
         ours.packages.push(Package {
             name: "utils".to_string(),
             source_idx: 0,
-            major: 1, minor: 0, patch: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
             ..Package::default()
         });
         let mut theirs = base.clone();
         theirs.packages.push(Package {
             name: "utils".to_string(),
             source_idx: 0,
-            major: 2, minor: 0, patch: 0,
+            major: 2,
+            minor: 0,
+            patch: 0,
             ..Package::default()
         });
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Ours).unwrap();
@@ -544,8 +646,8 @@ mod tests {
         };
         let theirs = base.clone();
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Fail).unwrap();
-        assert!(result.conflicts.is_empty());
-        assert!(result.lockfile.packages.is_empty());
+        assert_eq!(result.conflicts, [] as [MergeConflict; 0]);
+        assert_eq!(result.lockfile.packages, [] as [Package; 0]);
     }
 
     #[test]
@@ -560,8 +662,8 @@ mod tests {
             ..base.clone()
         };
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Fail).unwrap();
-        assert!(result.conflicts.is_empty());
-        assert!(result.lockfile.packages.is_empty());
+        assert_eq!(result.conflicts, [] as [MergeConflict; 0]);
+        assert_eq!(result.lockfile.packages, [] as [Package; 0]);
     }
 
     #[test]
@@ -575,7 +677,7 @@ mod tests {
         theirs.packages[0].major = 2;
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Ours).unwrap();
         assert_eq!(result.conflicts.len(), 1);
-        assert!(result.lockfile.packages.is_empty());
+        assert_eq!(result.lockfile.packages, [] as [Package; 0]);
     }
 
     #[test]
@@ -610,7 +712,7 @@ mod tests {
         };
         let theirs = base.clone();
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Ours).unwrap();
-        assert!(result.lockfile.provenance.is_empty());
+        assert_eq!(result.lockfile.provenance, [] as [ResolutionProvenance; 0]);
     }
 
     #[test]
@@ -620,7 +722,9 @@ mod tests {
         ours.packages.push(Package {
             name: "utils".to_string(),
             source_idx: 0,
-            major: 1, minor: 0, patch: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
             ..Package::default()
         });
         let theirs = base.clone();
@@ -656,6 +760,6 @@ mod tests {
             lockfile: base_lockfile(),
             conflicts: vec![],
         };
-        assert!(mr.conflicts.is_empty());
+        assert_eq!(mr.conflicts, [] as [MergeConflict; 0]);
     }
 }
