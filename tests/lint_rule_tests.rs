@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn hlock_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_hlock"))
@@ -23,13 +23,17 @@ fn make_lockfile_with_issues() -> String {
             hlock::Package {
                 name: "evil".to_string(),
                 source_idx: 0,
-                major: 1, minor: 0, patch: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
                 ..Default::default()
             },
             hlock::Package {
                 name: "old-dep".to_string(),
                 source_idx: 1,
-                major: 1, minor: 0, patch: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
                 hashes: vec![hlock::IntegrityHash {
                     algo: hlock::HashAlgorithm::Sha1,
                     digest: vec![0xAA; 20],
@@ -40,7 +44,9 @@ fn make_lockfile_with_issues() -> String {
             hlock::Package {
                 name: "clean".to_string(),
                 source_idx: 1,
-                major: 1, minor: 0, patch: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
                 hashes: vec![hlock::IntegrityHash {
                     algo: hlock::HashAlgorithm::Sha256,
                     digest: vec![42u8; 32],
@@ -52,9 +58,10 @@ fn make_lockfile_with_issues() -> String {
                 ..Default::default()
             },
         ],
-        licenses: vec![
-            hlock::policy::LicenseEntry { package: "clean".to_string(), expression: "MIT".to_string() },
-        ],
+        licenses: vec![hlock::policy::LicenseEntry {
+            package: "clean".to_string(),
+            expression: "MIT".to_string(),
+        }],
         trust_roots: vec![hlock::policy::TrustRoot {
             key_id: "ci@key".to_string(),
             algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
@@ -79,9 +86,18 @@ fn test_lint_rule_include_only() {
         .output()
         .expect("failed to run hlock");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("no-git-urls"), "should contain no-git-urls, got: {}", stdout);
-    assert!(!stdout.contains("no-sha1"), "should NOT contain no-sha1, got: {}", stdout);
-    assert!(!stdout.contains("require-integrity"), "should NOT contain require-integrity, got: {}", stdout);
+    assert!(
+        stdout.contains("no-git-urls"),
+        "should contain no-git-urls, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("no-sha1"),
+        "should NOT contain no-sha1, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("require-integrity"),
+        "should NOT contain require-integrity, got: {stdout}"
+    );
 }
 
 #[test]
@@ -96,8 +112,14 @@ fn test_lint_rule_exclude() {
         .output()
         .expect("failed to run hlock");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains("no-git-urls"), "should NOT contain no-git-urls when excluded, got: {}", stdout);
-    assert!(stdout.contains("no-sha1") || stdout.contains("require-integrity"), "should contain other rules, got: {}", stdout);
+    assert!(
+        !stdout.contains("no-git-urls"),
+        "should NOT contain no-git-urls when excluded, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("no-sha1") || stdout.contains("require-integrity"),
+        "should contain other rules, got: {stdout}"
+    );
 }
 
 #[test]
@@ -110,7 +132,13 @@ fn test_lint_rule_unknown() {
         .arg("--rule=nonexistent-rule")
         .output()
         .expect("failed to run hlock");
-    assert!(!output.status.success(), "unknown rule should cause error exit");
+    assert!(
+        !output.status.success(),
+        "unknown rule should cause error exit"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unknown rule"), "stderr should mention unknown rule, got: {}", stderr);
+    assert!(
+        stderr.contains("unknown rule"),
+        "stderr should mention unknown rule, got: {stderr}"
+    );
 }
