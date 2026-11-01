@@ -1,9 +1,7 @@
 //! Import lockfiles from other formats (yarn.lock, package-lock.json)
 
 use crate::error::Error;
-use crate::lockfile::{
-    Attestation, HashAlgorithm, IntegrityHash, Lockfile, Package, Source,
-};
+use crate::lockfile::{Attestation, HashAlgorithm, IntegrityHash, Lockfile, Package, Source};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportFormat {
@@ -31,8 +29,15 @@ pub struct ImportResult {
     pub source_file: String,
 }
 
+///
+/// # Errors
+///
+/// Returns `Err` if input validation fails.
 /// Parse a yarn.lock v1 file into hlock Lockfile.
-pub fn import_yarn(content: &str, default_registry: &str) -> Result<(Lockfile, ImportResult), Error> {
+pub fn import_yarn(
+    content: &str,
+    default_registry: &str,
+) -> Result<(Lockfile, ImportResult), Error> {
     let mut packages = Vec::new();
     let mut warnings = Vec::new();
     let mut sources = vec![Source::Registry(default_registry.to_string())];
@@ -50,17 +55,18 @@ pub fn import_yarn(content: &str, default_registry: &str) -> Result<(Lockfile, I
         }
 
         if !trimmed.starts_with(' ') && !trimmed.starts_with('\t') && trimmed.ends_with(':') {
-            if in_entry && !current_key.is_empty() {
-                if let Some(pkg) = build_package_from_yarn(
+            if in_entry
+                && !current_key.is_empty()
+                && let Some(pkg) = build_package_from_yarn(
                     &current_key,
                     &current_version,
                     &current_resolved,
                     &current_integrity,
                     &mut sources,
                     &mut warnings,
-                ) {
-                    packages.push(pkg);
-                }
+                )
+            {
+                packages.push(pkg);
             }
 
             current_key = trimmed.trim_end_matches(':').to_string();
@@ -91,17 +97,18 @@ pub fn import_yarn(content: &str, default_registry: &str) -> Result<(Lockfile, I
         }
     }
 
-    if in_entry && !current_key.is_empty() {
-        if let Some(pkg) = build_package_from_yarn(
+    if in_entry
+        && !current_key.is_empty()
+        && let Some(pkg) = build_package_from_yarn(
             &current_key,
             &current_version,
             &current_resolved,
             &current_integrity,
             &mut sources,
             &mut warnings,
-        ) {
-            packages.push(pkg);
-        }
+        )
+    {
+        packages.push(pkg);
     }
 
     packages.sort_by(|a, b| a.name.cmp(&b.name));
@@ -149,7 +156,7 @@ fn build_package_from_yarn(
     let source_idx = if resolved.starts_with("git+") || resolved.starts_with("git://") {
         let idx = sources.len();
         sources.push(Source::Git(resolved.to_string()));
-        warnings.push(format!("{}: git dependency, included as-is", name));
+        warnings.push(format!("{name}: git dependency, included as-is"));
         idx
     } else {
         0
@@ -173,7 +180,7 @@ fn extract_name_from_yarn_key(key: &str) -> String {
     let at_count = key.chars().filter(|&c| c == '@').count();
 
     if key.starts_with('@') && at_count >= 2 {
-        let second_at = key[1..].find('@').map(|i| i + 1).unwrap_or(key.len());
+        let second_at = key[1..].find('@').map_or(key.len(), |i| i + 1);
         key[..second_at].to_string()
     } else if let Some(at_pos) = key.find('@') {
         key[..at_pos].to_string()
@@ -209,12 +216,20 @@ fn parse_integrity(integrity: &str) -> Vec<IntegrityHash> {
     }]
 }
 
+///
+/// # Errors
+///
+/// Returns `Err` if the foreign lockfile cannot be imported.
 /// Parse a package-lock.json file into hlock Lockfile.
-pub fn import_npm(content: &str, default_registry: &str) -> Result<(Lockfile, ImportResult), Error> {
-    let json: serde_json::Value = serde_json::from_str(content).map_err(|e| Error::ImportFailed {
-        format: "npm".to_string(),
-        reason: format!("Invalid JSON: {}", e),
-    })?;
+pub fn import_npm(
+    content: &str,
+    default_registry: &str,
+) -> Result<(Lockfile, ImportResult), Error> {
+    let json: serde_json::Value =
+        serde_json::from_str(content).map_err(|e| Error::ImportFailed {
+            format: "npm".to_string(),
+            reason: format!("Invalid JSON: {e}"),
+        })?;
 
     let mut packages = Vec::new();
     let mut warnings = Vec::new();
@@ -232,9 +247,8 @@ pub fn import_npm(content: &str, default_registry: &str) -> Result<(Lockfile, Im
     };
 
     for (path, value) in packages_obj {
-        let obj = match value.as_object() {
-            Some(o) => o,
-            None => continue,
+        let Some(obj) = value.as_object() else {
+            continue;
         };
 
         let name = path
@@ -265,7 +279,7 @@ pub fn import_npm(content: &str, default_registry: &str) -> Result<(Lockfile, Im
         let source_idx = if resolved.starts_with("git+") || resolved.starts_with("git://") {
             let idx = sources.len();
             sources.push(Source::Git(resolved.to_string()));
-            warnings.push(format!("{}: git dependency, included as-is", name));
+            warnings.push(format!("{name}: git dependency, included as-is"));
             idx
         } else {
             0
@@ -316,7 +330,10 @@ mod tests {
 
     #[test]
     fn test_extract_name_from_yarn_key_scoped() {
-        assert_eq!(extract_name_from_yarn_key("@babel/core@^7.0.0"), "@babel/core");
+        assert_eq!(
+            extract_name_from_yarn_key("@babel/core@^7.0.0"),
+            "@babel/core"
+        );
     }
 
     #[test]
@@ -348,7 +365,7 @@ mod tests {
     #[test]
     fn test_parse_integrity_empty() {
         let hashes = parse_integrity("");
-        assert!(hashes.is_empty());
+        assert!(hashes.is_empty(), "expected empty, got: {hashes:?}");
     }
 
     #[test]
@@ -392,5 +409,186 @@ mod tests {
         assert_eq!(result.imported, 1);
         assert_eq!(lockfile.sources.len(), 2);
         assert!(matches!(lockfile.sources[1], Source::Git(_)));
+    }
+
+    #[test]
+    fn test_import_yarn_full_document() {
+        let content = "# yarn lockfile v1\n\
+\n\
+__metadata:\n  version: 1\n\
+\n\
+\"lodash@^4.17.0\":\n  version \"4.17.21\"\n  resolved \"https://registry.yarnpkg.com/lodash/-/lodash-4.17.21.tgz\"\n  integrity sha512-abc==\n\
+\n\
+\"@babel/core@^7.0.0\":\n  version \"7.24.0\"\n  resolved \"https://registry.yarnpkg.com/@babel/core/-/core-7.24.0.tgz\"\n  integrity sha512-xyz==\n\
+\n\
+\"left-pad@^1.0.0\":\n  version \"1.1.0\"\n";
+        let (lockfile, result) = import_yarn(content, "https://registry.yarnpkg.com/").unwrap();
+        assert_eq!(result.imported, 3);
+        assert_eq!(result.source_format, "yarn-v1");
+        let names: Vec<&str> = lockfile.packages.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, vec!["@babel/core", "left-pad", "lodash"]);
+        let lodash = lockfile
+            .packages
+            .iter()
+            .find(|p| p.name == "lodash")
+            .unwrap();
+        assert_eq!((lodash.major, lodash.minor, lodash.patch), (4, 17, 21));
+        assert_eq!(lodash.hashes.len(), 1);
+        assert_eq!(lodash.hashes[0].algo, HashAlgorithm::Sha512);
+        assert!(matches!(lockfile.sources[0], Source::Registry(_)));
+    }
+
+    #[test]
+    fn test_import_yarn_git_dependency_appends_source() {
+        let content = "pkg@^1.0.0:\n  version \"1.0.0\"\n  resolved \"git+ssh://git@github.com/acme/pkg.git#abc\"\n";
+        let (lockfile, result) = import_yarn(content, "https://registry.yarnpkg.com/").unwrap();
+        assert_eq!(result.imported, 1);
+        assert_eq!(lockfile.packages[0].source_idx, 1);
+        assert!(matches!(lockfile.sources[1], Source::Git(_)));
+        assert_eq!(result.warnings, vec!["pkg: git dependency, included as-is"]);
+    }
+
+    #[test]
+    fn test_import_yarn_git_scheme_without_plus() {
+        let content =
+            "pkg@^1.0.0:\n  version \"1.0.0\"\n  resolved \"git://github.com/acme/pkg.git#abc\"\n";
+        let (lockfile, _) = import_yarn(content, "https://r/").unwrap();
+        assert!(matches!(lockfile.sources[1], Source::Git(_)));
+    }
+
+    #[test]
+    fn test_import_yarn_skips_entries_without_version() {
+        let content = "ghost@^1:\n  resolved \"https://registry/ghost\"\n\nreal@^2.0.0:\n  version \"2.1.0\"\n";
+        let (lockfile, result) = import_yarn(content, "https://r/").unwrap();
+        assert_eq!(result.imported, 1);
+        assert_eq!(lockfile.packages[0].name, "real");
+    }
+
+    #[test]
+    fn test_import_yarn_non_numeric_version_skipped() {
+        let content = "weird@^1:\n  version \"next\"\n";
+        let (lockfile, result) = import_yarn(content, "https://r/").unwrap();
+        assert_eq!(result.imported, 0);
+        assert_eq!(lockfile.packages.len(), 0);
+    }
+
+    #[test]
+    fn test_import_yarn_partial_versions() {
+        let content = "two@^1.2:\n  version \"1.2\"\n\none@^5:\n  version \"5\"\n";
+        let (lockfile, _) = import_yarn(content, "https://r/").unwrap();
+        let two = lockfile.packages.iter().find(|p| p.name == "two").unwrap();
+        assert_eq!((two.major, two.minor, two.patch), (1, 2, 0));
+        let one = lockfile.packages.iter().find(|p| p.name == "one").unwrap();
+        assert_eq!((one.major, one.minor, one.patch), (5, 0, 0));
+    }
+
+    #[test]
+    fn test_import_yarn_fields_without_space() {
+        let content = "pkg@^1:\n  version\"9.9.9\"\n  resolved\"https://r/pkg\"\n  integrity\"sha256-Qw==\"\n";
+        let (lockfile, _) = import_yarn(content, "https://r/").unwrap();
+        let pkg = &lockfile.packages[0];
+        assert_eq!((pkg.major, pkg.minor, pkg.patch), (9, 9, 9));
+        assert_eq!(pkg.hashes[0].algo, HashAlgorithm::Sha256);
+    }
+
+    #[test]
+    fn test_import_yarn_integrity_variants() {
+        // Unknown algorithm and digest-less entries both yield no hashes.
+        assert_eq!(parse_integrity("md5-abc").len(), 0);
+        assert_eq!(parse_integrity("nodash").len(), 0);
+        let hashes = parse_integrity("sha1-####");
+        assert_eq!(hashes.len(), 1, "invalid base64 falls back to raw bytes");
+        assert_eq!(hashes[0].digest, b"####".to_vec());
+    }
+
+    #[test]
+    fn test_import_yarn_empty_content() {
+        let (lockfile, result) = import_yarn("", "https://r/").unwrap();
+        assert_eq!(result.imported, 0);
+        assert_eq!(lockfile.sources.len(), 1);
+    }
+
+    #[test]
+    fn test_import_npm_dependencies_fallback() {
+        let content = r#"{
+            "dependencies": {
+                "chalk": { "version": "5.3.0", "integrity": "sha512-caa==" },
+                "lodash": { "version": "4.17.21" }
+            }
+        }"#;
+        let (lockfile, result) = import_npm(content, "https://r/").unwrap();
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.warnings.len(), 0);
+        let chalk = lockfile
+            .packages
+            .iter()
+            .find(|p| p.name == "chalk")
+            .unwrap();
+        assert_eq!(chalk.hashes[0].algo, HashAlgorithm::Sha512);
+    }
+
+    #[test]
+    fn test_import_npm_invalid_json_is_error() {
+        let err = import_npm("{not json", "https://r/").unwrap_err();
+        match err {
+            Error::ImportFailed { format, reason } => {
+                assert_eq!(format, "npm");
+                assert!(reason.contains("Invalid JSON"), "got: {reason}");
+            }
+            other => panic!("expected ImportFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_import_npm_missing_packages_key_is_error() {
+        let err = import_npm(r#"{"name": "x"}"#, "https://r/").unwrap_err();
+        assert!(matches!(err, Error::ImportFailed { .. }));
+        assert!(
+            err.to_string()
+                .contains("No 'packages' or 'dependencies' key")
+        );
+    }
+
+    #[test]
+    fn test_import_npm_skips_non_package_entries() {
+        let content = r#"{
+            "packages": {
+                "": { "name": "root", "version": "1.0.0" },
+                ".": { "version": "1.0.0" },
+                "node_modules": { "version": "" },
+                "node_modules/ok": { "version": "1.2.3" },
+                "node_modules/bad": "not-an-object"
+            }
+        }"#;
+        let (lockfile, result) = import_npm(content, "https://r/").unwrap();
+        assert_eq!(result.imported, 1);
+        assert_eq!(lockfile.packages[0].name, "ok");
+        assert_eq!(lockfile.packages[0].source_idx, 0);
+    }
+
+    #[test]
+    fn test_import_npm_backslash_path_prefix() {
+        let content = r#"{ "packages": { "node_modules\\win": { "version": "0.1.0" } } }"#;
+        let (lockfile, result) = import_npm(content, "https://r/").unwrap();
+        assert_eq!(result.imported, 1);
+        assert_eq!(lockfile.packages[0].name, "win");
+    }
+
+    #[test]
+    fn test_import_format_display() {
+        assert_eq!(ImportFormat::Yarn.to_string(), "yarn");
+        assert_eq!(ImportFormat::Npm.to_string(), "npm");
+        assert_eq!(ImportFormat::Pnpm.to_string(), "pnpm");
+        assert_ne!(ImportFormat::Yarn, ImportFormat::Npm);
+    }
+
+    #[test]
+    fn test_import_result_defaults() {
+        let result = ImportResult::default();
+        assert_eq!(result.imported, 0);
+        assert_eq!(result.skipped, 0);
+        assert_eq!(result.warnings.len(), 0);
+        assert_eq!(result.source_format, "");
+        assert_eq!(result.source_file, "");
     }
 }
