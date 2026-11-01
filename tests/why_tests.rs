@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn hlock_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_hlock"))
@@ -15,24 +15,34 @@ fn write_temp_file(name: &str, content: &str) -> PathBuf {
 
 fn make_lockfile_with_chain() -> String {
     let mut lf = hlock::Lockfile {
-        sources: vec![hlock::Source::Registry("https://registry.npmjs.org/".to_string())],
+        sources: vec![hlock::Source::Registry(
+            "https://registry.npmjs.org/".to_string(),
+        )],
         packages: vec![
             hlock::Package {
                 name: "my-app".to_string(),
                 source_idx: 0,
-                major: 1, minor: 0, patch: 0,
-                dependencies: vec![
-                    hlock::Dependency { name: "react".to_string(), dep_type: hlock::DepType::Runtime, requested_features: vec![] },
-                ],
+                major: 1,
+                minor: 0,
+                patch: 0,
+                dependencies: vec![hlock::Dependency {
+                    name: "react".to_string(),
+                    dep_type: hlock::DepType::Runtime,
+                    requested_features: vec![],
+                }],
                 ..Default::default()
             },
             hlock::Package {
                 name: "react".to_string(),
                 source_idx: 0,
-                major: 18, minor: 3, patch: 1,
-                dependencies: vec![
-                    hlock::Dependency { name: "lodash".to_string(), dep_type: hlock::DepType::Runtime, requested_features: vec![] },
-                ],
+                major: 18,
+                minor: 3,
+                patch: 1,
+                dependencies: vec![hlock::Dependency {
+                    name: "lodash".to_string(),
+                    dep_type: hlock::DepType::Runtime,
+                    requested_features: vec![],
+                }],
                 hashes: vec![hlock::IntegrityHash {
                     algo: hlock::HashAlgorithm::Sha256,
                     digest: vec![42u8; 32],
@@ -43,7 +53,9 @@ fn make_lockfile_with_chain() -> String {
             hlock::Package {
                 name: "lodash".to_string(),
                 source_idx: 0,
-                major: 4, minor: 17, patch: 21,
+                major: 4,
+                minor: 17,
+                patch: 21,
                 hashes: vec![hlock::IntegrityHash {
                     algo: hlock::HashAlgorithm::Sha256,
                     digest: vec![43u8; 32],
@@ -79,8 +91,14 @@ fn make_lockfile_with_chain() -> String {
             },
         ],
         licenses: vec![
-            hlock::policy::LicenseEntry { package: "lodash".to_string(), expression: "MIT".to_string() },
-            hlock::policy::LicenseEntry { package: "react".to_string(), expression: "MIT".to_string() },
+            hlock::policy::LicenseEntry {
+                package: "lodash".to_string(),
+                expression: "MIT".to_string(),
+            },
+            hlock::policy::LicenseEntry {
+                package: "react".to_string(),
+                expression: "MIT".to_string(),
+            },
         ],
         ..Default::default()
     };
@@ -99,9 +117,16 @@ fn test_why_text() {
         .arg("lodash")
         .output()
         .expect("failed to run hlock");
-    assert!(output.status.success(), "why should succeed, stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "why should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("lodash"), "should mention lodash, got: {}", stdout);
+    assert!(
+        stdout.contains("lodash"),
+        "should mention lodash, got: {stdout}"
+    );
     assert!(stdout.contains("react"), "should mention react in chain");
     assert!(stdout.contains("my-app"), "should mention my-app in chain");
 }
@@ -135,5 +160,8 @@ fn test_why_not_found() {
         .arg("nonexistent")
         .output()
         .expect("failed to run hlock");
-    assert!(!output.status.success(), "why with nonexistent package should fail");
+    assert!(
+        !output.status.success(),
+        "why with nonexistent package should fail"
+    );
 }
