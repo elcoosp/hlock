@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn hlock_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_hlock"))
@@ -14,7 +14,10 @@ fn test_completions_bash() {
         .expect("failed to run hlock");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "completions bash should succeed");
-    assert!(stdout.contains("hlock"), "bash completions should mention hlock");
+    assert!(
+        stdout.contains("hlock"),
+        "bash completions should mention hlock"
+    );
 }
 
 #[test]
@@ -44,5 +47,8 @@ fn test_completions_invalid_shell() {
         .arg("csh")
         .output()
         .expect("failed to run hlock");
-    assert!(!output.status.success(), "completions with invalid shell should fail");
+    assert!(
+        !output.status.success(),
+        "completions with invalid shell should fail"
+    );
 }
