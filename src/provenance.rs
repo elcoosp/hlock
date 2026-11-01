@@ -11,6 +11,35 @@ pub enum ProvenanceSourceType {
     Ipfs,
 }
 
+impl ProvenanceSourceType {
+    /// Wire-format source-type id used by `@provenance` directives.
+    #[must_use]
+    pub fn id(&self) -> u8 {
+        match self {
+            ProvenanceSourceType::Registry => 0,
+            ProvenanceSourceType::Local => 1,
+            ProvenanceSourceType::Git => 2,
+            ProvenanceSourceType::Workspace => 3,
+            ProvenanceSourceType::CasHttp => 4,
+            ProvenanceSourceType::Ipfs => 5,
+        }
+    }
+
+    /// Inverse of [`ProvenanceSourceType::id`]; `None` for unknown ids.
+    #[must_use]
+    pub fn from_id(id: u8) -> Option<Self> {
+        match id {
+            0 => Some(ProvenanceSourceType::Registry),
+            1 => Some(ProvenanceSourceType::Local),
+            2 => Some(ProvenanceSourceType::Git),
+            3 => Some(ProvenanceSourceType::Workspace),
+            4 => Some(ProvenanceSourceType::CasHttp),
+            5 => Some(ProvenanceSourceType::Ipfs),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolutionProvenance {
     pub package_name: String,
@@ -22,16 +51,22 @@ pub struct ResolutionProvenance {
 }
 
 impl crate::lockfile::Lockfile {
+    #[must_use]
     pub fn provenance_for(&self, package_name: &str) -> Option<&ResolutionProvenance> {
-        self.provenance.iter().find(|p| p.package_name == package_name)
+        self.provenance
+            .iter()
+            .find(|p| p.package_name == package_name)
     }
 
+    #[must_use]
     pub fn packages_at_depth(&self, depth: u32) -> Vec<&ResolutionProvenance> {
-        self.provenance.iter()
+        self.provenance
+            .iter()
             .filter(|p| p.depth == depth)
             .collect()
     }
 
+    #[must_use]
     pub fn dependency_chain(&self, package_name: &str) -> Vec<ResolutionProvenance> {
         let mut chain = Vec::new();
         let mut current = package_name;
@@ -81,7 +116,7 @@ mod tests {
             provenance: vec![
                 ResolutionProvenance {
                     package_name: "app".to_string(),
-                    constraint: "".to_string(),
+                    constraint: String::new(),
                     constrained_by: String::new(),
                     dep_type: DepType::Runtime,
                     source_type: ProvenanceSourceType::Workspace,
@@ -117,7 +152,10 @@ mod tests {
 
     #[test]
     fn test_provenance_source_type_equality() {
-        assert_eq!(ProvenanceSourceType::Registry, ProvenanceSourceType::Registry);
+        assert_eq!(
+            ProvenanceSourceType::Registry,
+            ProvenanceSourceType::Registry
+        );
         assert_ne!(ProvenanceSourceType::Registry, ProvenanceSourceType::Git);
     }
 
@@ -145,7 +183,11 @@ mod tests {
             source_type: ProvenanceSourceType::Registry,
             depth: 0,
         };
-        assert!(p.constrained_by.is_empty());
+        assert!(
+            p.constrained_by.is_empty(),
+            "expected empty, got: {:?}",
+            p.constrained_by
+        );
     }
 
     #[test]
@@ -211,7 +253,7 @@ mod tests {
     fn test_dependency_chain_missing() {
         let lf = sample_lockfile();
         let chain = lf.dependency_chain("nonexistent");
-        assert!(chain.is_empty());
+        assert!(chain.is_empty(), "expected empty, got: {chain:?}");
     }
 
     #[test]
@@ -226,6 +268,6 @@ mod tests {
             depth: 3,
         });
         let chain = lf.dependency_chain("lodash");
-        assert!(!chain.is_empty());
+        assert!(!chain.is_empty(), "expected empty, got: {chain:?}");
     }
 }
