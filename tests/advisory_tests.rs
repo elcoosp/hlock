@@ -17,7 +17,7 @@ fn test_advisory_roundtrip() {
                 package: "express".to_string(),
                 advisory_id: "CVE-2024-43999".to_string(),
                 severity: AdvisorySeverity::Medium,
-                url: "".to_string(),
+                url: String::new(),
                 affected_versions: ">=4.0.0 <4.21.0".to_string(),
             },
         ],
@@ -50,21 +50,21 @@ fn test_advisory_audit_report() {
                 package: "critical-pkg".to_string(),
                 advisory_id: "CVE-2024-1".to_string(),
                 severity: AdvisorySeverity::Critical,
-                url: "".to_string(),
+                url: String::new(),
                 affected_versions: "*".to_string(),
             },
             Advisory {
                 package: "high-pkg".to_string(),
                 advisory_id: "CVE-2024-2".to_string(),
                 severity: AdvisorySeverity::High,
-                url: "".to_string(),
+                url: String::new(),
                 affected_versions: "*".to_string(),
             },
             Advisory {
                 package: "low-pkg".to_string(),
                 advisory_id: "CVE-2024-3".to_string(),
                 severity: AdvisorySeverity::Low,
-                url: "".to_string(),
+                url: String::new(),
                 affected_versions: "*".to_string(),
             },
         ],
@@ -89,6 +89,6 @@ fn test_invalid_vex_status() {
         hlock::Error::InvalidVexStatus { status, .. } => {
             assert_eq!(status, "invalid_status");
         }
-        other => panic!("expected InvalidVexStatus, got {:?}", other),
+        other => panic!("expected InvalidVexStatus, got {other:?}"),
     }
 }
