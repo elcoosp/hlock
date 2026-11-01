@@ -1,5 +1,5 @@
 use hlock::lockfile::{self, Lockfile, Source};
-use hlock::policy::{TrustRoot, TrustRole};
+use hlock::policy::{TrustRole, TrustRoot};
 use hlock::signature::SignatureAlgorithm;
 
 #[test]
@@ -11,7 +11,7 @@ fn test_trust_root_roundtrip() {
                 key_id: "ci@company.com".to_string(),
                 algorithm: SignatureAlgorithm::Ed25519,
                 public_key: vec![42u8; 32],
-                expires_epoch: 1735689600,
+                expires_epoch: 1_735_689_600,
                 role: TrustRole::Root,
             },
             TrustRoot {
@@ -48,35 +48,31 @@ fn test_trust_root_parse_in_header() {
 fn test_trust_root_validation() {
     let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
-        trust_roots: vec![
-            TrustRoot {
-                key_id: "valid@key".to_string(),
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: vec![42u8; 32],
-                expires_epoch: 1735689600,
-                role: TrustRole::Root,
-            },
-        ],
+        trust_roots: vec![TrustRoot {
+            key_id: "valid@key".to_string(),
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: vec![42u8; 32],
+            expires_epoch: 1_735_689_600,
+            role: TrustRole::Root,
+        }],
         ..Lockfile::default()
     };
 
-    assert!(lockfile.validate_trust_chain(1735689500).is_ok());
-    assert!(lockfile.validate_trust_chain(1735689700).is_err());
+    assert!(lockfile.validate_trust_chain(1_735_689_500).is_ok());
+    assert!(lockfile.validate_trust_chain(1_735_689_700).is_err());
 }
 
 #[test]
 fn test_trust_root_missing_root() {
     let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
-        trust_roots: vec![
-            TrustRoot {
-                key_id: "targets@key".to_string(),
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: vec![42u8; 32],
-                expires_epoch: 0,
-                role: TrustRole::Targets,
-            },
-        ],
+        trust_roots: vec![TrustRoot {
+            key_id: "targets@key".to_string(),
+            algorithm: SignatureAlgorithm::Ed25519,
+            public_key: vec![42u8; 32],
+            expires_epoch: 0,
+            role: TrustRole::Targets,
+        }],
         ..Lockfile::default()
     };
 
@@ -130,8 +126,11 @@ fn test_ed448_algo_id_rejected_in_trust_root() {
     assert!(result.is_err());
     match result.unwrap_err() {
         hlock::Error::InvalidHeader { reason, .. } => {
-            assert!(reason.contains("Unknown algorithm: 01"), "Expected unknown algorithm error, got: {}", reason);
+            assert!(
+                reason.contains("Unknown algorithm: 01"),
+                "Expected unknown algorithm error, got: {reason}"
+            );
         }
-        other => panic!("Expected InvalidHeader, got: {:?}", other),
+        other => panic!("Expected InvalidHeader, got: {other:?}"),
     }
 }
