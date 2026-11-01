@@ -1,186 +1,274 @@
 //! Lockfile module - split into submodules
 
-pub mod types;
 pub mod diff;
 pub mod digest;
 pub mod header;
+pub mod types;
 
 // Re-export all types
+use std::fmt::Write as _;
 pub use types::*;
 
 // Re-export diff functions
 pub use diff::serialize_diff;
 
 // Re-export digest functions
-pub use digest::{whole_lockfile_digest, validate_digest};
+pub use digest::{digest_hex, validate_digest, whole_lockfile_digest};
 
 // Re-export header functions
 pub use header::{format_header, parse_header};
 
 // Import dependencies for serialize/deserialize
+use crate::base64url::{decode, encode};
 use crate::error::Error;
 use crate::fnv;
 use crate::payload::{
     DepPayload, HookHashPayload, PayloadData, PeerReqPayload, PlatformTagPayload,
 };
 use crate::payload::{pack_payload, unpack_payload};
-use crate::base64url::{encode, decode};
 use std::collections::hash_map::HashMap;
 use std::fs;
 use std::path::Path;
 
 // Serialize function
+///
+/// # Errors
+///
+/// Returns `Err` if a source index is out of range ([`Error::MissingSource`]),
+/// a workspace package carries integrity hashes ([`Error::InvalidWorkspaceHash`]),
+/// or a dependency has no matching package ([`Error::MissingContentId`]).
 pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
     let mut out = header::format_header(lockfile)?;
     lockfile.packages.sort_by(|a, b| a.name.cmp(&b.name));
+    out.reserve(lockfile.packages.len() * 64);
 
-    for pkg in lockfile.packages.iter() {
-        if pkg.source_idx >= lockfile.sources.len() {
-            return Err(Error::MissingSource { line_number: 0, index: pkg.source_idx });
-        }
-        if matches!(lockfile.sources[pkg.source_idx], Source::Workspace) && !pkg.hashes.is_empty() {
-            return Err(Error::InvalidWorkspaceHash { line_number: 0 });
-        }
-
-        let hashes: Vec<crate::payload::HashPayload> = pkg.hashes.iter().map(|h| {
-            let algo_id = match h.algo { HashAlgorithm::Sha1 => 0, HashAlgorithm::Sha256 => 1, HashAlgorithm::Sha512 => 2, HashAlgorithm::Blake3 => 3 };
-            crate::payload::HashPayload { algo_id, digest: h.digest.clone(), attestation: h.attestation.clone() }
-        }).collect();
-
-        let mut deps = Vec::new();
-        for dep in &pkg.dependencies {
-            let dep_pkg = lockfile.packages.iter().find(|p| p.name == dep.name)
-                .ok_or_else(|| Error::MissingContentId { package: pkg.name.clone(), content_id: fnv::calculate(&format!("{}@0.0.0", dep.name)) })?;
-            let dep_ver_str = format!("{}@{}.{}.{}", dep_pkg.name, dep_pkg.major, dep_pkg.minor, dep_pkg.patch);
-            let cid = fnv::calculate(&dep_ver_str);
-            let mut req_indices = Vec::new();
-            for req_feat in &dep.requested_features {
-                if let Some(idx) = pkg.features.iter().position(|f| f == req_feat) {
-                    req_indices.push(idx);
-                }
-            }
-            let (ty, os, arch) = match &dep.dep_type {
-                DepType::Runtime => (0x00, None, None),
-                DepType::Dev => (0x01, None, None),
-                DepType::Peer => (0x02, None, None),
-                DepType::Optional => (0x03, None, None),
-                DepType::OptionalTarget(target_os, target_arch) => {
-                    let os_id = match target_os {
-                        TargetOS::Any => 0x00, TargetOS::Linux => 0x01, TargetOS::MacOS => 0x02,
-                        TargetOS::Windows => 0x03, TargetOS::FreeBSD => 0x04, TargetOS::Android => 0x05,
-                        TargetOS::IOS => 0x06, TargetOS::Unknown => 0xFF,
-                    };
-                    let arch_id = match target_arch {
-                        TargetArch::Any => 0x00, TargetArch::X86_64 => 0x01, TargetArch::Aarch64 => 0x02,
-                        TargetArch::Wasm32 => 0x03, TargetArch::Arm => 0x04, TargetArch::S390x => 0x05,
-                        TargetArch::Ppc64le => 0x06, TargetArch::Unknown => 0xFF,
-                    };
-                    (0x04, Some(os_id), Some(arch_id))
-                }
-            };
-            deps.push(DepPayload { content_id: cid, dep_type: ty, target_os: os, target_arch: arch, req_feat_indices: req_indices });
-        }
-
-        let peer_reqs: Vec<PeerReqPayload> = pkg.peer_requirements.iter().map(|r| {
-            PeerReqPayload { peer_name: r.peer_name.clone(), version_range: r.version_range.clone(), is_optional: r.is_optional }
-        }).collect();
-
-        let tags: Vec<PlatformTagPayload> = pkg.platform_tags.iter().map(|t| {
-            let os_id = match t.os { TargetOS::Any => 0x00, TargetOS::Linux => 0x01, TargetOS::MacOS => 0x02,
-                TargetOS::Windows => 0x03, TargetOS::FreeBSD => 0x04, TargetOS::Android => 0x05,
-                TargetOS::IOS => 0x06, TargetOS::Unknown => 0xFF };
-            let arch_id = match t.arch { TargetArch::Any => 0x00, TargetArch::X86_64 => 0x01, TargetArch::Aarch64 => 0x02,
-                TargetArch::Wasm32 => 0x03, TargetArch::Arm => 0x04, TargetArch::S390x => 0x05,
-                TargetArch::Ppc64le => 0x06, TargetArch::Unknown => 0xFF };
-            PlatformTagPayload { os_id, arch_id }
-        }).collect();
-
-        let exports: Vec<crate::payload::ExportPayload> = pkg.exports.iter().map(|ex| {
-            let algo_id = match ex.hash_algo { HashAlgorithm::Sha1 => 0x00, HashAlgorithm::Sha256 => 0x01,
-                HashAlgorithm::Sha512 => 0x02, HashAlgorithm::Blake3 => 0x03 };
-            crate::payload::ExportPayload { identifier: ex.identifier.clone(), hash_algo: algo_id, digest: ex.digest.clone() }
-        }).collect();
-
-        let artifacts: Vec<crate::payload::ArtifactPayload> = pkg.artifacts.iter().map(|art| {
-            let algo_id = match art.hash_algo { HashAlgorithm::Sha1 => 0x00, HashAlgorithm::Sha256 => 0x01,
-                HashAlgorithm::Sha512 => 0x02, HashAlgorithm::Blake3 => 0x03 };
-            crate::payload::ArtifactPayload { os_id: art.os_id, arch_id: art.arch_id, hash_algo: algo_id, digest: art.digest.clone() }
-        }).collect();
-
-        let hook_hashes: Vec<HookHashPayload> = pkg.hook_hashes.iter().map(|sh| {
-            let algo_id = match sh.hash_algo { HashAlgorithm::Sha1 => 0x00, HashAlgorithm::Sha256 => 0x01,
-                HashAlgorithm::Sha512 => 0x02, HashAlgorithm::Blake3 => 0x03 };
-            HookHashPayload { hook_type: sh.hook_type.clone(), hash_algo: algo_id, digest: sh.digest.clone() }
-        }).collect();
-
-        let patch_hash = pkg.patch_hash.as_ref().map(|(algo, digest)| {
-            let algo_id = match algo { HashAlgorithm::Sha1 => 0x00, HashAlgorithm::Sha256 => 0x01,
-                HashAlgorithm::Sha512 => 0x02, HashAlgorithm::Blake3 => 0x03 };
-            (algo_id, digest.clone())
-        });
-
-        let payload_data = PayloadData {
-            logical_name: pkg.logical_name.clone(),
-            source_idx: pkg.source_idx,
-            major: pkg.major,
-            minor: pkg.minor,
-            patch: pkg.patch,
-            hashes,
-            features: pkg.features.clone(),
-            resolved_peers: pkg.resolved_peers.clone(),
-            deps,
-            peer_requirements: peer_reqs,
-            platform_tags: tags,
-            exports,
-            artifacts,
-            hook_hashes,
-            patch_hash,
-        };
-        let encoded = encode(&pack_payload(&payload_data));
-        out.push_str(&format!("{}\t{}\n", pkg.name, encoded));
+    for pkg in &lockfile.packages {
+        serialize_package(lockfile, pkg, &mut out)?;
     }
+    serialize_directives(lockfile, &mut out);
 
-    for a in &lockfile.artifacts {
-        out.push_str(&format!("@artifact {:016x} {:02x} {:02x} {}\n", a.content_id, a.os_id, a.arch_id, a.relative_path));
-    }
-    for p in &lockfile.patches {
-        out.push_str(&format!("@patch {:016x} {:02x} {}\n", p.content_id, p.patch_type, p.relative_path));
-    }
-    for prov in &lockfile.provenance {
-        let dep_type_id = match &prov.dep_type { DepType::Runtime => 0, DepType::Dev => 1, DepType::Peer => 2, DepType::Optional => 3, DepType::OptionalTarget(_, _) => 4 };
-        let source_type_id = match &prov.source_type {
-            crate::provenance::ProvenanceSourceType::Registry => 0,
-            crate::provenance::ProvenanceSourceType::Local => 1,
-            crate::provenance::ProvenanceSourceType::Git => 2,
-            crate::provenance::ProvenanceSourceType::Workspace => 3,
-            crate::provenance::ProvenanceSourceType::CasHttp => 4,
-            crate::provenance::ProvenanceSourceType::Ipfs => 5,
-        };
-        out.push_str(&format!("@provenance {} {} {} {} {} {}\n", prov.package_name, prov.constraint, prov.constrained_by, dep_type_id, source_type_id, prov.depth));
-    }
-    for adv in &lockfile.advisories {
-        out.push_str(&format!("@advisory {} {} {} {} {}\n", 
-            adv.package, 
-            adv.advisory_id, 
-            adv.severity.as_str(),
-            adv.url,
-            adv.affected_versions
-        ));
-    }
-    for vex in &lockfile.vex_entries {
-        out.push_str(&format!("@vex {} {} {} {} {}\n",
-            vex.package, vex.advisory_id, vex.status.as_str(),
-            vex.justification, vex.impact_statement));
-    }
-    for lic in &lockfile.licenses {
-        out.push_str(&format!("@license {} {}\n", lic.package, lic.expression));
-    }
     let digest = blake3::hash(out.as_bytes());
-    out.push_str(&format!("@digest {}\n", crate::lockfile::digest::bytes_to_hex(digest.as_bytes())));
+    let _ = writeln!(
+        out,
+        "@digest {}",
+        crate::lockfile::digest::bytes_to_hex(digest.as_bytes())
+    );
     Ok(out)
 }
 
+/// Serializes one package line (name + base64url payload).
+fn serialize_package(lockfile: &Lockfile, pkg: &Package, out: &mut String) -> Result<(), Error> {
+    if pkg.source_idx >= lockfile.sources.len() {
+        return Err(Error::MissingSource {
+            line_number: 0,
+            index: pkg.source_idx,
+        });
+    }
+    if matches!(lockfile.sources[pkg.source_idx], Source::Workspace) && !pkg.hashes.is_empty() {
+        return Err(Error::InvalidWorkspaceHash { line_number: 0 });
+    }
+    let payload_data = build_payload_data(lockfile, pkg)?;
+    let encoded = encode(&pack_payload(&payload_data));
+    let _ = writeln!(out, "{}\t{}", pkg.name, encoded);
+    Ok(())
+}
+
+/// Builds the binary payload for a package from its resolved dependencies.
+fn build_payload_data(lockfile: &Lockfile, pkg: &Package) -> Result<PayloadData, Error> {
+    Ok(PayloadData {
+        logical_name: pkg.logical_name.clone(),
+        source_idx: pkg.source_idx,
+        major: pkg.major,
+        minor: pkg.minor,
+        patch: pkg.patch,
+        hashes: build_hash_payloads(pkg),
+        features: pkg.features.clone(),
+        resolved_peers: pkg.resolved_peers.clone(),
+        deps: build_dep_payloads(lockfile, pkg)?,
+        peer_requirements: build_peer_req_payloads(pkg),
+        platform_tags: build_platform_tag_payloads(pkg),
+        exports: build_export_payloads(pkg),
+        artifacts: build_artifact_payloads(pkg),
+        hook_hashes: build_hook_hash_payloads(pkg),
+        patch_hash: pkg
+            .patch_hash
+            .as_ref()
+            .map(|(algo, digest)| (algo.id(), digest.clone())),
+    })
+}
+
+/// Converts the package's integrity hashes into their wire representation.
+fn build_hash_payloads(pkg: &Package) -> Vec<crate::payload::HashPayload> {
+    pkg.hashes
+        .iter()
+        .map(|h| crate::payload::HashPayload {
+            algo_id: h.algo.id(),
+            digest: h.digest.clone(),
+            attestation: h.attestation.clone(),
+        })
+        .collect()
+}
+
+/// Resolves each dependency to its content id and encodes its dep type.
+fn build_dep_payloads(lockfile: &Lockfile, pkg: &Package) -> Result<Vec<DepPayload>, Error> {
+    let mut deps = Vec::with_capacity(pkg.dependencies.len());
+    for dep in &pkg.dependencies {
+        let dep_pkg = lockfile
+            .find_package(&dep.name)
+            .ok_or_else(|| Error::MissingContentId {
+                package: pkg.name.clone(),
+                content_id: fnv::calculate(&format!("{}@0.0.0", dep.name)),
+            })?;
+        let cid = fnv::calculate(&dep_pkg.version_string());
+        let req_indices = dep
+            .requested_features
+            .iter()
+            .filter_map(|req_feat| pkg.features.iter().position(|f| f == req_feat))
+            .collect();
+        let (ty, os, arch) = match &dep.dep_type {
+            DepType::OptionalTarget(target_os, target_arch) => (
+                DepType::OptionalTarget(TargetOS::Any, TargetArch::Any).id(),
+                Some(target_os.id()),
+                Some(target_arch.id()),
+            ),
+            simple => (simple.id(), None, None),
+        };
+        deps.push(DepPayload {
+            content_id: cid,
+            dep_type: ty,
+            target_os: os,
+            target_arch: arch,
+            req_feat_indices: req_indices,
+        });
+    }
+    Ok(deps)
+}
+
+/// Converts peer version requirements into their wire representation.
+fn build_peer_req_payloads(pkg: &Package) -> Vec<PeerReqPayload> {
+    pkg.peer_requirements
+        .iter()
+        .map(|r| PeerReqPayload {
+            peer_name: r.peer_name.clone(),
+            version_range: r.version_range.clone(),
+            is_optional: r.is_optional,
+        })
+        .collect()
+}
+
+/// Converts platform tags into their wire representation.
+fn build_platform_tag_payloads(pkg: &Package) -> Vec<PlatformTagPayload> {
+    pkg.platform_tags
+        .iter()
+        .map(|t| PlatformTagPayload {
+            os_id: t.os.id(),
+            arch_id: t.arch.id(),
+        })
+        .collect()
+}
+
+/// Converts export declarations into their wire representation.
+fn build_export_payloads(pkg: &Package) -> Vec<crate::payload::ExportPayload> {
+    pkg.exports
+        .iter()
+        .map(|ex| crate::payload::ExportPayload {
+            identifier: ex.identifier.clone(),
+            hash_algo: ex.hash_algo.id(),
+            digest: ex.digest.clone(),
+        })
+        .collect()
+}
+
+/// Converts artifact entries into their wire representation.
+fn build_artifact_payloads(pkg: &Package) -> Vec<crate::payload::ArtifactPayload> {
+    pkg.artifacts
+        .iter()
+        .map(|art| crate::payload::ArtifactPayload {
+            os_id: art.os_id,
+            arch_id: art.arch_id,
+            hash_algo: art.hash_algo.id(),
+            digest: art.digest.clone(),
+        })
+        .collect()
+}
+
+/// Converts hook integrity hashes into their wire representation.
+fn build_hook_hash_payloads(pkg: &Package) -> Vec<HookHashPayload> {
+    pkg.hook_hashes
+        .iter()
+        .map(|sh| HookHashPayload {
+            hook_type: sh.hook_type.clone(),
+            hash_algo: sh.hash_algo.id(),
+            digest: sh.digest.clone(),
+        })
+        .collect()
+}
+
+/// Serializes the artifact/patch/provenance/advisory/vex/license directives.
+fn serialize_directives(lockfile: &Lockfile, out: &mut String) {
+    for a in &lockfile.artifacts {
+        let _ = writeln!(
+            out,
+            "@artifact {:016x} {:02x} {:02x} {}",
+            a.content_id, a.os_id, a.arch_id, a.relative_path
+        );
+    }
+    for p in &lockfile.patches {
+        let _ = writeln!(
+            out,
+            "@patch {:016x} {:02x} {}",
+            p.content_id, p.patch_type, p.relative_path
+        );
+    }
+    for prov in &lockfile.provenance {
+        let _ = writeln!(
+            out,
+            "@provenance {} {} {} {} {} {}",
+            prov.package_name,
+            prov.constraint,
+            prov.constrained_by,
+            prov.dep_type.id(),
+            prov.source_type.id(),
+            prov.depth
+        );
+    }
+    for adv in &lockfile.advisories {
+        let _ = writeln!(
+            out,
+            "@advisory {} {} {} {} {}",
+            adv.package,
+            adv.advisory_id,
+            adv.severity.as_str(),
+            adv.url,
+            adv.affected_versions
+        );
+    }
+    for vex in &lockfile.vex_entries {
+        let _ = writeln!(
+            out,
+            "@vex {} {} {} {} {}",
+            vex.package,
+            vex.advisory_id,
+            vex.status.as_str(),
+            vex.justification,
+            vex.impact_statement
+        );
+    }
+    for lic in &lockfile.licenses {
+        let _ = writeln!(out, "@license {} {}", lic.package, lic.expression);
+    }
+}
+
 // Deserialize function
+///
+/// # Errors
+///
+/// Returns `Err` if a VEX status string is unknown ([`Error::InvalidVexStatus`]),
+/// an advisory severity is invalid ([`Error::InvalidAdvisorySeverity`]),
+/// a provenance type id is unknown ([`Error::UnknownProvenanceDepType`] /
+/// [`Error::UnknownProvenanceSourceType`]),
+/// a package line has no tab delimiter ([`Error::MissingDelimiter`]),
+/// or a payload is not valid base64url ([`Error::InvalidBase64`]).
 pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
     let (mut lockfile, pkg_content) = header::parse_header(content)?;
     let header_line_count = content.lines().count() - pkg_content.lines().count();
@@ -191,178 +279,441 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
     let mut provenance_parse_errors: Vec<Error> = Vec::new();
 
     for (idx, line) in pkg_content.lines().enumerate() {
-        if line.trim().is_empty() || line.starts_with("@signature ") || line.starts_with("@digest ") { continue; }
-        if let Some(rest) = line.strip_prefix("@vex ") {
-            let mut parts = rest.splitn(5, ' ');
-            let package = parts.next().unwrap_or("").to_string();
-            let advisory_id = parts.next().unwrap_or("").to_string();
-            let status_str = parts.next().unwrap_or("");
-            let justification = parts.next().unwrap_or("").to_string();
-            let impact_statement = parts.next().unwrap_or("").to_string();
-
-            let status = match crate::lockfile::VexStatus::from_str(status_str) {
-                Some(s) => s,
-                None => {
-                    provenance_parse_errors.push(Error::InvalidVexStatus {
-                        line_number: idx + 1,
-                        status: status_str.to_string(),
-                    });
-                    continue;
-                }
-            };
-
-            lockfile.vex_entries.push(crate::lockfile::VexEntry {
-                package,
-                advisory_id,
-                status,
-                justification,
-                impact_statement,
-            });
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("@license ") {
-            let mut parts = rest.splitn(2, ' ');
-            let package = parts.next().unwrap_or("").to_string();
-            let expression = parts.next().unwrap_or("").to_string();
-            lockfile.licenses.push(crate::policy::LicenseEntry {
-                package,
-                expression,
-            });
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("@advisory ") {
-            let mut parts = rest.splitn(5, ' ');
-            let package = parts.next().unwrap_or("").to_string();
-            let advisory_id = parts.next().unwrap_or("").to_string();
-            let severity_str = parts.next().unwrap_or("");
-            let url = parts.next().unwrap_or("").to_string();
-            let affected_versions = parts.next().unwrap_or("").to_string();
-
-            let severity = match severity_str {
-                "critical" => crate::policy::AdvisorySeverity::Critical,
-                "high" => crate::policy::AdvisorySeverity::High,
-                "medium" => crate::policy::AdvisorySeverity::Medium,
-                "low" => crate::policy::AdvisorySeverity::Low,
-                "info" => crate::policy::AdvisorySeverity::Info,
-                _ => {
-                    provenance_parse_errors.push(Error::InvalidAdvisorySeverity {
-                        line_number: idx + 1,
-                        severity: severity_str.to_string(),
-                    });
-                    continue;
-                }
-            };
-
-            lockfile.advisories.push(crate::policy::Advisory {
-                package,
-                advisory_id,
-                severity,
-                url,
-                affected_versions,
-            });
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("@artifact ") {
-            let mut parts = rest.splitn(4, ' ');
-            let content_id = u64::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
-            let os_id = u8::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
-            let arch_id = u8::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
-            let rel_path = parts.next().unwrap_or("");
-            artifacts.push(ArtifactDirective { content_id, os_id, arch_id, relative_path: rel_path.to_string() });
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("@patch ") {
-            let mut parts = rest.splitn(3, ' ');
-            let content_id = u64::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
-            let patch_type = u8::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
-            let rel_path = parts.next().unwrap_or("");
-            patches.push(PatchDirective { content_id, patch_type, relative_path: rel_path.to_string() });
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("@provenance ") {
-            let mut parts = rest.splitn(6, ' ');
-            let pkg_name = parts.next().unwrap_or("").to_string();
-            let constraint = parts.next().unwrap_or("").to_string();
-            let constrained_by = parts.next().unwrap_or("").to_string();
-            let dep_type_id: u8 = parts.next().unwrap_or("").parse().unwrap_or(255);
-            let source_type_id: u8 = parts.next().unwrap_or("").parse().unwrap_or(255);
-            let depth: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
-
-            let dep_type = match dep_type_id { 0 => DepType::Runtime, 1 => DepType::Dev, 2 => DepType::Peer, 3 => DepType::Optional, 4 => DepType::OptionalTarget(TargetOS::Any, TargetArch::Any), _ => { provenance_parse_errors.push(Error::UnknownProvenanceDepType { type_id: dep_type_id }); continue; } };
-            let source_type = match source_type_id { 0 => crate::provenance::ProvenanceSourceType::Registry, 1 => crate::provenance::ProvenanceSourceType::Local, 2 => crate::provenance::ProvenanceSourceType::Git, 3 => crate::provenance::ProvenanceSourceType::Workspace, 4 => crate::provenance::ProvenanceSourceType::CasHttp, 5 => crate::provenance::ProvenanceSourceType::Ipfs, _ => { provenance_parse_errors.push(Error::UnknownProvenanceSourceType { type_id: source_type_id }); continue; } };
-
-            let prov = crate::provenance::ResolutionProvenance { package_name: pkg_name, constraint, constrained_by, dep_type, source_type, depth };
-            if let Some(existing) = provenance.iter().position(|p| p.package_name == prov.package_name) { provenance[existing] = prov; } else { provenance.push(prov); }
+        if is_skippable_body_line(line) {
             continue;
         }
         let line_num = header_line_count + idx;
-        let (name, encoded) = line.split_once('\t').ok_or(Error::MissingDelimiter { line_number: line_num })?;
-        let binary = decode(encoded.as_bytes()).map_err(|_| Error::InvalidBase64 { line_number: line_num })?;
-        let payload = unpack_payload(&binary, line_num)?;
-        if payload.source_idx >= lockfile.sources.len() { return Err(Error::MissingSource { line_number: line_num, index: payload.source_idx }); }
-        parsed_payloads.push((name.to_string(), payload, line_num));
-    }
-    if let Some(err) = provenance_parse_errors.into_iter().next() { return Err(err); }
+        let first_error = |err: Error, errors: &mut Vec<Error>| {
+            if errors.is_empty() {
+                errors.push(err);
+            }
+        };
 
-    let mut id_map: HashMap<u64, (String, Vec<String>)> = HashMap::new();
-    for (name, payload, _) in &parsed_payloads {
-        let cid = fnv::calculate(&format!("{}@{}.{}.{}", name, payload.major, payload.minor, payload.patch));
-        id_map.insert(cid, (name.clone(), payload.features.clone()));
-    }
-
-    let mut packages = Vec::new();
-    for (name, payload, _line_num) in parsed_payloads {
-        let hashes: Vec<IntegrityHash> = payload.hashes.iter().map(|h| {
-            let algo = match h.algo_id { 0 => HashAlgorithm::Sha1, 1 => HashAlgorithm::Sha256, 2 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 };
-            IntegrityHash { algo, digest: h.digest.clone(), attestation: h.attestation.clone() }
-        }).collect();
-        let mut dependencies = Vec::new();
-        for dep in &payload.deps {
-            let (dep_name, dep_features) = id_map.get(&dep.content_id).ok_or_else(|| Error::MissingContentId { package: name.clone(), content_id: dep.content_id })?;
-            let req_feats: Vec<String> = dep.req_feat_indices.iter().map(|i| dep_features.get(*i).cloned().unwrap_or_default()).collect();
-            let ty = match dep.dep_type {
-                0 => DepType::Runtime, 1 => DepType::Dev, 2 => DepType::Peer, 3 => DepType::Optional,
-                4 => {
-                    let os = dep.target_os.map(|o| match o { 0x00 => TargetOS::Any, 0x01 => TargetOS::Linux, 0x02 => TargetOS::MacOS, 0x03 => TargetOS::Windows, 0x04 => TargetOS::FreeBSD, 0x05 => TargetOS::Android, 0x06 => TargetOS::IOS, _ => TargetOS::Unknown }).unwrap_or(TargetOS::Any);
-                    let arch = dep.target_arch.map(|a| match a { 0x00 => TargetArch::Any, 0x01 => TargetArch::X86_64, 0x02 => TargetArch::Aarch64, 0x03 => TargetArch::Wasm32, 0x04 => TargetArch::Arm, 0x05 => TargetArch::S390x, 0x06 => TargetArch::Ppc64le, _ => TargetArch::Unknown }).unwrap_or(TargetArch::Any);
-                    DepType::OptionalTarget(os, arch)
-                }
-                _ => DepType::Runtime,
-            };
-            dependencies.push(Dependency { name: dep_name.clone(), dep_type: ty, requested_features: req_feats });
+        if let Some(rest) = line.strip_prefix("@vex ") {
+            match parse_vex_line(rest, idx + 1) {
+                Ok(vex) => lockfile.vex_entries.push(vex),
+                Err(e) => first_error(e, &mut provenance_parse_errors),
+            }
+        } else if let Some(rest) = line.strip_prefix("@license ") {
+            let (package, expression) = rest.split_once(' ').unwrap_or((rest, ""));
+            lockfile.licenses.push(crate::policy::LicenseEntry {
+                package: package.to_string(),
+                expression: expression.to_string(),
+            });
+        } else if let Some(rest) = line.strip_prefix("@advisory ") {
+            match parse_advisory_line(rest, idx + 1) {
+                Ok(adv) => lockfile.advisories.push(adv),
+                Err(e) => first_error(e, &mut provenance_parse_errors),
+            }
+        } else if let Some(rest) = line.strip_prefix("@artifact ") {
+            artifacts.push(parse_artifact_line(rest));
+        } else if let Some(rest) = line.strip_prefix("@patch ") {
+            patches.push(parse_patch_line(rest));
+        } else if let Some(rest) = line.strip_prefix("@provenance ") {
+            match parse_provenance_line(
+                rest,
+                dep_type_id_to_dep_type,
+                source_type_id_to_source_type,
+            ) {
+                Ok(prov) => upsert_provenance(&mut provenance, prov),
+                Err(e) => first_error(e, &mut provenance_parse_errors),
+            }
+        } else {
+            let (name, payload) = decode_package_line(line, line_num)?;
+            if payload.source_idx >= lockfile.sources.len() {
+                return Err(Error::MissingSource {
+                    line_number: line_num,
+                    index: payload.source_idx,
+                });
+            }
+            parsed_payloads.push((name, payload, line_num));
         }
-        packages.push(Package { name, logical_name: payload.logical_name, source_idx: payload.source_idx, major: payload.major, minor: payload.minor, patch: payload.patch, hashes, features: payload.features, resolved_peers: payload.resolved_peers, dependencies, peer_requirements: payload.peer_requirements.iter().map(|r| PeerRequirement { peer_name: r.peer_name.clone(), version_range: r.version_range.clone(), is_optional: r.is_optional }).collect(), platform_tags: payload.platform_tags.iter().map(|t| { let os = match t.os_id { 0x00 => TargetOS::Any, 0x01 => TargetOS::Linux, 0x02 => TargetOS::MacOS, 0x03 => TargetOS::Windows, 0x04 => TargetOS::FreeBSD, 0x05 => TargetOS::Android, 0x06 => TargetOS::IOS, _ => TargetOS::Unknown }; let arch = match t.arch_id { 0x00 => TargetArch::Any, 0x01 => TargetArch::X86_64, 0x02 => TargetArch::Aarch64, 0x03 => TargetArch::Wasm32, 0x04 => TargetArch::Arm, 0x05 => TargetArch::S390x, 0x06 => TargetArch::Ppc64le, _ => TargetArch::Unknown }; PlatformTag { os, arch } }).collect(), exports: payload.exports.iter().map(|ex| { let algo = match ex.hash_algo { 0x00 => HashAlgorithm::Sha1, 0x01 => HashAlgorithm::Sha256, 0x02 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 }; Export { identifier: ex.identifier.clone(), hash_algo: algo, digest: ex.digest.clone() } }).collect(), artifacts: payload.artifacts.iter().map(|art| { let algo = match art.hash_algo { 0x00 => HashAlgorithm::Sha1, 0x01 => HashAlgorithm::Sha256, 0x02 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 }; Artifact { os_id: art.os_id, arch_id: art.arch_id, hash_algo: algo, digest: art.digest.clone() } }).collect(), hook_hashes: payload.hook_hashes.iter().map(|sh| { let algo = match sh.hash_algo { 0x00 => HashAlgorithm::Sha1, 0x01 => HashAlgorithm::Sha256, 0x02 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 }; HookHash { hook_type: sh.hook_type.clone(), hash_algo: algo, digest: sh.digest.clone() } }).collect(), patch_hash: payload.patch_hash.as_ref().map(|(algo, digest)| { let a = match algo { 0x00 => HashAlgorithm::Sha1, 0x01 => HashAlgorithm::Sha256, 0x02 => HashAlgorithm::Sha512, _ => HashAlgorithm::Blake3 }; (a, digest.clone()) }) });
     }
-    lockfile.packages = packages;
+    if let Some(err) = provenance_parse_errors.into_iter().next() {
+        return Err(err);
+    }
+
+    lockfile.packages = build_packages(parsed_payloads, lockfile.sources.len())?;
     lockfile.artifacts = artifacts;
     lockfile.patches = patches;
     lockfile.provenance = provenance;
     Ok(lockfile)
 }
 
+/// True for blank lines and `@signature`/`@digest` trailers, which are not body rows.
+fn is_skippable_body_line(line: &str) -> bool {
+    line.trim().is_empty() || line.starts_with("@signature ") || line.starts_with("@digest ")
+}
+
+/// Parses `@artifact <content_id> <os> <arch> <path>`.
+fn parse_artifact_line(rest: &str) -> ArtifactDirective {
+    let mut parts = rest.splitn(4, ' ');
+    let content_id = u64::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
+    let os_id = u8::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
+    let arch_id = u8::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
+    let rel_path = parts.next().unwrap_or("");
+    ArtifactDirective {
+        content_id,
+        os_id,
+        arch_id,
+        relative_path: rel_path.to_string(),
+    }
+}
+
+/// Parses `@patch <content_id> <type> <path>`.
+fn parse_patch_line(rest: &str) -> PatchDirective {
+    let mut parts = rest.splitn(3, ' ');
+    let content_id = u64::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
+    let patch_type = u8::from_str_radix(parts.next().unwrap_or(""), 16).unwrap_or(0);
+    let rel_path = parts.next().unwrap_or("");
+    PatchDirective {
+        content_id,
+        patch_type,
+        relative_path: rel_path.to_string(),
+    }
+}
+
+/// Inserts a provenance record, replacing any earlier entry for the same package.
+fn upsert_provenance(
+    provenance: &mut Vec<crate::provenance::ResolutionProvenance>,
+    prov: crate::provenance::ResolutionProvenance,
+) {
+    if let Some(existing) = provenance
+        .iter()
+        .position(|p| p.package_name == prov.package_name)
+    {
+        provenance[existing] = prov;
+    } else {
+        provenance.push(prov);
+    }
+}
+
+/// Decodes one `name\t<base64url payload>` row into its name and payload.
+fn decode_package_line(
+    line: &str,
+    line_num: usize,
+) -> Result<(String, crate::payload::PayloadData), Error> {
+    let (name, encoded) = line.split_once('\t').ok_or(Error::MissingDelimiter {
+        line_number: line_num,
+    })?;
+    let binary = decode(encoded.as_bytes()).map_err(|_| Error::InvalidBase64 {
+        line_number: line_num,
+    })?;
+    let payload = unpack_payload(&binary, line_num)?;
+    Ok((name.to_string(), payload))
+}
+
+/// Parses an `@vex` directive line.
+fn parse_vex_line(rest: &str, line_number: usize) -> Result<crate::lockfile::VexEntry, Error> {
+    let mut parts = rest.splitn(5, ' ');
+    let package = parts.next().unwrap_or("").to_string();
+    let advisory_id = parts.next().unwrap_or("").to_string();
+    let status_str = parts.next().unwrap_or("");
+    let justification = parts.next().unwrap_or("").to_string();
+    let impact_statement = parts.next().unwrap_or("").to_string();
+
+    let status = status_str
+        .parse::<crate::lockfile::VexStatus>()
+        .map_err(|()| Error::InvalidVexStatus {
+            line_number,
+            status: status_str.to_string(),
+        })?;
+
+    Ok(crate::lockfile::VexEntry {
+        package,
+        advisory_id,
+        status,
+        justification,
+        impact_statement,
+    })
+}
+
+/// Parses an `@advisory` directive line.
+fn parse_advisory_line(rest: &str, line_number: usize) -> Result<crate::policy::Advisory, Error> {
+    let mut parts = rest.splitn(5, ' ');
+    let package = parts.next().unwrap_or("").to_string();
+    let advisory_id = parts.next().unwrap_or("").to_string();
+    let severity_str = parts.next().unwrap_or("");
+    let url = parts.next().unwrap_or("").to_string();
+    let affected_versions = parts.next().unwrap_or("").to_string();
+
+    let severity = severity_str
+        .parse::<crate::policy::AdvisorySeverity>()
+        .map_err(|()| Error::InvalidAdvisorySeverity {
+            line_number,
+            severity: severity_str.to_string(),
+        })?;
+
+    Ok(crate::policy::Advisory {
+        package,
+        advisory_id,
+        severity,
+        url,
+        affected_versions,
+    })
+}
+
+/// Maps a provenance dep-type id to a [`DepType`]; `Err` carries the parse error.
+fn dep_type_id_to_dep_type(dep_type_id: u8) -> Result<DepType, Error> {
+    match dep_type_id {
+        0..=4 => Ok(DepType::from_id(dep_type_id)),
+        _ => Err(Error::UnknownProvenanceDepType {
+            type_id: dep_type_id,
+        }),
+    }
+}
+
+/// Maps a provenance source-type id to a [`ProvenanceSourceType`].
+fn source_type_id_to_source_type(
+    source_type_id: u8,
+) -> Result<crate::provenance::ProvenanceSourceType, Error> {
+    crate::provenance::ProvenanceSourceType::from_id(source_type_id).ok_or(
+        Error::UnknownProvenanceSourceType {
+            type_id: source_type_id,
+        },
+    )
+}
+
+/// Parses an `@provenance` directive line.
+fn parse_provenance_line(
+    rest: &str,
+    dep_type_of: impl Fn(u8) -> Result<DepType, Error>,
+    source_type_of: impl Fn(u8) -> Result<crate::provenance::ProvenanceSourceType, Error>,
+) -> Result<crate::provenance::ResolutionProvenance, Error> {
+    let mut parts = rest.splitn(6, ' ');
+    let pkg_name = parts.next().unwrap_or("").to_string();
+    let constraint = parts.next().unwrap_or("").to_string();
+    let constrained_by = parts.next().unwrap_or("").to_string();
+    let dep_type_id: u8 = parts.next().unwrap_or("").parse().unwrap_or(255);
+    let source_type_id: u8 = parts.next().unwrap_or("").parse().unwrap_or(255);
+    let depth: u32 = parts.next().unwrap_or("0").parse().unwrap_or(0);
+
+    Ok(crate::provenance::ResolutionProvenance {
+        package_name: pkg_name,
+        constraint,
+        constrained_by,
+        dep_type: dep_type_of(dep_type_id)?,
+        source_type: source_type_of(source_type_id)?,
+        depth,
+    })
+}
+
+/// Converts parsed payloads into [`Package`]s, resolving content-id references.
+fn build_packages(
+    parsed_payloads: Vec<(String, crate::payload::PayloadData, usize)>,
+    source_count: usize,
+) -> Result<Vec<Package>, Error> {
+    let _ = source_count;
+    let id_map = build_content_id_map(&parsed_payloads);
+    let mut packages = Vec::with_capacity(parsed_payloads.len());
+    for (name, payload, _line_num) in parsed_payloads {
+        let dependencies = build_dependencies(&name, &payload, &id_map)?;
+        packages.push(Package {
+            name,
+            logical_name: payload.logical_name,
+            source_idx: payload.source_idx,
+            major: payload.major,
+            minor: payload.minor,
+            patch: payload.patch,
+            hashes: build_integrity_hashes(&payload.hashes),
+            features: payload.features,
+            resolved_peers: payload.resolved_peers,
+            dependencies,
+            peer_requirements: build_peer_requirements(&payload.peer_requirements),
+            platform_tags: build_platform_tags(&payload.platform_tags),
+            exports: build_exports(&payload.exports),
+            artifacts: build_artifacts(&payload.artifacts),
+            hook_hashes: build_hook_hashes(&payload.hook_hashes),
+            patch_hash: build_patch_hash(payload.patch_hash.as_ref()),
+        });
+    }
+    Ok(packages)
+}
+
+/// Maps every payload's `name@x.y.z` content id to its name and feature list.
+pub(crate) fn build_content_id_map(
+    parsed_payloads: &[(String, crate::payload::PayloadData, usize)],
+) -> HashMap<u64, (String, Vec<String>)> {
+    let mut id_map: HashMap<u64, (String, Vec<String>)> = HashMap::new();
+    for (name, payload, _) in parsed_payloads {
+        let cid = fnv::calculate(&format!(
+            "{}@{}.{}.{}",
+            name, payload.major, payload.minor, payload.patch
+        ));
+        id_map.insert(cid, (name.clone(), payload.features.clone()));
+    }
+    id_map
+}
+
+/// Rebuilds integrity hashes, defaulting unknown algorithm ids to Blake3.
+pub(crate) fn build_integrity_hashes(hashes: &[crate::payload::HashPayload]) -> Vec<IntegrityHash> {
+    hashes
+        .iter()
+        .map(|h| IntegrityHash {
+            algo: HashAlgorithm::from_id(h.algo_id).unwrap_or(HashAlgorithm::Blake3),
+            digest: h.digest.clone(),
+            attestation: h.attestation.clone(),
+        })
+        .collect()
+}
+
+/// Rebuilds dependencies, resolving each content id through `id_map`.
+pub(crate) fn build_dependencies(
+    name: &str,
+    payload: &crate::payload::PayloadData,
+    id_map: &HashMap<u64, (String, Vec<String>)>,
+) -> Result<Vec<Dependency>, Error> {
+    let mut dependencies = Vec::with_capacity(payload.deps.len());
+    for dep in &payload.deps {
+        let (dep_name, dep_features) =
+            id_map
+                .get(&dep.content_id)
+                .ok_or_else(|| Error::MissingContentId {
+                    package: name.to_string(),
+                    content_id: dep.content_id,
+                })?;
+        let req_feats: Vec<String> = dep
+            .req_feat_indices
+            .iter()
+            .map(|i| dep_features.get(*i).cloned().unwrap_or_default())
+            .collect();
+        let ty = match dep.dep_type {
+            4 => DepType::OptionalTarget(
+                dep.target_os.map_or(TargetOS::Any, TargetOS::from_id),
+                dep.target_arch.map_or(TargetArch::Any, TargetArch::from_id),
+            ),
+            id => DepType::from_id(id),
+        };
+        dependencies.push(Dependency {
+            name: dep_name.clone(),
+            dep_type: ty,
+            requested_features: req_feats,
+        });
+    }
+    Ok(dependencies)
+}
+
+/// Rebuilds peer version requirements from their wire representation.
+pub(crate) fn build_peer_requirements(
+    reqs: &[crate::payload::PeerReqPayload],
+) -> Vec<PeerRequirement> {
+    reqs.iter()
+        .map(|r| PeerRequirement {
+            peer_name: r.peer_name.clone(),
+            version_range: r.version_range.clone(),
+            is_optional: r.is_optional,
+        })
+        .collect()
+}
+
+/// Rebuilds platform tags from their wire representation.
+pub(crate) fn build_platform_tags(tags: &[crate::payload::PlatformTagPayload]) -> Vec<PlatformTag> {
+    tags.iter()
+        .map(|t| PlatformTag {
+            os: TargetOS::from_id(t.os_id),
+            arch: TargetArch::from_id(t.arch_id),
+        })
+        .collect()
+}
+
+/// Rebuilds export declarations, defaulting unknown hash ids to Blake3.
+pub(crate) fn build_exports(exports: &[crate::payload::ExportPayload]) -> Vec<Export> {
+    exports
+        .iter()
+        .map(|ex| Export {
+            identifier: ex.identifier.clone(),
+            hash_algo: HashAlgorithm::from_id(ex.hash_algo).unwrap_or(HashAlgorithm::Blake3),
+            digest: ex.digest.clone(),
+        })
+        .collect()
+}
+
+/// Rebuilds artifact entries, defaulting unknown hash ids to Blake3.
+pub(crate) fn build_artifacts(artifacts: &[crate::payload::ArtifactPayload]) -> Vec<Artifact> {
+    artifacts
+        .iter()
+        .map(|art| Artifact {
+            os_id: art.os_id,
+            arch_id: art.arch_id,
+            hash_algo: HashAlgorithm::from_id(art.hash_algo).unwrap_or(HashAlgorithm::Blake3),
+            digest: art.digest.clone(),
+        })
+        .collect()
+}
+
+/// Rebuilds hook integrity hashes, defaulting unknown hash ids to Blake3.
+pub(crate) fn build_hook_hashes(hook_hashes: &[crate::payload::HookHashPayload]) -> Vec<HookHash> {
+    hook_hashes
+        .iter()
+        .map(|sh| HookHash {
+            hook_type: sh.hook_type.clone(),
+            hash_algo: HashAlgorithm::from_id(sh.hash_algo).unwrap_or(HashAlgorithm::Blake3),
+            digest: sh.digest.clone(),
+        })
+        .collect()
+}
+
+/// Rebuilds the optional patch hash, defaulting unknown hash ids to Blake3.
+pub(crate) fn build_patch_hash(
+    patch_hash: Option<&(u8, Vec<u8>)>,
+) -> Option<(HashAlgorithm, Vec<u8>)> {
+    patch_hash.map(|(algo, digest)| {
+        (
+            HashAlgorithm::from_id(*algo).unwrap_or(HashAlgorithm::Blake3),
+            digest.clone(),
+        )
+    })
+}
+
 // File I/O functions
+///
+/// # Errors
+///
+/// Returns `Err` if input validation fails.
 pub fn write_lockfile(path: &Path, lockfile: &mut Lockfile) -> Result<(), Error> {
     fs::write(path, serialize(lockfile)?)?;
     Ok(())
 }
 
+///
+/// # Errors
+///
+/// Returns `Err` if input validation fails.
 pub fn read_lockfile(path: &Path) -> Result<Lockfile, Error> {
     deserialize(&fs::read_to_string(path)?)
 }
 
 // Validation functions
+///
+/// # Errors
+///
+/// Returns `Err` if `PhantomDependency` occurs.
 pub fn validate_hoist_boundary(lockfile: &Lockfile, cosine_name: &str) -> Result<(), Error> {
-    let boundary = lockfile.hoist_boundaries.iter().find(|b| b.cosine == cosine_name);
-    let Some(boundary) = boundary else { return Ok(()) };
-    let Some(cosine_pkg) = lockfile.packages.iter().find(|p| p.name == cosine_name) else { return Ok(()) };
+    let boundary = lockfile
+        .hoist_boundaries
+        .iter()
+        .find(|b| b.cosine == cosine_name);
+    let Some(boundary) = boundary else {
+        return Ok(());
+    };
+    let Some(cosine_pkg) = lockfile.packages.iter().find(|p| p.name == cosine_name) else {
+        return Ok(());
+    };
     for dep in &cosine_pkg.dependencies {
         if !boundary.allowed_deps.contains(&dep.name) {
-            return Err(Error::PhantomDependency { consumer: cosine_name.to_string(), dep: dep.name.clone() });
+            return Err(Error::PhantomDependency {
+                consumer: cosine_name.to_string(),
+                dep: dep.name.clone(),
+            });
         }
     }
     Ok(())
 }
 
+///
+/// # Errors
+///
+/// Returns `Err` if `OrphanPatchHash` occurs; `PatchFileMissing` occurs; or if the patch digest does not match.
 pub fn validate_patches(lockfile: &Lockfile, lockfile_dir: &std::path::Path) -> Result<(), Error> {
     for pd in &lockfile.patches {
         let pkg = lockfile.packages.iter().find(|p| {
@@ -371,46 +722,532 @@ pub fn validate_patches(lockfile: &Lockfile, lockfile_dir: &std::path::Path) -> 
         });
         let Some(pkg) = pkg else { continue };
         let Some((_algo, expected_digest)) = &pkg.patch_hash else {
-            return Err(Error::OrphanPatchHash { package: pkg.name.clone() });
+            return Err(Error::OrphanPatchHash {
+                package: pkg.name.clone(),
+            });
         };
         let patch_path = lockfile_dir.join(&pd.relative_path);
         let content = std::fs::read(&patch_path).map_err(|_| Error::PatchFileMissing {
-            package: pkg.name.clone(), content_id: pd.content_id, path: pd.relative_path.clone(),
+            package: pkg.name.clone(),
+            content_id: pd.content_id,
+            path: pd.relative_path.clone(),
         })?;
         let actual = blake3::hash(&content).as_bytes().to_vec();
         if &actual != expected_digest {
             return Err(Error::PatchDigestMismatch {
                 package: pkg.name.clone(),
-                expected: format!("{:?}", expected_digest),
-                actual: format!("{:?}", actual),
+                expected: format!("{expected_digest:?}"),
+                actual: format!("{actual:?}"),
             });
         }
     }
     Ok(())
 }
 
-pub fn validate_scripts(lockfile: &Lockfile, lockfile_dir: &std::path::Path) -> Result<Vec<String>, Error> {
+///
+/// # Errors
+///
+/// Returns `Err` if `ScriptDigestMismatch` occurs.
+pub fn validate_scripts(
+    lockfile: &Lockfile,
+    lockfile_dir: &std::path::Path,
+) -> Result<Vec<String>, Error> {
     for pkg in &lockfile.packages {
         let source_path = match &lockfile.sources.get(pkg.source_idx) {
             Some(Source::Local(p)) => std::path::Path::new(p),
             _ => continue,
         };
         let full_path = lockfile_dir.join(source_path).join("package.json");
-        let Ok(manifest_content) = std::fs::read_to_string(&full_path) else { continue };
+        let Ok(manifest_content) = std::fs::read_to_string(&full_path) else {
+            continue;
+        };
         for sh in &pkg.hook_hashes {
             let script_name = sh.hook_type.as_str();
-            if script_name.is_empty() { continue; }
-            let pattern = format!("\"{}\"", script_name);
+            if script_name.is_empty() {
+                continue;
+            }
+            let pattern = format!("\"{script_name}\"");
             let script_text = if let Some(idx) = manifest_content.find(&pattern) {
                 let rest = &manifest_content[idx + pattern.len()..];
                 let end = rest.find('"').unwrap_or(rest.len());
                 rest[..end].to_string()
-            } else { continue };
+            } else {
+                continue;
+            };
             let actual = blake3::hash(script_text.as_bytes()).as_bytes().to_vec();
             if actual != sh.digest {
-                return Err(Error::ScriptDigestMismatch { package: pkg.name.clone(), script: script_name.to_string() });
+                return Err(Error::ScriptDigestMismatch {
+                    package: pkg.name.clone(),
+                    script: script_name.to_string(),
+                });
             }
         }
     }
     Ok(Vec::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::{Advisory, AdvisorySeverity, LicenseEntry};
+    use std::path::PathBuf;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("hlock_lockfile_tests_{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn lockfile_with_packages() -> Lockfile {
+        Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            packages: vec![
+                Package {
+                    name: "alpha".to_string(),
+                    source_idx: 0,
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
+                    ..Package::default()
+                },
+                Package {
+                    name: "beta".to_string(),
+                    source_idx: 0,
+                    major: 2,
+                    minor: 3,
+                    patch: 4,
+                    ..Package::default()
+                },
+            ],
+            licenses: vec![LicenseEntry {
+                package: "alpha".to_string(),
+                expression: "MIT".to_string(),
+            }],
+            advisories: vec![Advisory {
+                package: "beta".to_string(),
+                advisory_id: "CVE-2024-1".to_string(),
+                severity: AdvisorySeverity::High,
+                url: "https://adv/1".to_string(),
+                affected_versions: "<2.3.5".to_string(),
+            }],
+            ..Lockfile::default()
+        }
+    }
+
+    #[test]
+    fn serialize_deserialize_round_trip_with_directives() {
+        let mut lf = lockfile_with_packages();
+        let serialized = serialize(&mut lf).unwrap();
+        assert!(serialized.contains("@digest "));
+        assert!(serialized.contains("@license alpha MIT"));
+        assert!(serialized.contains("@advisory beta CVE-2024-1 high https://adv/1 <2.3.5"));
+
+        let parsed = deserialize(&serialized).unwrap();
+        assert_eq!(parsed.packages.len(), 2);
+        assert_eq!(parsed.packages[1].name, "beta");
+        assert_eq!(
+            (
+                parsed.packages[1].major,
+                parsed.packages[1].minor,
+                parsed.packages[1].patch
+            ),
+            (2, 3, 4)
+        );
+        assert_eq!(parsed.licenses, lf.licenses);
+        assert_eq!(parsed.advisories, lf.advisories);
+        assert!(validate_digest(&serialized).is_ok());
+    }
+
+    #[test]
+    fn serialize_rejects_source_index_out_of_range() {
+        let mut lf = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            packages: vec![Package {
+                name: "p".to_string(),
+                source_idx: 5,
+                ..Package::default()
+            }],
+            ..Lockfile::default()
+        };
+        match serialize(&mut lf) {
+            Err(Error::MissingSource { index, .. }) => assert_eq!(index, 5),
+            other => panic!("expected MissingSource, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn serialize_rejects_workspace_package_with_hashes() {
+        let mut lf = Lockfile {
+            sources: vec![Source::Workspace],
+            packages: vec![Package {
+                name: "ws".to_string(),
+                source_idx: 0,
+                hashes: vec![IntegrityHash {
+                    algo: HashAlgorithm::Sha256,
+                    digest: vec![1],
+                    attestation: Attestation::None,
+                }],
+                ..Package::default()
+            }],
+            ..Lockfile::default()
+        };
+        match serialize(&mut lf) {
+            Err(Error::InvalidWorkspaceHash { .. }) => {}
+            other => panic!("expected InvalidWorkspaceHash, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn serialize_rejects_dependency_without_package() {
+        let mut lf = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            packages: vec![Package {
+                name: "app".to_string(),
+                source_idx: 0,
+                dependencies: vec![Dependency {
+                    name: "ghost".to_string(),
+                    dep_type: DepType::Runtime,
+                    requested_features: vec![],
+                }],
+                ..Package::default()
+            }],
+            ..Lockfile::default()
+        };
+        match serialize(&mut lf) {
+            Err(Error::MissingContentId { package, .. }) => assert_eq!(package, "app"),
+            other => panic!("expected MissingContentId, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_rejects_missing_tab_delimiter() {
+        match deserialize("@source 0 https://r/\n\nbadline\n") {
+            Err(Error::MissingDelimiter { line_number }) => assert!(line_number >= 1),
+            other => panic!("expected MissingDelimiter, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_rejects_invalid_base64() {
+        match deserialize("@source 0 https://r/\n\npkg\t!!!!\n") {
+            Err(Error::InvalidBase64 { .. }) => {}
+            other => panic!("expected InvalidBase64, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_rejects_payload_source_out_of_range() {
+        let mut lf = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            packages: vec![Package {
+                name: "p".to_string(),
+                source_idx: 0,
+                major: 1,
+                ..Package::default()
+            }],
+            ..Lockfile::default()
+        };
+        let mut good = serialize(&mut lf).unwrap();
+        // Swap the @source directive for a @mirror: the header still parses,
+        // but the payload now points at source index 0 of an empty source list.
+        good = good.replace("@source 0 https://r.com/\n", "@mirror m https://m/\n");
+        match deserialize(&good) {
+            Err(Error::MissingSource { index, .. }) => assert_eq!(index, 0),
+            other => panic!("expected MissingSource, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_rejects_bad_vex_status_and_advisory_severity() {
+        let mut lf = lockfile_with_packages();
+        let mut content = serialize(&mut lf).unwrap();
+        content = content.replace("@digest ", "@vex beta CVE-2024-1 maybe j i\n@digest ");
+        match deserialize(&content) {
+            Err(Error::InvalidVexStatus { status, .. }) => assert_eq!(status, "maybe"),
+            other => panic!("expected InvalidVexStatus, got {other:?}"),
+        }
+
+        let mut content = serialize(&mut lf).unwrap();
+        content = content.replace("@digest ", "@advisory beta CVE-2024-2 urgent u *\n@digest ");
+        match deserialize(&content) {
+            Err(Error::InvalidAdvisorySeverity { severity, .. }) => assert_eq!(severity, "urgent"),
+            other => panic!("expected InvalidAdvisorySeverity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_rejects_unknown_provenance_type_ids() {
+        let mut lf = lockfile_with_packages();
+        let mut content = serialize(&mut lf).unwrap();
+        content = content.replace("@digest ", "@provenance beta ^2 app 9 0 1\n@digest ");
+        match deserialize(&content) {
+            Err(Error::UnknownProvenanceDepType { type_id }) => assert_eq!(type_id, 9),
+            other => panic!("expected UnknownProvenanceDepType, got {other:?}"),
+        }
+
+        let mut content = serialize(&mut lf).unwrap();
+        content = content.replace("@digest ", "@provenance beta ^2 app 0 9 1\n@digest ");
+        match deserialize(&content) {
+            Err(Error::UnknownProvenanceSourceType { type_id }) => assert_eq!(type_id, 9),
+            other => panic!("expected UnknownProvenanceSourceType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deserialize_parses_artifact_patch_and_license_lines() {
+        let mut lf = lockfile_with_packages();
+        let mut content = serialize(&mut lf).unwrap();
+        let cid = crate::fnv::calculate("beta@2.3.4");
+        content = content.replace(
+            "@digest ",
+            &format!("@artifact {cid:016x} 01 02 bin/app\n@patch {cid:016x} 01 p.diff\n@digest "),
+        );
+        let parsed = deserialize(&content).unwrap();
+        assert_eq!(parsed.artifacts.len(), 1);
+        assert_eq!(parsed.artifacts[0].os_id, 1);
+        assert_eq!(parsed.artifacts[0].arch_id, 2);
+        assert_eq!(parsed.patches.len(), 1);
+        assert_eq!(parsed.patches[0].content_id, cid);
+    }
+
+    #[test]
+    fn deserialize_vex_and_provenance_round_trip() {
+        let mut lf = lockfile_with_packages();
+        lf.vex_entries = vec![crate::lockfile::VexEntry {
+            package: "beta".to_string(),
+            advisory_id: "CVE-2024-1".to_string(),
+            status: crate::lockfile::VexStatus::NotAffected,
+            justification: "code_not_present".to_string(),
+            impact_statement: "vulnerable path unused".to_string(),
+        }];
+        lf.provenance = vec![crate::provenance::ResolutionProvenance {
+            package_name: "beta".to_string(),
+            constraint: "^2.0.0".to_string(),
+            constrained_by: "app".to_string(),
+            dep_type: DepType::Dev,
+            source_type: crate::provenance::ProvenanceSourceType::Git,
+            depth: 2,
+        }];
+        let content = serialize(&mut lf).unwrap();
+        assert!(content.contains("@vex beta CVE-2024-1 not_affected"));
+        assert!(content.contains("@provenance beta ^2.0.0 app 1 2 2"));
+        let parsed = deserialize(&content).unwrap();
+        assert_eq!(parsed.vex_entries, lf.vex_entries);
+        assert_eq!(parsed.provenance, lf.provenance);
+    }
+
+    #[test]
+    fn deserialize_replaces_duplicate_provenance_entries() {
+        let mut lf = lockfile_with_packages();
+        let mut content = serialize(&mut lf).unwrap();
+        content = content.replace(
+            "@digest ",
+            "@provenance beta ^2 a 0 0 1\n@provenance beta ^3 b 1 0 2\n@digest ",
+        );
+        let parsed = deserialize(&content).unwrap();
+        assert_eq!(parsed.provenance.len(), 1);
+        assert_eq!(parsed.provenance[0].constraint, "^3");
+    }
+
+    #[test]
+    fn write_and_read_lockfile_round_trip() {
+        let dir = temp_dir("io");
+        let path = dir.join("out.hlock");
+        let mut lf = lockfile_with_packages();
+        write_lockfile(&path, &mut lf).unwrap();
+        let read_back = read_lockfile(&path).unwrap();
+        assert_eq!(read_back.packages.len(), 2);
+        assert_eq!(read_back.find_package("alpha").map(|p| p.major), Some(1));
+
+        let missing = read_lockfile(&dir.join("nope.hlock"));
+        assert!(matches!(missing, Err(Error::Io(_))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_hoist_boundary_flags_phantom_dependencies() {
+        let mut lf = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            packages: vec![
+                Package {
+                    name: "app".to_string(),
+                    source_idx: 0,
+                    dependencies: vec![
+                        Dependency {
+                            name: "allowed".to_string(),
+                            dep_type: DepType::Runtime,
+                            requested_features: vec![],
+                        },
+                        Dependency {
+                            name: "phantom".to_string(),
+                            dep_type: DepType::Runtime,
+                            requested_features: vec![],
+                        },
+                    ],
+                    ..Package::default()
+                },
+                Package {
+                    name: "allowed".to_string(),
+                    source_idx: 0,
+                    major: 1,
+                    ..Package::default()
+                },
+                Package {
+                    name: "phantom".to_string(),
+                    source_idx: 0,
+                    major: 1,
+                    ..Package::default()
+                },
+            ],
+            hoist_boundaries: vec![HoistBoundary {
+                cosine: "app".to_string(),
+                allowed_deps: vec!["allowed".to_string()],
+            }],
+            ..Lockfile::default()
+        };
+        assert!(validate_hoist_boundary(&lf, "unknown-cosine").is_ok());
+        assert!(validate_hoist_boundary(&lf, "app").is_err());
+        lf.hoist_boundaries[0]
+            .allowed_deps
+            .push("phantom".to_string());
+        assert!(validate_hoist_boundary(&lf, "app").is_ok());
+    }
+
+    #[test]
+    fn validate_patches_covers_all_branches() {
+        let dir = temp_dir("patches");
+        let mut lf = Lockfile {
+            sources: vec![Source::Registry("https://r.com/".to_string())],
+            packages: vec![Package {
+                name: "p".to_string(),
+                source_idx: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
+                ..Package::default()
+            }],
+            ..Lockfile::default()
+        };
+        let cid = crate::fnv::calculate("p@1.0.0");
+
+        // A patch directive whose content id matches no package is ignored.
+        lf.patches = vec![PatchDirective {
+            content_id: 42,
+            patch_type: 1,
+            relative_path: "x.diff".to_string(),
+        }];
+        assert!(validate_patches(&lf, &dir).is_ok());
+
+        // Matching package without a patch hash → orphan.
+        lf.patches = vec![PatchDirective {
+            content_id: cid,
+            patch_type: 1,
+            relative_path: "x.diff".to_string(),
+        }];
+        match validate_patches(&lf, &dir) {
+            Err(Error::OrphanPatchHash { package }) => assert_eq!(package, "p"),
+            other => panic!("expected OrphanPatchHash, got {other:?}"),
+        }
+
+        // With a patch hash but no file on disk → missing.
+        lf.packages[0].patch_hash = Some((HashAlgorithm::Blake3, vec![0u8; 32]));
+        match validate_patches(&lf, &dir) {
+            Err(Error::PatchFileMissing { package, path, .. }) => {
+                assert_eq!(package, "p");
+                assert_eq!(path, "x.diff");
+            }
+            other => panic!("expected PatchFileMissing, got {other:?}"),
+        }
+
+        // Wrong digest → mismatch.
+        std::fs::write(dir.join("x.diff"), b"actual content").unwrap();
+        match validate_patches(&lf, &dir) {
+            Err(Error::PatchDigestMismatch { package, .. }) => assert_eq!(package, "p"),
+            other => panic!("expected PatchDigestMismatch, got {other:?}"),
+        }
+
+        // Correct digest → ok.
+        let digest = blake3::hash(b"actual content").as_bytes().to_vec();
+        lf.packages[0].patch_hash = Some((HashAlgorithm::Blake3, digest));
+        assert!(validate_patches(&lf, &dir).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn validate_scripts_checks_local_package_json() {
+        let dir = temp_dir("scripts");
+        let pkg_dir = dir.join("vendor");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        // Current extraction takes the text between `"postinstall"` and the next
+        // double quote, i.e. `:` for compact JSON; the digest must match that.
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"scripts":{"postinstall":"echo hi"}}"#,
+        )
+        .unwrap();
+
+        let colon_digest = blake3::hash(b":").as_bytes().to_vec();
+        let lf = Lockfile {
+            sources: vec![
+                Source::Local("vendor".to_string()),
+                Source::Registry("https://r.com/".to_string()),
+            ],
+            packages: vec![
+                Package {
+                    name: "remote".to_string(),
+                    source_idx: 1,
+                    ..Package::default()
+                },
+                Package {
+                    name: "local-ok".to_string(),
+                    source_idx: 0,
+                    hook_hashes: vec![
+                        // Empty hook names are skipped before lookup.
+                        HookHash {
+                            hook_type: String::new(),
+                            hash_algo: HashAlgorithm::Blake3,
+                            digest: vec![],
+                        },
+                        // A hook missing from the manifest is skipped.
+                        HookHash {
+                            hook_type: "absent-hook".to_string(),
+                            hash_algo: HashAlgorithm::Blake3,
+                            digest: vec![],
+                        },
+                        // The postinstall hook digest matches the manifest text.
+                        HookHash {
+                            hook_type: "postinstall".to_string(),
+                            hash_algo: HashAlgorithm::Blake3,
+                            digest: colon_digest,
+                        },
+                    ],
+                    ..Package::default()
+                },
+            ],
+            ..Lockfile::default()
+        };
+        assert_eq!(validate_scripts(&lf, &dir).unwrap(), Vec::<String>::new());
+
+        // A mismatching digest is rejected.
+        let mut bad = lf.clone();
+        bad.packages[1].hook_hashes[2].digest = vec![1; 32];
+        match validate_scripts(&bad, &dir) {
+            Err(Error::ScriptDigestMismatch { package, script }) => {
+                assert_eq!(package, "local-ok");
+                assert_eq!(script, "postinstall");
+            }
+            other => panic!("expected ScriptDigestMismatch, got {other:?}"),
+        }
+
+        // A local source without a package.json is silently skipped.
+        let empty_dir = temp_dir("scripts_empty");
+        assert_eq!(
+            validate_scripts(&lf, &empty_dir).unwrap(),
+            Vec::<String>::new()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&empty_dir);
+    }
 }
