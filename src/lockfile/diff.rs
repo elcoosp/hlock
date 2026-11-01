@@ -1,7 +1,8 @@
 //! Lockfile diff functionality
 
-use super::types::{Package, PackageChange, LockfileDiff, DiffFormat};
+use super::types::{DiffFormat, LockfileDiff, Package, PackageChange};
 use owo_colors::OwoColorize;
+use std::fmt::Write as _;
 
 fn version_string(pkg: &Package) -> String {
     format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch)
@@ -10,32 +11,61 @@ fn version_string(pkg: &Package) -> String {
 fn serialize_diff_text(diff: &LockfileDiff) -> String {
     let mut out = String::new();
     out.push_str("LOCKFILE DIFF\n");
-    out.push_str(&format!("  unchanged: {} packages\n", diff.unchanged_count));
+    let _ = writeln!(out, "  unchanged: {} packages", diff.unchanged_count);
 
-    let added: Vec<&Package> = diff.changes.iter().filter_map(|c| match c {
-        PackageChange::Added(p) => Some(p),
-        _ => None,
-    }).collect();
-    let removed: Vec<&Package> = diff.changes.iter().filter_map(|c| match c {
-        PackageChange::Removed(p) => Some(p),
-        _ => None,
-    }).collect();
-    let altered: Vec<(&Package, &Package)> = diff.changes.iter().filter_map(|c| match c {
-        PackageChange::Altered(old, new) => Some((old, new)),
-        _ => None,
-    }).collect();
+    let added: Vec<&Package> = diff
+        .changes
+        .iter()
+        .filter_map(|c| match c {
+            PackageChange::Added(p) => Some(p.as_ref()),
+            _ => None,
+        })
+        .collect();
+    let removed: Vec<&Package> = diff
+        .changes
+        .iter()
+        .filter_map(|c| match c {
+            PackageChange::Removed(p) => Some(p.as_ref()),
+            _ => None,
+        })
+        .collect();
+    let altered: Vec<(&Package, &Package)> = diff
+        .changes
+        .iter()
+        .filter_map(|c| match c {
+            PackageChange::Altered(old, new) => Some((old.as_ref(), new.as_ref())),
+            _ => None,
+        })
+        .collect();
 
-    out.push_str(&format!("  added: {}\n", added.len()));
+    let _ = writeln!(out, "  added: {}", added.len());
     for p in &added {
-        out.push_str(&format!("    + {}@{}\n", p.name.green().bold(), version_string(p).cyan()));
+        let _ = writeln!(
+            out,
+            "    + {}@{}",
+            p.name.green().bold(),
+            version_string(p).cyan()
+        );
     }
-    out.push_str(&format!("  removed: {}\n", removed.len()));
+    let _ = writeln!(out, "  removed: {}", removed.len());
     for p in &removed {
-        out.push_str(&format!("    - {}@{}\n", p.name.red().bold(), version_string(p).cyan()));
+        let _ = writeln!(
+            out,
+            "    - {}@{}",
+            p.name.red().bold(),
+            version_string(p).cyan()
+        );
     }
-    out.push_str(&format!("  altered: {}\n", altered.len()));
+    let _ = writeln!(out, "  altered: {}", altered.len());
     for (old, new) in &altered {
-        out.push_str(&format!("    ~ {}@{} -> {}@{}\n", old.name.yellow().bold(), version_string(old).cyan(), new.name.yellow().bold(), version_string(new).cyan()));
+        let _ = writeln!(
+            out,
+            "    ~ {}@{} -> {}@{}",
+            old.name.yellow().bold(),
+            version_string(old).cyan(),
+            new.name.yellow().bold(),
+            version_string(new).cyan()
+        );
     }
     out
 }
@@ -71,11 +101,13 @@ fn serialize_diff_json(diff: &LockfileDiff) -> String {
     serde_json::to_string(&serde_json::json!({
         "unchanged_count": diff.unchanged_count,
         "changes": changes,
-    })).unwrap()
+    }))
+    .unwrap()
 }
 
-pub fn serialize_diff(diff: &LockfileDiff, format: DiffFormat) -> String {
-    match format {
+#[must_use]
+pub fn serialize_diff(diff: &LockfileDiff, format: &DiffFormat) -> String {
+    match *format {
         DiffFormat::Text => serialize_diff_text(diff),
         DiffFormat::Json => serialize_diff_json(diff),
     }
