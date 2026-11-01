@@ -6,22 +6,18 @@ use hlock::sbom::{SbomFormat, generate_sbom};
 fn test_sbom_spdx_includes_license() {
     let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
-        packages: vec![
-            hlock::lockfile::Package {
-                name: "licensed-pkg".to_string(),
-                source_idx: 0,
-                major: 1,
-                minor: 0,
-                patch: 0,
-                ..Default::default()
-            },
-        ],
-        licenses: vec![
-            LicenseEntry {
-                package: "licensed-pkg".to_string(),
-                expression: "MIT".to_string(),
-            },
-        ],
+        packages: vec![hlock::lockfile::Package {
+            name: "licensed-pkg".to_string(),
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            ..Default::default()
+        }],
+        licenses: vec![LicenseEntry {
+            package: "licensed-pkg".to_string(),
+            expression: "MIT".to_string(),
+        }],
         ..Lockfile::default()
     };
 
@@ -34,22 +30,18 @@ fn test_sbom_spdx_includes_license() {
 fn test_sbom_cyclonedx_includes_license() {
     let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
-        packages: vec![
-            hlock::lockfile::Package {
-                name: "licensed-pkg".to_string(),
-                source_idx: 0,
-                major: 1,
-                minor: 0,
-                patch: 0,
-                ..Default::default()
-            },
-        ],
-        licenses: vec![
-            LicenseEntry {
-                package: "licensed-pkg".to_string(),
-                expression: "MIT".to_string(),
-            },
-        ],
+        packages: vec![hlock::lockfile::Package {
+            name: "licensed-pkg".to_string(),
+            source_idx: 0,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            ..Default::default()
+        }],
+        licenses: vec![LicenseEntry {
+            package: "licensed-pkg".to_string(),
+            expression: "MIT".to_string(),
+        }],
         ..Lockfile::default()
     };
 
