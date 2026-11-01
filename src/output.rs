@@ -13,20 +13,12 @@ pub enum OutputFormat {
     Json,
 }
 
-#[allow(dead_code)]
 pub struct ColorConfig {
     when: ColorWhen,
     pub enabled: bool,
 }
 
 impl ColorConfig {
-    #[allow(dead_code)]
-    pub fn new(when: ColorWhen) -> Self {
-        let cfg = Self { when, enabled: true };
-        cfg.apply_override();
-        cfg
-    }
-
     pub fn from_cli_args(color_flag: &str, no_color: bool, format: OutputFormat) -> Self {
         let when = if no_color {
             ColorWhen::Never
@@ -52,7 +44,6 @@ impl ColorConfig {
         cfg
     }
 
-    #[allow(dead_code)]
     pub fn should_color(&self) -> bool {
         self.enabled
     }
@@ -73,21 +64,84 @@ pub fn parse_format(format: &str) -> OutputFormat {
     }
 }
 
+/// Text styles available for terminal output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Style {
+    Bold,
+    Cyan,
+    Green,
+    Yellow,
+    Red,
+    Blue,
+}
+
+/// Returns a styler closure applying `style` to text only when colors are on.
+///
+/// This is the single source of truth for conditional styling: every command
+/// renders plain text when colors are disabled instead of leaking ANSI codes
+/// into pipes and files.
+pub fn styler(on: bool, style: Style) -> impl Fn(&str) -> String {
+    move |s: &str| {
+        if on {
+            use owo_colors::OwoColorize as _;
+            match style {
+                Style::Bold => s.bold().to_string(),
+                Style::Cyan => s.cyan().to_string(),
+                Style::Green => s.green().to_string(),
+                Style::Yellow => s.yellow().to_string(),
+                Style::Red => s.red().to_string(),
+                Style::Blue => s.blue().to_string(),
+            }
+        } else {
+            s.to_string()
+        }
+    }
+}
+
 pub struct C<'a> {
     pub text: &'a str,
     pub on: bool,
 }
 
-impl<'a> C<'a> {
-    pub fn gb(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.green().bold().to_string() } else { self.text.to_string() } }
-    pub fn rb(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.red().bold().to_string() } else { self.text.to_string() } }
-    pub fn yb(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.yellow().bold().to_string() } else { self.text.to_string() } }
-    pub fn bl(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.blue().to_string() } else { self.text.to_string() } }
-    pub fn b(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.bold().to_string() } else { self.text.to_string() } }
-    #[allow(dead_code)]
-    pub fn g(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.green().to_string() } else { self.text.to_string() } }
-    #[allow(dead_code)]
-    pub fn y(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.yellow().to_string() } else { self.text.to_string() } }
-    #[allow(dead_code)]
-    pub fn r(&self) -> String { if self.on { use owo_colors::OwoColorize; self.text.red().to_string() } else { self.text.to_string() } }
+impl C<'_> {
+    pub fn gb(&self) -> String {
+        if self.on {
+            use owo_colors::OwoColorize;
+            self.text.green().bold().to_string()
+        } else {
+            self.text.to_string()
+        }
+    }
+    pub fn rb(&self) -> String {
+        if self.on {
+            use owo_colors::OwoColorize;
+            self.text.red().bold().to_string()
+        } else {
+            self.text.to_string()
+        }
+    }
+    pub fn yb(&self) -> String {
+        if self.on {
+            use owo_colors::OwoColorize;
+            self.text.yellow().bold().to_string()
+        } else {
+            self.text.to_string()
+        }
+    }
+    pub fn bl(&self) -> String {
+        if self.on {
+            use owo_colors::OwoColorize;
+            self.text.blue().to_string()
+        } else {
+            self.text.to_string()
+        }
+    }
+    pub fn b(&self) -> String {
+        if self.on {
+            use owo_colors::OwoColorize;
+            self.text.bold().to_string()
+        } else {
+            self.text.to_string()
+        }
+    }
 }
