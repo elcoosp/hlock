@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn hlock_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_hlock"))
@@ -15,21 +15,26 @@ fn write_temp_file(name: &str, content: &str) -> PathBuf {
 
 fn make_clean_lockfile() -> String {
     let mut lf = hlock::Lockfile {
-        sources: vec![hlock::Source::Registry("https://registry.npmjs.org/".to_string())],
-        packages: vec![
-            hlock::Package {
-                name: "lodash".to_string(),
-                source_idx: 0,
-                major: 4, minor: 17, patch: 21,
-                hashes: vec![hlock::IntegrityHash {
-                    algo: hlock::HashAlgorithm::Sha256,
-                    digest: vec![42u8; 32],
-                    attestation: hlock::Attestation::None,
-                }],
-                ..Default::default()
-            },
-        ],
-        licenses: vec![hlock::policy::LicenseEntry { package: "lodash".to_string(), expression: "MIT".to_string() }],
+        sources: vec![hlock::Source::Registry(
+            "https://registry.npmjs.org/".to_string(),
+        )],
+        packages: vec![hlock::Package {
+            name: "lodash".to_string(),
+            source_idx: 0,
+            major: 4,
+            minor: 17,
+            patch: 21,
+            hashes: vec![hlock::IntegrityHash {
+                algo: hlock::HashAlgorithm::Sha256,
+                digest: vec![42u8; 32],
+                attestation: hlock::Attestation::None,
+            }],
+            ..Default::default()
+        }],
+        licenses: vec![hlock::policy::LicenseEntry {
+            package: "lodash".to_string(),
+            expression: "MIT".to_string(),
+        }],
         trust_roots: vec![hlock::policy::TrustRoot {
             key_id: "ci@key".to_string(),
             algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
@@ -48,14 +53,14 @@ fn make_dirty_lockfile() -> String {
             hlock::Source::Registry("https://registry.npmjs.org/".to_string()),
             hlock::Source::Git("git+https://github.com/evil/pkg.git".to_string()),
         ],
-        packages: vec![
-            hlock::Package {
-                name: "evil".to_string(),
-                source_idx: 1,
-                major: 1, minor: 0, patch: 0,
-                ..Default::default()
-            },
-        ],
+        packages: vec![hlock::Package {
+            name: "evil".to_string(),
+            source_idx: 1,
+            major: 1,
+            minor: 0,
+            patch: 0,
+            ..Default::default()
+        }],
         advisories: vec![hlock::policy::Advisory {
             package: "evil".to_string(),
             advisory_id: "CVE-2024-0001".to_string(),
@@ -79,8 +84,14 @@ fn test_check_clean() {
         .expect("failed to run hlock");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "check on clean lockfile should succeed, stdout: {}, stderr: {}", stdout, stderr);
-    assert!(stdout.contains("digest") || stdout.contains("Digest"), "should mention digest, got: {}", stdout);
+    assert!(
+        output.status.success(),
+        "check on clean lockfile should succeed, stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("digest") || stdout.contains("Digest"),
+        "should mention digest, got: {stdout}"
+    );
 }
 
 #[test]
@@ -92,7 +103,10 @@ fn test_check_dirty() {
         .arg(&path)
         .output()
         .expect("failed to run hlock");
-    assert!(!output.status.success(), "check on dirty lockfile should fail");
+    assert!(
+        !output.status.success(),
+        "check on dirty lockfile should fail"
+    );
 }
 
 #[test]
@@ -107,13 +121,31 @@ fn test_check_json() {
         .output()
         .expect("failed to run hlock");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(output.status.success(), "check --format json should succeed on clean lockfile, stderr: {}", String::from_utf8_lossy(&output.stderr));
-    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect(&format!("should be valid JSON, got: {}", stdout));
-    assert!(parsed["digest_valid"].is_boolean(), "should have digest_valid boolean");
+    assert!(
+        output.status.success(),
+        "check --format json should succeed on clean lockfile, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|_| panic!("should be valid JSON, got: {stdout}"));
+    assert!(
+        parsed["digest_valid"].is_boolean(),
+        "should have digest_valid boolean"
+    );
     assert!(parsed["passed"].is_boolean(), "should have passed boolean");
-    assert_eq!(parsed["passed"].as_bool(), Some(true), "passed should be true");
-    assert!(parsed["signature"].is_object(), "should have signature object");
-    assert!(parsed["trust_chain_valid"].is_boolean(), "should have trust_chain_valid boolean");
+    assert_eq!(
+        parsed["passed"].as_bool(),
+        Some(true),
+        "passed should be true"
+    );
+    assert!(
+        parsed["signature"].is_object(),
+        "should have signature object"
+    );
+    assert!(
+        parsed["trust_chain_valid"].is_boolean(),
+        "should have trust_chain_valid boolean"
+    );
     assert!(parsed["lint"].is_object(), "should have lint object");
     assert!(parsed["audit"].is_object(), "should have audit object");
 }
