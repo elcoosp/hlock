@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn hlock_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_hlock"))
@@ -15,7 +15,9 @@ fn write_temp_file(name: &str, content: &str) -> PathBuf {
 
 fn make_simple_lockfile() -> String {
     let lf = hlock::Lockfile {
-        sources: vec![hlock::Source::Registry("https://registry.npmjs.org/".to_string())],
+        sources: vec![hlock::Source::Registry(
+            "https://registry.npmjs.org/".to_string(),
+        )],
         ..Default::default()
     };
     hlock::serialize(&mut lf.clone()).unwrap()
@@ -32,8 +34,17 @@ fn test_cli_verify_valid() {
         .expect("failed to run hlock");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "expected exit 0, got {}\nstdout: {}\nstderr: {}", output.status, stdout, stderr);
-    assert!(stdout.contains("digest valid"), "stdout should mention digest valid");
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {}\nstdout: {}\nstderr: {}",
+        output.status,
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains("digest valid"),
+        "stdout should mention digest valid"
+    );
 }
 
 #[test]
@@ -46,15 +57,23 @@ fn test_cli_verify_tampered() {
         .arg(&path)
         .output()
         .expect("failed to run hlock");
-    assert!(!output.status.success(), "expected non-zero exit for tampered lockfile");
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit for tampered lockfile"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("digest") || stderr.contains("DigestMismatch"), "stderr should mention digest failure");
+    assert!(
+        stderr.contains("digest") || stderr.contains("DigestMismatch"),
+        "stderr should mention digest failure"
+    );
 }
 
 #[test]
 fn test_cli_lint_errors() {
     let lf = hlock::Lockfile {
-        sources: vec![hlock::Source::Git("git+https://github.com/pkg.git".to_string())],
+        sources: vec![hlock::Source::Git(
+            "git+https://github.com/pkg.git".to_string(),
+        )],
         packages: vec![hlock::Package {
             name: "pkg-git".to_string(),
             source_idx: 0,
@@ -70,16 +89,24 @@ fn test_cli_lint_errors() {
         .arg(&path)
         .output()
         .expect("failed to run hlock");
-    assert!(!output.status.success(), "expected non-zero exit for lint errors");
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit for lint errors"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("no-git-urls") || stdout.contains("ERROR"), "stdout should report lint errors");
+    assert!(
+        stdout.contains("no-git-urls") || stdout.contains("ERROR"),
+        "stdout should report lint errors"
+    );
 }
 
 #[test]
 fn test_cli_diff_text() {
     let s1 = make_simple_lockfile();
     let lf2 = hlock::Lockfile {
-        sources: vec![hlock::Source::Registry("https://registry.npmjs.org/".to_string())],
+        sources: vec![hlock::Source::Registry(
+            "https://registry.npmjs.org/".to_string(),
+        )],
         packages: vec![hlock::Package {
             name: "added-pkg".to_string(),
             source_idx: 0,
@@ -101,7 +128,10 @@ fn test_cli_diff_text() {
         .expect("failed to run hlock");
     assert!(output.status.success(), "expected exit 0 for diff");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("LOCKFILE DIFF"), "stdout should contain LOCKFILE DIFF header");
+    assert!(
+        stdout.contains("LOCKFILE DIFF"),
+        "stdout should contain LOCKFILE DIFF header"
+    );
 }
 
 #[test]
@@ -126,9 +156,15 @@ fn test_cli_lint_rule_unknown() {
         .arg("--rule=nonexistent-rule")
         .output()
         .expect("failed to run hlock");
-    assert!(!output.status.success(), "unknown rule should cause error exit");
+    assert!(
+        !output.status.success(),
+        "unknown rule should cause error exit"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unknown rule"), "stderr should mention unknown rule, got: {}", stderr);
+    assert!(
+        stderr.contains("unknown rule"),
+        "stderr should mention unknown rule, got: {stderr}"
+    );
 }
 
 #[test]
@@ -142,7 +178,10 @@ fn test_cli_sbom_spdx() {
         .arg("test-namespace")
         .output()
         .expect("failed to run hlock");
-    assert!(output.status.success(), "expected exit 0 for sbom generation");
+    assert!(
+        output.status.success(),
+        "expected exit 0 for sbom generation"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("SPDX"), "stdout should contain SPDX");
     let parsed: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
