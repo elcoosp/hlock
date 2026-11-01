@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn hlock_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_hlock"))
@@ -15,21 +15,26 @@ fn write_temp_file(name: &str, content: &str) -> PathBuf {
 
 fn make_simple_lockfile() -> String {
     let mut lf = hlock::Lockfile {
-        sources: vec![hlock::Source::Registry("https://registry.npmjs.org/".to_string())],
-        packages: vec![
-            hlock::Package {
-                name: "lodash".to_string(),
-                source_idx: 0,
-                major: 4, minor: 17, patch: 21,
-                hashes: vec![hlock::IntegrityHash {
-                    algo: hlock::HashAlgorithm::Sha256,
-                    digest: vec![42u8; 32],
-                    attestation: hlock::Attestation::None,
-                }],
-                ..Default::default()
-            },
-        ],
-        licenses: vec![hlock::policy::LicenseEntry { package: "lodash".to_string(), expression: "MIT".to_string() }],
+        sources: vec![hlock::Source::Registry(
+            "https://registry.npmjs.org/".to_string(),
+        )],
+        packages: vec![hlock::Package {
+            name: "lodash".to_string(),
+            source_idx: 0,
+            major: 4,
+            minor: 17,
+            patch: 21,
+            hashes: vec![hlock::IntegrityHash {
+                algo: hlock::HashAlgorithm::Sha256,
+                digest: vec![42u8; 32],
+                attestation: hlock::Attestation::None,
+            }],
+            ..Default::default()
+        }],
+        licenses: vec![hlock::policy::LicenseEntry {
+            package: "lodash".to_string(),
+            expression: "MIT".to_string(),
+        }],
         trust_roots: vec![hlock::policy::TrustRoot {
             key_id: "ci@key".to_string(),
             algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
@@ -74,7 +79,11 @@ fn test_color_never_no_ansi() {
         .output()
         .expect("failed to run hlock");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains("\x1b["), "should have no ANSI escapes with --color never, got: {:?}", stdout.chars().take(200).collect::<String>());
+    assert!(
+        !stdout.contains("\x1b["),
+        "should have no ANSI escapes with --color never, got: {:?}",
+        stdout.chars().take(200).collect::<String>()
+    );
 }
 
 #[test]
@@ -88,7 +97,11 @@ fn test_color_always_has_ansi() {
         .output()
         .expect("failed to run hlock");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\x1b["), "should have ANSI escapes with --color always, got: {:?}", stdout.chars().take(200).collect::<String>());
+    assert!(
+        stdout.contains("\x1b["),
+        "should have ANSI escapes with --color always, got: {:?}",
+        stdout.chars().take(200).collect::<String>()
+    );
 }
 
 #[test]
@@ -103,7 +116,11 @@ fn test_json_no_ansi_even_with_color_always() {
         .output()
         .expect("failed to run hlock");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains("\x1b["), "JSON output should never have ANSI escapes, got: {:?}", stdout.chars().take(200).collect::<String>());
+    assert!(
+        !stdout.contains("\x1b["),
+        "JSON output should never have ANSI escapes, got: {:?}",
+        stdout.chars().take(200).collect::<String>()
+    );
 }
 
 #[test]
@@ -117,7 +134,11 @@ fn test_verify_color_never() {
         .output()
         .expect("failed to run hlock");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.contains("\x1b["), "verify with --color never should have no ANSI, got: {:?}", stdout.chars().take(200).collect::<String>());
+    assert!(
+        !stdout.contains("\x1b["),
+        "verify with --color never should have no ANSI, got: {:?}",
+        stdout.chars().take(200).collect::<String>()
+    );
 }
 
 #[test]
@@ -131,6 +152,12 @@ fn test_info_never_still_has_content() {
         .output()
         .expect("failed to run hlock");
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("Packages:"), "should contain Packages header even without color, got: {}", stdout);
-    assert!(stdout.contains("Sources:"), "should contain Sources header, got: {}", stdout);
+    assert!(
+        stdout.contains("Packages:"),
+        "should contain Packages header even without color, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("Sources:"),
+        "should contain Sources header, got: {stdout}"
+    );
 }
