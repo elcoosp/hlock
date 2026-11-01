@@ -8,9 +8,9 @@
     <img src="https://img.shields.io/badge/Rust-1.94%20%7C%202024-000000?style=flat-square&logo=rust" alt="Rust"/>
     <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License MIT"/>
     <img src="https://img.shields.io/badge/Ecosystem-npm-CC3534?style=flat-square&logo=npm" alt="npm"/>
-    <img src="https://img.shields.io/badge/Crypto-BLAKE3%20%2B%20Ed25519-FFA500?style=flat-square" alt="Cryptography"/>
+    <img src="https://img.shields.io/badge/Crypto-BLAKE3%20%2B%20Ed25519%20%2B%20ML--DSA--65-FFA500?style=flat-square" alt="Cryptography"/>
     <img src="https://img.shields.io/badge/Supply%20Chain-SBOM%20%2B%20VEX-4B32C3?style=flat-square" alt="Supply Chain"/>
-    <img src="https://img.shields.io/badge/Build-Passing-brightgreen?style=flat-square&logo=githubactions" alt="Build"/>
+    <img src="https://img.shields.io/badge/Clippy-pedantic--clean-brightgreen?style=flat-square&logo=rust" alt="Clippy"/>
   </p>
 </div>
 
@@ -25,7 +25,7 @@ Add `hlock` to your Rust project:
 
 ```toml
 [dependencies]
-hlock = "0.16"
+hlock = "0.19"
 ```
 
 ## CLI Usage
@@ -40,8 +40,12 @@ The `hlock` CLI provides a comprehensive suite of commands for managing and veri
 | **`audit`** | Audit for vulnerabilities. | `hlock audit lockfile.hlock --format json` |
 | **`sbom`** | Generate a Software Bill of Materials. | `hlock sbom lockfile.hlock --namespace my-app --format spdx-json` |
 | **`sign`** | Cryptographically sign a lockfile. | `hlock sign lockfile.hlock --key-id ci@company.com --algorithm ed25519 --private-key @/path/to/key --expires 1800000000 --in-place` |
-| **`graph`** | Extract a dependency subgraph. | `hlock graph lockfile.hlock --root my-app --platform linux-x86_64 --output subgraph.hlock` |
+| **`graph`** | Extract a dependency subgraph or export Graphviz DOT. | `hlock graph lockfile.hlock --root my-app --platform linux-x86_64 --output subgraph.hlock` |
 | **`merge`** | Merge lockfile branches. | `hlock merge --base base.hlock --ours ours.hlock --theirs theirs.hlock --strategy ours --output merged.hlock` |
+| **`keygen`** | Generate Ed25519 / ML-DSA-65 signing keypairs. | `hlock keygen --algorithm ml-dsa-65 --key-id ci@company.com --expires 1800000000 --output private.key` |
+| **`stats`** | One-shot lockfile metrics (kinds, dupes, chains, licenses). | `hlock stats lockfile.hlock --format json` |
+| **`digest`** | Print or verify the whole-lockfile digest. | `hlock digest lockfile.hlock --check` |
+| **`policy-test`** | Dry-run `@policy` directives against a package. | `hlock policy-test lockfile.hlock --package lodash --hook postinstall` |
 
 ## Lockfile Format
 
@@ -55,8 +59,8 @@ A `hlock` lockfile is a line-oriented text format consisting of a header section
 @policy deny-hook * postinstall
 @policy allow-hook lodash postinstall
 
-lodash	CAQA...
-react	CAQA...
+lodash  CAQA...
+react   CAQA...
 @provenance lodash ^4.17.0 app 0 0 1
 @advisory lodash GHSA-jf85-cq4p-4qr8 high https://github.com/... <4.17.21
 @vex lodash CVE-2024-12345 not_affected vulnerable_code_not_in_execute_path not_applicable
@@ -140,6 +144,11 @@ cargo build --release
 ```sh
 cargo nextest run --workspace
 cargo clippy --workspace --tests -- -D warnings
+```
+
+### Coverage
+```sh
+cargo llvm-cov --workspace --lcov --output-path lcov.info
 ```
 
 ### Fuzzing
