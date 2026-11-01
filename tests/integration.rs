@@ -3,7 +3,6 @@ use hlock::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-
 fn strip_ansi(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -180,19 +179,19 @@ fn test_string_api_crc_corruption() {
         }],
     };
     let serialized = serialize(&mut lockfile).unwrap();
-    let without_digest: String = serialized
-        .lines()
-        .filter(|l| !l.starts_with("@digest "))
-        .map(|l| format!("{}\n", l))
-        .collect();
+    let mut without_digest = String::new();
+    for l in serialized.lines().filter(|l| !l.starts_with("@digest ")) {
+        without_digest.push_str(l);
+        without_digest.push('\n');
+    }
     let mut tampered = without_digest.chars().collect::<Vec<_>>();
     if let Some(tab_pos) = without_digest.find('\t') {
         let idx = tab_pos + 1;
         if idx < tampered.len() {
-            if tampered[idx] != 'A' {
-                tampered[idx] = 'A';
-            } else {
+            if tampered[idx] == 'A' {
                 tampered[idx] = 'B';
+            } else {
+                tampered[idx] = 'A';
             }
         }
     }
@@ -853,7 +852,7 @@ fn test_e2e_v9_peer_requirements_roundtrip() {
                     },
                     PeerRequirement {
                         peer_name: "react-native".to_string(),
-                        version_range: "".to_string(),
+                        version_range: String::new(),
                         is_optional: true,
                     },
                 ],
@@ -1084,9 +1083,89 @@ fn test_e2e_signed_lockfile_deserializes_correctly() {
     assert_eq!(deserialized.packages[1].name, "beta");
 }
 
-#[test]
-fn test_e2e_platform_extraction_with_real_lockfile() {
-    let lockfile = Lockfile {
+/// The `app` root package depending on `esbuild` and `lodash`.
+fn platform_app_package() -> Package {
+    Package {
+        name: "app".to_string(),
+        logical_name: None,
+        source_idx: 0,
+        major: 1,
+        minor: 0,
+        patch: 0,
+        dependencies: vec![
+            Dependency {
+                name: "esbuild".to_string(),
+                dep_type: DepType::Runtime,
+                requested_features: vec![],
+            },
+            Dependency {
+                name: "lodash".to_string(),
+                dep_type: DepType::Runtime,
+                requested_features: vec![],
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+/// The `esbuild` meta-package depending on its two platform binaries.
+fn platform_esbuild_package() -> Package {
+    Package {
+        name: "esbuild".to_string(),
+        logical_name: None,
+        source_idx: 0,
+        major: 0,
+        minor: 17,
+        patch: 0,
+        dependencies: vec![
+            Dependency {
+                name: "esbuild-darwin-arm64".to_string(),
+                dep_type: DepType::Runtime,
+                requested_features: vec![],
+            },
+            Dependency {
+                name: "esbuild-linux-x64".to_string(),
+                dep_type: DepType::Runtime,
+                requested_features: vec![],
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+/// A platform-specific esbuild binary package tagged for `os`/`arch`.
+fn platform_native_package(name: &str, os: TargetOS, arch: TargetArch) -> Package {
+    Package {
+        name: name.to_string(),
+        logical_name: None,
+        source_idx: 0,
+        major: 0,
+        minor: 17,
+        patch: 0,
+        platform_tags: vec![PlatformTag { os, arch }],
+        dependencies: vec![],
+        ..Default::default()
+    }
+}
+
+/// The platform-independent `lodash` package.
+fn platform_lodash_package() -> Package {
+    Package {
+        name: "lodash".to_string(),
+        logical_name: None,
+        source_idx: 0,
+        major: 4,
+        minor: 17,
+        patch: 21,
+        platform_tags: vec![],
+        dependencies: vec![],
+        ..Default::default()
+    }
+}
+
+/// Builds the esbuild-style lockfile used by the platform extraction tests.
+fn platform_extraction_lockfile() -> Lockfile {
+    Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -1106,89 +1185,18 @@ fn test_e2e_platform_extraction_with_real_lockfile() {
         compat: None,
         artifacts: vec![],
         packages: vec![
-            Package {
-                name: "app".to_string(),
-                logical_name: None,
-                source_idx: 0,
-                major: 1,
-                minor: 0,
-                patch: 0,
-                dependencies: vec![
-                    Dependency {
-                        name: "esbuild".to_string(),
-                        dep_type: DepType::Runtime,
-                        requested_features: vec![],
-                    },
-                    Dependency {
-                        name: "lodash".to_string(),
-                        dep_type: DepType::Runtime,
-                        requested_features: vec![],
-                    },
-                ],
-                ..Default::default()
-            },
-            Package {
-                name: "esbuild".to_string(),
-                logical_name: None,
-                source_idx: 0,
-                major: 0,
-                minor: 17,
-                patch: 0,
-                dependencies: vec![
-                    Dependency {
-                        name: "esbuild-darwin-arm64".to_string(),
-                        dep_type: DepType::Runtime,
-                        requested_features: vec![],
-                    },
-                    Dependency {
-                        name: "esbuild-linux-x64".to_string(),
-                        dep_type: DepType::Runtime,
-                        requested_features: vec![],
-                    },
-                ],
-                ..Default::default()
-            },
-            Package {
-                name: "esbuild-darwin-arm64".to_string(),
-                logical_name: None,
-                source_idx: 0,
-                major: 0,
-                minor: 17,
-                patch: 0,
-                platform_tags: vec![PlatformTag {
-                    os: TargetOS::MacOS,
-                    arch: TargetArch::Aarch64,
-                }],
-                dependencies: vec![],
-                ..Default::default()
-            },
-            Package {
-                name: "esbuild-linux-x64".to_string(),
-                logical_name: None,
-                source_idx: 0,
-                major: 0,
-                minor: 17,
-                patch: 0,
-                platform_tags: vec![PlatformTag {
-                    os: TargetOS::Linux,
-                    arch: TargetArch::X86_64,
-                }],
-                dependencies: vec![],
-                ..Default::default()
-            },
-            Package {
-                name: "lodash".to_string(),
-                logical_name: None,
-                source_idx: 0,
-                major: 4,
-                minor: 17,
-                patch: 21,
-                platform_tags: vec![],
-                dependencies: vec![],
-                ..Default::default()
-            },
+            platform_app_package(),
+            platform_esbuild_package(),
+            platform_native_package("esbuild-darwin-arm64", TargetOS::MacOS, TargetArch::Aarch64),
+            platform_native_package("esbuild-linux-x64", TargetOS::Linux, TargetArch::X86_64),
+            platform_lodash_package(),
         ],
-    };
+    }
+}
+
+#[test]
+fn test_e2e_platform_extraction_macos() {
+    let lockfile = platform_extraction_lockfile();
     let app_cid = fnv::calculate("app@1.0.0");
 
     let mac_res =
@@ -1198,14 +1206,19 @@ fn test_e2e_platform_extraction_with_real_lockfile() {
     assert_eq!(
         mac_res.packages.len(),
         4,
-        "mac should have 4 packages: {:?}",
-        mac_names
+        "mac should have 4 packages: {mac_names:?}"
     );
     assert!(mac_names.contains("app"));
     assert!(mac_names.contains("esbuild"));
     assert!(mac_names.contains("esbuild-darwin-arm64"));
     assert!(mac_names.contains("lodash"));
     assert!(!mac_names.contains("esbuild-linux-x64"));
+}
+
+#[test]
+fn test_e2e_platform_extraction_linux() {
+    let lockfile = platform_extraction_lockfile();
+    let app_cid = fnv::calculate("app@1.0.0");
 
     let linux_res =
         extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64)
@@ -1214,14 +1227,19 @@ fn test_e2e_platform_extraction_with_real_lockfile() {
     assert_eq!(
         linux_res.packages.len(),
         4,
-        "linux should have 4 packages: {:?}",
-        linux_names
+        "linux should have 4 packages: {linux_names:?}"
     );
     assert!(linux_names.contains("app"));
     assert!(linux_names.contains("esbuild"));
     assert!(linux_names.contains("esbuild-linux-x64"));
     assert!(linux_names.contains("lodash"));
     assert!(!linux_names.contains("esbuild-darwin-arm64"));
+}
+
+#[test]
+fn test_e2e_platform_extraction_windows() {
+    let lockfile = platform_extraction_lockfile();
+    let app_cid = fnv::calculate("app@1.0.0");
 
     let win_res =
         extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Windows, TargetArch::X86_64)
@@ -1230,8 +1248,7 @@ fn test_e2e_platform_extraction_with_real_lockfile() {
     assert_eq!(
         win_res.packages.len(),
         3,
-        "windows should have 3 packages (no native esbuild): {:?}",
-        win_names
+        "windows should have 3 packages (no native esbuild): {win_names:?}"
     );
     assert!(win_names.contains("app"));
     assert!(win_names.contains("esbuild"));
@@ -1313,7 +1330,7 @@ fn test_e2e_merge_no_conflicts() {
     let result =
         hlock::merge_lockfiles(&parsed_base, &ours, &theirs, hlock::ConflictStrategy::Fail)
             .unwrap();
-    assert!(result.conflicts.is_empty());
+    assert_eq!(result.conflicts, [] as [hlock::MergeConflict; 0]);
     assert_eq!(result.lockfile.packages.len(), 3);
     let names: Vec<&str> = result
         .lockfile
@@ -1767,10 +1784,22 @@ fn test_e2e_diff_serialization_text() {
     };
 
     let diff = diff_lockfiles(&parsed_v1, &v2);
-    let text = serialize_diff(&diff, DiffFormat::Text);
-    assert!(strip_ansi(&text).contains("LOCKFILE DIFF"), "should contain LOCKFILE DIFF, got: {}", strip_ansi(&text));
-    assert!(strip_ansi(&text).contains("+ utils@1.0.0"), "should contain + utils@1.0.0, got: {}", strip_ansi(&text));
-    assert!(strip_ansi(&text).contains("~ core@1.0.0 -> core@2.0.0"), "should contain altered, got: {}", strip_ansi(&text));
+    let text = serialize_diff(&diff, &DiffFormat::Text);
+    assert!(
+        strip_ansi(&text).contains("LOCKFILE DIFF"),
+        "should contain LOCKFILE DIFF, got: {}",
+        strip_ansi(&text)
+    );
+    assert!(
+        strip_ansi(&text).contains("+ utils@1.0.0"),
+        "should contain + utils@1.0.0, got: {}",
+        strip_ansi(&text)
+    );
+    assert!(
+        strip_ansi(&text).contains("~ core@1.0.0 -> core@2.0.0"),
+        "should contain altered, got: {}",
+        strip_ansi(&text)
+    );
 }
 
 #[test]
@@ -1849,7 +1878,7 @@ fn test_e2e_diff_serialization_json() {
     };
 
     let diff = diff_lockfiles(&parsed_v1, &v2);
-    let json_str = serialize_diff(&diff, DiffFormat::Json);
+    let json_str = serialize_diff(&diff, &DiffFormat::Json);
     let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     assert_eq!(parsed["changes"].as_array().unwrap().len(), 2);
 }
@@ -2047,7 +2076,7 @@ fn test_e2e_typed_graph_queries() {
     assert!(rt_deps.contains(&"jest".to_string()));
 
     let dd_deps = dev_dependents_of(&lockfile, "lodash");
-    assert!(dd_deps.is_empty());
+    assert_eq!(dd_deps, [] as [std::string::String; 0]);
 
     assert!(has_dep_path(&lockfile, "app", "lodash", DepType::Runtime));
     assert!(!has_dep_path(&lockfile, "app", "jest", DepType::Runtime));
@@ -2098,7 +2127,10 @@ fn test_digest_covers_licenses() {
     let serialized = serialize(&mut lockfile).unwrap();
     assert!(validate_digest(&serialized).is_ok());
     let tampered = serialized.replace("MIT", "GPL");
-    assert!(matches!(validate_digest(&tampered), Err(Error::DigestMismatch { .. })));
+    assert!(matches!(
+        validate_digest(&tampered),
+        Err(Error::DigestMismatch { .. })
+    ));
 }
 
 #[test]
@@ -2129,15 +2161,13 @@ fn test_vex_roundtrip() {
         trust_roots: vec![],
         mirrors: vec![],
         root_rotations: vec![],
-        vex_entries: vec![
-            hlock::VexEntry {
-                package: "lodash".to_string(),
-                advisory_id: "CVE-2024-12345".to_string(),
-                status: hlock::VexStatus::NotAffected,
-                justification: "vulnerable_code_not_in_execute_path".to_string(),
-                impact_statement: "not_applicable".to_string(),
-            },
-        ],
+        vex_entries: vec![hlock::VexEntry {
+            package: "lodash".to_string(),
+            advisory_id: "CVE-2024-12345".to_string(),
+            status: hlock::VexStatus::NotAffected,
+            justification: "vulnerable_code_not_in_execute_path".to_string(),
+            impact_statement: "not_applicable".to_string(),
+        }],
         compat: None,
     };
     let serialized = serialize(&mut lockfile).unwrap();
@@ -2145,7 +2175,10 @@ fn test_vex_roundtrip() {
     assert_eq!(deserialized.vex_entries.len(), 1);
     assert_eq!(deserialized.vex_entries[0].package, "lodash");
     assert_eq!(deserialized.vex_entries[0].advisory_id, "CVE-2024-12345");
-    assert_eq!(deserialized.vex_entries[0].status, hlock::VexStatus::NotAffected);
+    assert_eq!(
+        deserialized.vex_entries[0].status,
+        hlock::VexStatus::NotAffected
+    );
 }
 
 #[test]
@@ -2162,33 +2195,29 @@ fn test_effective_advisories_filters_not_affected() {
         artifacts: vec![],
         patches: vec![],
         provenance: vec![],
-        advisories: vec![
-            hlock::policy::Advisory {
-                package: "lodash".to_string(),
-                advisory_id: "CVE-2024-1".to_string(),
-                severity: hlock::policy::AdvisorySeverity::High,
-                url: "".to_string(),
-                affected_versions: "*".to_string(),
-            },
-        ],
+        advisories: vec![hlock::policy::Advisory {
+            package: "lodash".to_string(),
+            advisory_id: "CVE-2024-1".to_string(),
+            severity: hlock::policy::AdvisorySeverity::High,
+            url: String::new(),
+            affected_versions: "*".to_string(),
+        }],
         licenses: vec![],
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
         root_rotations: vec![],
-        vex_entries: vec![
-            hlock::VexEntry {
-                package: "lodash".to_string(),
-                advisory_id: "CVE-2024-1".to_string(),
-                status: hlock::VexStatus::NotAffected,
-                justification: "code_not_present".to_string(),
-                impact_statement: "not_applicable".to_string(),
-            },
-        ],
+        vex_entries: vec![hlock::VexEntry {
+            package: "lodash".to_string(),
+            advisory_id: "CVE-2024-1".to_string(),
+            status: hlock::VexStatus::NotAffected,
+            justification: "code_not_present".to_string(),
+            impact_statement: "not_applicable".to_string(),
+        }],
         compat: None,
     };
     let report = lockfile.effective_advisories();
-    assert!(report.high.is_empty());
+    assert_eq!(report.high, [] as [hlock::Advisory; 0]);
 }
 
 #[test]
@@ -2205,33 +2234,29 @@ fn test_effective_advisories_filters_fixed() {
         artifacts: vec![],
         patches: vec![],
         provenance: vec![],
-        advisories: vec![
-            hlock::policy::Advisory {
-                package: "lodash".to_string(),
-                advisory_id: "CVE-2024-2".to_string(),
-                severity: hlock::policy::AdvisorySeverity::Critical,
-                url: "".to_string(),
-                affected_versions: "<4.17.21".to_string(),
-            },
-        ],
+        advisories: vec![hlock::policy::Advisory {
+            package: "lodash".to_string(),
+            advisory_id: "CVE-2024-2".to_string(),
+            severity: hlock::policy::AdvisorySeverity::Critical,
+            url: String::new(),
+            affected_versions: "<4.17.21".to_string(),
+        }],
         licenses: vec![],
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
         root_rotations: vec![],
-        vex_entries: vec![
-            hlock::VexEntry {
-                package: "lodash".to_string(),
-                advisory_id: "CVE-2024-2".to_string(),
-                status: hlock::VexStatus::Fixed,
-                justification: "patch_applied".to_string(),
-                impact_statement: "resolved".to_string(),
-            },
-        ],
+        vex_entries: vec![hlock::VexEntry {
+            package: "lodash".to_string(),
+            advisory_id: "CVE-2024-2".to_string(),
+            status: hlock::VexStatus::Fixed,
+            justification: "patch_applied".to_string(),
+            impact_statement: "resolved".to_string(),
+        }],
         compat: None,
     };
     let report = lockfile.effective_advisories();
-    assert!(report.critical.is_empty());
+    assert_eq!(report.critical, [] as [hlock::Advisory; 0]);
 }
 
 #[test]
@@ -2248,29 +2273,25 @@ fn test_effective_advisories_includes_affected() {
         artifacts: vec![],
         patches: vec![],
         provenance: vec![],
-        advisories: vec![
-            hlock::policy::Advisory {
-                package: "lodash".to_string(),
-                advisory_id: "CVE-2024-3".to_string(),
-                severity: hlock::policy::AdvisorySeverity::Medium,
-                url: "".to_string(),
-                affected_versions: "*".to_string(),
-            },
-        ],
+        advisories: vec![hlock::policy::Advisory {
+            package: "lodash".to_string(),
+            advisory_id: "CVE-2024-3".to_string(),
+            severity: hlock::policy::AdvisorySeverity::Medium,
+            url: String::new(),
+            affected_versions: "*".to_string(),
+        }],
         licenses: vec![],
         policies: vec![],
         trust_roots: vec![],
         mirrors: vec![],
         root_rotations: vec![],
-        vex_entries: vec![
-            hlock::VexEntry {
-                package: "lodash".to_string(),
-                advisory_id: "CVE-2024-3".to_string(),
-                status: hlock::VexStatus::Affected,
-                justification: "vulnerable_code_executed".to_string(),
-                impact_statement: "high".to_string(),
-            },
-        ],
+        vex_entries: vec![hlock::VexEntry {
+            package: "lodash".to_string(),
+            advisory_id: "CVE-2024-3".to_string(),
+            status: hlock::VexStatus::Affected,
+            justification: "vulnerable_code_executed".to_string(),
+            impact_statement: "high".to_string(),
+        }],
         compat: None,
     };
     let report = lockfile.effective_advisories();
@@ -2291,15 +2312,13 @@ fn test_effective_advisories_includes_no_vex() {
         artifacts: vec![],
         patches: vec![],
         provenance: vec![],
-        advisories: vec![
-            hlock::policy::Advisory {
-                package: "lodash".to_string(),
-                advisory_id: "CVE-2024-4".to_string(),
-                severity: hlock::policy::AdvisorySeverity::Low,
-                url: "".to_string(),
-                affected_versions: "*".to_string(),
-            },
-        ],
+        advisories: vec![hlock::policy::Advisory {
+            package: "lodash".to_string(),
+            advisory_id: "CVE-2024-4".to_string(),
+            severity: hlock::policy::AdvisorySeverity::Low,
+            url: String::new(),
+            affected_versions: "*".to_string(),
+        }],
         licenses: vec![],
         policies: vec![],
         trust_roots: vec![],
@@ -2329,29 +2348,25 @@ fn test_trust_root_rotation_roundtrip() {
         advisories: vec![],
         licenses: vec![],
         policies: vec![],
-        trust_roots: vec![
-            hlock::policy::TrustRoot {
-                key_id: "old@key".to_string(),
-                algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
-                public_key: vec![42u8; 32],
-                expires_epoch: 2000000000,
-                role: hlock::policy::TrustRole::Root,
-            },
-        ],
+        trust_roots: vec![hlock::policy::TrustRoot {
+            key_id: "old@key".to_string(),
+            algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
+            public_key: vec![42u8; 32],
+            expires_epoch: 2_000_000_000,
+            role: hlock::policy::TrustRole::Root,
+        }],
         mirrors: vec![],
-        root_rotations: vec![
-            hlock::TrustRootRotation {
-                old_key_id: "old@key".to_string(),
-                new_key_id: "new@key".to_string(),
-                threshold: 1,
-                new_algorithm: hlock::signature::SignatureAlgorithm::MlDsa65,
-                new_public_key: vec![43u8; 65],
-                new_expires_epoch: 2100000000,
-                new_role: hlock::policy::TrustRole::Root,
-                rotation_signature_key_id: "old@key".to_string(),
-                rotation_signature: vec![0xAA; 64],
-            },
-        ],
+        root_rotations: vec![hlock::TrustRootRotation {
+            old_key_id: "old@key".to_string(),
+            new_key_id: "new@key".to_string(),
+            threshold: 1,
+            new_algorithm: hlock::signature::SignatureAlgorithm::MlDsa65,
+            new_public_key: vec![43u8; 65],
+            new_expires_epoch: 2_100_000_000,
+            new_role: hlock::policy::TrustRole::Root,
+            rotation_signature_key_id: "old@key".to_string(),
+            rotation_signature: vec![0xAA; 64],
+        }],
         vex_entries: vec![],
         compat: None,
     };
@@ -2361,9 +2376,18 @@ fn test_trust_root_rotation_roundtrip() {
     assert_eq!(deserialized.root_rotations[0].old_key_id, "old@key");
     assert_eq!(deserialized.root_rotations[0].new_key_id, "new@key");
     assert_eq!(deserialized.root_rotations[0].threshold, 1);
-    assert_eq!(deserialized.root_rotations[0].new_algorithm, hlock::signature::SignatureAlgorithm::MlDsa65);
-    assert_eq!(deserialized.root_rotations[0].new_expires_epoch, 2100000000);
-    assert_eq!(deserialized.root_rotations[0].new_role, hlock::policy::TrustRole::Root);
+    assert_eq!(
+        deserialized.root_rotations[0].new_algorithm,
+        hlock::signature::SignatureAlgorithm::MlDsa65
+    );
+    assert_eq!(
+        deserialized.root_rotations[0].new_expires_epoch,
+        2_100_000_000
+    );
+    assert_eq!(
+        deserialized.root_rotations[0].new_role,
+        hlock::policy::TrustRole::Root
+    );
 }
 
 #[test]
@@ -2383,29 +2407,25 @@ fn test_root_rotation_rejects_expired_old_key() {
         advisories: vec![],
         licenses: vec![],
         policies: vec![],
-        trust_roots: vec![
-            hlock::policy::TrustRoot {
-                key_id: "old@key".to_string(),
-                algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
-                public_key: vec![42u8; 32],
-                expires_epoch: 1000,
-                role: hlock::policy::TrustRole::Root,
-            },
-        ],
+        trust_roots: vec![hlock::policy::TrustRoot {
+            key_id: "old@key".to_string(),
+            algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
+            public_key: vec![42u8; 32],
+            expires_epoch: 1000,
+            role: hlock::policy::TrustRole::Root,
+        }],
         mirrors: vec![],
-        root_rotations: vec![
-            hlock::TrustRootRotation {
-                old_key_id: "old@key".to_string(),
-                new_key_id: "new@key".to_string(),
-                threshold: 1,
-                new_algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
-                new_public_key: vec![0u8; 32],
-                new_expires_epoch: 9999,
-                new_role: hlock::policy::TrustRole::Root,
-                rotation_signature_key_id: "old@key".to_string(),
-                rotation_signature: vec![0u8; 64],
-            },
-        ],
+        root_rotations: vec![hlock::TrustRootRotation {
+            old_key_id: "old@key".to_string(),
+            new_key_id: "new@key".to_string(),
+            threshold: 1,
+            new_algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
+            new_public_key: vec![0u8; 32],
+            new_expires_epoch: 9999,
+            new_role: hlock::policy::TrustRole::Root,
+            rotation_signature_key_id: "old@key".to_string(),
+            rotation_signature: vec![0u8; 64],
+        }],
         vex_entries: vec![],
         compat: None,
     };
@@ -2429,29 +2449,25 @@ fn test_root_rotation_accepts_valid() {
         advisories: vec![],
         licenses: vec![],
         policies: vec![],
-        trust_roots: vec![
-            hlock::policy::TrustRoot {
-                key_id: "old@key".to_string(),
-                algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
-                public_key: vec![42u8; 32],
-                expires_epoch: 9999,
-                role: hlock::policy::TrustRole::Root,
-            },
-        ],
+        trust_roots: vec![hlock::policy::TrustRoot {
+            key_id: "old@key".to_string(),
+            algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
+            public_key: vec![42u8; 32],
+            expires_epoch: 9999,
+            role: hlock::policy::TrustRole::Root,
+        }],
         mirrors: vec![],
-        root_rotations: vec![
-            hlock::TrustRootRotation {
-                old_key_id: "old@key".to_string(),
-                new_key_id: "new@key".to_string(),
-                threshold: 1,
-                new_algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
-                new_public_key: vec![0u8; 32],
-                new_expires_epoch: 9999,
-                new_role: hlock::policy::TrustRole::Root,
-                rotation_signature_key_id: "old@key".to_string(),
-                rotation_signature: vec![0u8; 64],
-            },
-        ],
+        root_rotations: vec![hlock::TrustRootRotation {
+            old_key_id: "old@key".to_string(),
+            new_key_id: "new@key".to_string(),
+            threshold: 1,
+            new_algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
+            new_public_key: vec![0u8; 32],
+            new_expires_epoch: 9999,
+            new_role: hlock::policy::TrustRole::Root,
+            rotation_signature_key_id: "old@key".to_string(),
+            rotation_signature: vec![0u8; 64],
+        }],
         vex_entries: vec![],
         compat: None,
     };
@@ -2469,8 +2485,22 @@ fn test_dedup_saving_bytes_nonzero() {
         workspace_pkgs: vec![],
         hoist_boundaries: vec![],
         packages: vec![
-            Package { name: "lodash".to_string(), source_idx: 0, major: 4, minor: 17, patch: 20, ..Default::default() },
-            Package { name: "lodash".to_string(), source_idx: 0, major: 4, minor: 17, patch: 21, ..Default::default() },
+            Package {
+                name: "lodash".to_string(),
+                source_idx: 0,
+                major: 4,
+                minor: 17,
+                patch: 20,
+                ..Default::default()
+            },
+            Package {
+                name: "lodash".to_string(),
+                source_idx: 0,
+                major: 4,
+                minor: 17,
+                patch: 21,
+                ..Default::default()
+            },
         ],
         artifacts: vec![],
         patches: vec![],
