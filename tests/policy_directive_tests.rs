@@ -64,10 +64,14 @@ fn test_policy_hook_allowed_with_directives() {
     };
 
     // Specific allow should beat wildcard deny
-    assert!(matches!(lockfile.hook_allowed("lodash", "postinstall"),
-                     hlock::policy::PolicyDecision::Allowed));
+    assert!(matches!(
+        lockfile.hook_allowed("lodash", "postinstall"),
+        hlock::policy::PolicyDecision::Allowed
+    ));
 
     // Other packages should be denied
-    assert!(matches!(lockfile.hook_allowed("other", "postinstall"),
-                     hlock::policy::PolicyDecision::Denied { .. }));
+    assert!(matches!(
+        lockfile.hook_allowed("other", "postinstall"),
+        hlock::policy::PolicyDecision::Denied { .. }
+    ));
 }
