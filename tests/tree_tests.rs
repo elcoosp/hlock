@@ -1,5 +1,5 @@
-use std::process::Command;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn hlock_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_hlock"))
@@ -15,38 +15,58 @@ fn write_temp_file(name: &str, content: &str) -> PathBuf {
 
 fn make_lockfile_with_tree() -> String {
     let mut lf = hlock::Lockfile {
-        sources: vec![hlock::Source::Registry("https://registry.npmjs.org/".to_string())],
+        sources: vec![hlock::Source::Registry(
+            "https://registry.npmjs.org/".to_string(),
+        )],
         packages: vec![
             hlock::Package {
                 name: "my-app".to_string(),
                 source_idx: 0,
-                major: 1, minor: 0, patch: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
                 dependencies: vec![
-                    hlock::Dependency { name: "react".to_string(), dep_type: hlock::DepType::Runtime, requested_features: vec![] },
-                    hlock::Dependency { name: "express".to_string(), dep_type: hlock::DepType::Runtime, requested_features: vec![] },
+                    hlock::Dependency {
+                        name: "react".to_string(),
+                        dep_type: hlock::DepType::Runtime,
+                        requested_features: vec![],
+                    },
+                    hlock::Dependency {
+                        name: "express".to_string(),
+                        dep_type: hlock::DepType::Runtime,
+                        requested_features: vec![],
+                    },
                 ],
                 ..Default::default()
             },
             hlock::Package {
                 name: "react".to_string(),
                 source_idx: 0,
-                major: 18, minor: 3, patch: 1,
-                dependencies: vec![
-                    hlock::Dependency { name: "lodash".to_string(), dep_type: hlock::DepType::Runtime, requested_features: vec![] },
-                ],
+                major: 18,
+                minor: 3,
+                patch: 1,
+                dependencies: vec![hlock::Dependency {
+                    name: "lodash".to_string(),
+                    dep_type: hlock::DepType::Runtime,
+                    requested_features: vec![],
+                }],
                 ..Default::default()
             },
             hlock::Package {
                 name: "express".to_string(),
                 source_idx: 0,
-                major: 4, minor: 21, patch: 0,
+                major: 4,
+                minor: 21,
+                patch: 0,
                 dependencies: vec![],
                 ..Default::default()
             },
             hlock::Package {
                 name: "lodash".to_string(),
                 source_idx: 0,
-                major: 4, minor: 17, patch: 21,
+                major: 4,
+                minor: 17,
+                patch: 21,
                 ..Default::default()
             },
         ],
@@ -60,14 +80,24 @@ fn test_tree_text() {
     let serialized = make_lockfile_with_tree();
     let path = write_temp_file("tree_text.hlock", &serialized);
     let output = Command::new(hlock_bin())
-        .arg("--color").arg("never")
-        .arg("tree").arg("--root").arg("my-app")
+        .arg("--color")
+        .arg("never")
+        .arg("tree")
+        .arg("--root")
+        .arg("my-app")
         .arg(&path)
         .output()
         .expect("failed to run hlock");
-    assert!(output.status.success(), "tree should succeed, stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "tree should succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("my-app"), "should contain my-app, got: {}", stdout);
+    assert!(
+        stdout.contains("my-app"),
+        "should contain my-app, got: {stdout}"
+    );
     assert!(stdout.contains("react"), "should contain react");
     assert!(stdout.contains("lodash"), "should contain lodash");
 }
@@ -77,7 +107,9 @@ fn test_tree_json() {
     let serialized = make_lockfile_with_tree();
     let path = write_temp_file("tree_json.hlock", &serialized);
     let output = Command::new(hlock_bin())
-        .arg("tree").arg("--root").arg("my-app")
+        .arg("tree")
+        .arg("--root")
+        .arg("my-app")
         .arg(&path)
         .arg("--format")
         .arg("json")
@@ -88,7 +120,11 @@ fn test_tree_json() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("should be valid JSON");
     let has_roots = parsed["roots"].is_array();
     let has_root = parsed["root"].is_string();
-    assert!(has_roots || has_root, "should have 'roots' array or 'root' string, got keys: {:?}", parsed.as_object().map(|o| o.keys().collect::<Vec<_>>()));
+    assert!(
+        has_roots || has_root,
+        "should have 'roots' array or 'root' string, got keys: {:?}",
+        parsed.as_object().map(|o| o.keys().collect::<Vec<_>>())
+    );
 }
 
 #[test]
@@ -96,7 +132,9 @@ fn test_tree_with_root() {
     let serialized = make_lockfile_with_tree();
     let path = write_temp_file("tree_root.hlock", &serialized);
     let output = Command::new(hlock_bin())
-        .arg("tree").arg("--root").arg("my-app")
+        .arg("tree")
+        .arg("--root")
+        .arg("my-app")
         .arg(&path)
         .arg("--root")
         .arg("my-app")
