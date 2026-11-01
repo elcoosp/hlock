@@ -7,6 +7,10 @@ pub enum SbomFormat {
     CycloneDxJson,
 }
 
+///
+/// # Errors
+///
+/// Returns `Err` if input validation fails.
 pub fn generate_sbom(
     lockfile: &Lockfile,
     format: SbomFormat,
@@ -18,7 +22,7 @@ pub fn generate_sbom(
     }
 }
 
-fn hash_algo_spdx(algo: &HashAlgorithm) -> &'static str {
+fn hash_algo_spdx(algo: HashAlgorithm) -> &'static str {
     match algo {
         HashAlgorithm::Sha1 => "SHA1",
         HashAlgorithm::Sha256 => "SHA256",
@@ -27,7 +31,7 @@ fn hash_algo_spdx(algo: &HashAlgorithm) -> &'static str {
     }
 }
 
-fn hash_algo_cyclonedx(algo: &HashAlgorithm) -> &'static str {
+fn hash_algo_cyclonedx(algo: HashAlgorithm) -> &'static str {
     match algo {
         HashAlgorithm::Sha1 => "SHA-1",
         HashAlgorithm::Sha256 => "SHA-256",
@@ -37,7 +41,7 @@ fn hash_algo_cyclonedx(algo: &HashAlgorithm) -> &'static str {
 }
 
 fn hex_digest(digest: &[u8]) -> String {
-    digest.iter().map(|b| format!("{:02x}", b)).collect()
+    crate::lockfile::digest::bytes_to_hex(digest)
 }
 
 fn purl(name: &str, version: &str) -> String {
@@ -46,27 +50,35 @@ fn purl(name: &str, version: &str) -> String {
     } else {
         name.to_string()
     };
-    format!("pkg:npm/{}@{}", encoded_name, version)
+    format!("pkg:npm/{encoded_name}@{version}")
 }
 
 fn version_string(major: u64, minor: u64, patch: u64) -> String {
-    format!("{}.{}.{}", major, minor, patch)
+    format!("{major}.{minor}.{patch}")
 }
 
 fn download_location(source: &Source, name: &str, version: &str) -> String {
     match source {
         Source::Registry(url) => {
-            let base = if url.ends_with('/') { url.clone() } else { format!("{}/", url) };
-            format!("{}{}/-/{}-{}.tgz", base, name, name, version)
+            let base = if url.ends_with('/') {
+                url.clone()
+            } else {
+                format!("{url}/")
+            };
+            format!("{base}{name}/-/{name}-{version}.tgz")
         }
-        Source::Git(url) => format!("git+{}", url),
-        Source::Local(path) => format!("file://{}", path),
+        Source::Git(url) => format!("git+{url}"),
+        Source::Local(path) => format!("file://{path}"),
         Source::Workspace => "NOASSERTION".to_string(),
         Source::CasHttp(url) => {
-            let base = if url.ends_with('/') { url.clone() } else { format!("{}/", url) };
-            format!("{}{}/{}", base, name, version)
+            let base = if url.ends_with('/') {
+                url.clone()
+            } else {
+                format!("{url}/")
+            };
+            format!("{base}{name}/{version}")
         }
-        Source::Ipfs(cid) => format!("ipfs://{}", cid),
+        Source::Ipfs(cid) => format!("ipfs://{cid}"),
     }
 }
 
@@ -82,12 +94,14 @@ fn generate_spdx(lockfile: &Lockfile, namespace: &str) -> Result<String, Error> 
         let mut hashes_obj = serde_json::Map::new();
         for h in &pkg.hashes {
             hashes_obj.insert(
-                hash_algo_spdx(&h.algo).to_string(),
+                hash_algo_spdx(h.algo).to_string(),
                 serde_json::Value::String(hex_digest(&h.digest)),
             );
         }
 
-        let dl = source.map_or("NOASSERTION".to_string(), |s| download_location(s, &pkg.name, &ver));
+        let dl = source.map_or("NOASSERTION".to_string(), |s| {
+            download_location(s, &pkg.name, &ver)
+        });
         let purl_str = purl(&pkg.name, &ver);
 
         let mut pkg_obj = serde_json::json!({
@@ -103,7 +117,10 @@ fn generate_spdx(lockfile: &Lockfile, namespace: &str) -> Result<String, Error> 
         });
 
         if !hashes_obj.is_empty() {
-            pkg_obj.as_object_mut().unwrap().insert("hashes".to_string(), serde_json::Value::Object(hashes_obj));
+            pkg_obj
+                .as_object_mut()
+                .unwrap()
+                .insert("hashes".to_string(), serde_json::Value::Object(hashes_obj));
         }
 
         if let Some(license) = lockfile.license_for(&pkg.name) {
@@ -111,7 +128,10 @@ fn generate_spdx(lockfile: &Lockfile, namespace: &str) -> Result<String, Error> 
         }
 
         if pkg.hashes.is_empty() {
-            pkg_obj.as_object_mut().unwrap().insert("filesAnalyzed".to_string(), serde_json::Value::Bool(false));
+            pkg_obj
+                .as_object_mut()
+                .unwrap()
+                .insert("filesAnalyzed".to_string(), serde_json::Value::Bool(false));
         }
 
         for h in &pkg.hashes {
@@ -170,7 +190,7 @@ fn generate_cyclonedx(lockfile: &Lockfile, _namespace: &str) -> Result<String, E
         let mut hashes_arr = Vec::new();
         for h in &pkg.hashes {
             hashes_arr.push(serde_json::json!({
-                "alg": hash_algo_cyclonedx(&h.algo),
+                "alg": hash_algo_cyclonedx(h.algo),
                 "content": hex_digest(&h.digest),
             }));
         }
@@ -183,7 +203,9 @@ fn generate_cyclonedx(lockfile: &Lockfile, _namespace: &str) -> Result<String, E
         });
 
         if !hashes_arr.is_empty() {
-            comp.as_object_mut().unwrap().insert("hashes".to_string(), serde_json::Value::Array(hashes_arr));
+            comp.as_object_mut()
+                .unwrap()
+                .insert("hashes".to_string(), serde_json::Value::Array(hashes_arr));
         }
 
         if let Some(license) = lockfile.license_for(&pkg.name) {
@@ -244,7 +266,9 @@ mod tests {
                 Package {
                     name: "app".to_string(),
                     source_idx: 0,
-                    major: 1, minor: 0, patch: 0,
+                    major: 1,
+                    minor: 0,
+                    patch: 0,
                     dependencies: vec![crate::lockfile::Dependency {
                         name: "lodash".to_string(),
                         dep_type: DepType::Runtime,
@@ -255,7 +279,9 @@ mod tests {
                 Package {
                     name: "lodash".to_string(),
                     source_idx: 0,
-                    major: 4, minor: 17, patch: 21,
+                    major: 4,
+                    minor: 17,
+                    patch: 21,
                     hashes: vec![IntegrityHash {
                         algo: HashAlgorithm::Sha256,
                         digest: vec![42u8; 32],
@@ -294,8 +320,12 @@ mod tests {
         let lf = sample_lockfile();
         let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-        let lodash_pkg = parsed["packages"].as_array().unwrap().iter()
-            .find(|p| p["name"] == "lodash").unwrap();
+        let lodash_pkg = parsed["packages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "lodash")
+            .unwrap();
         assert!(lodash_pkg["hashes"]["SHA256"].is_string());
     }
 
@@ -315,22 +345,32 @@ mod tests {
         lf.packages.push(Package {
             name: "jest".to_string(),
             source_idx: 0,
-            major: 29, minor: 0, patch: 0,
+            major: 29,
+            minor: 0,
+            patch: 0,
             dependencies: vec![],
             ..Package::default()
         });
-        lf.packages[0].dependencies.push(crate::lockfile::Dependency {
-            name: "jest".to_string(),
-            dep_type: DepType::Dev,
-            requested_features: vec![],
-        });
+        lf.packages[0]
+            .dependencies
+            .push(crate::lockfile::Dependency {
+                name: "jest".to_string(),
+                dep_type: DepType::Dev,
+                requested_features: vec![],
+            });
         let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         let rels = parsed["relationships"].as_array().unwrap();
-        let jest_rels: Vec<_> = rels.iter()
-            .filter(|r| r["relatedSpdxElement"].as_str().unwrap_or("").contains("jest"))
+        let jest_rels: Vec<_> = rels
+            .iter()
+            .filter(|r| {
+                r["relatedSpdxElement"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("jest")
+            })
             .collect();
-        assert!(jest_rels.is_empty());
+        assert!(jest_rels.is_empty(), "expected empty, got: {jest_rels:?}");
     }
 
     #[test]
@@ -349,8 +389,12 @@ mod tests {
         let lf = sample_lockfile();
         let json_str = generate_sbom(&lf, SbomFormat::CycloneDxJson, "test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-        let lodash = parsed["components"].as_array().unwrap().iter()
-            .find(|c| c["name"] == "lodash").unwrap();
+        let lodash = parsed["components"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "lodash")
+            .unwrap();
         assert_eq!(lodash["hashes"][0]["alg"], "SHA-256");
     }
 
@@ -367,7 +411,9 @@ mod tests {
             packages: vec![Package {
                 name: "my-app".to_string(),
                 source_idx: 0,
-                major: 1, minor: 0, patch: 0,
+                major: 1,
+                minor: 0,
+                patch: 0,
                 ..Package::default()
             }],
             artifacts: vec![],
@@ -384,8 +430,12 @@ mod tests {
         };
         let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-        let my_app = parsed["packages"].as_array().unwrap().iter()
-            .find(|p| p["name"] == "my-app").unwrap();
+        let my_app = parsed["packages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "my-app")
+            .unwrap();
         assert_eq!(my_app["filesAnalyzed"], false);
     }
 
@@ -402,7 +452,9 @@ mod tests {
             packages: vec![Package {
                 name: "@babel/core".to_string(),
                 source_idx: 0,
-                major: 7, minor: 0, patch: 0,
+                major: 7,
+                minor: 0,
+                patch: 0,
                 ..Package::default()
             }],
             artifacts: vec![],
@@ -429,25 +481,35 @@ mod tests {
         let lf = sample_lockfile();
         let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-        let lodash = parsed["packages"].as_array().unwrap().iter()
-            .find(|p| p["name"] == "lodash").unwrap();
+        let lodash = parsed["packages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["name"] == "lodash")
+            .unwrap();
         let dl = lodash["downloadLocation"].as_str().unwrap();
         assert!(dl.starts_with("https://registry.npmjs.org/"));
         assert!(dl.contains("lodash"));
-        assert!(dl.ends_with(".tgz"));
+        assert!(dl.to_ascii_lowercase().ends_with(".tgz"));
     }
 
     #[test]
     fn test_sbom_uses_cargo_version() {
         let lf = sample_lockfile();
         let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
-        assert!(json_str.contains(env!("CARGO_PKG_VERSION")),
-            "SPDX SBOM should contain CARGO_PKG_VERSION");
-        assert!(!json_str.contains("0.14.0"),
-            "SPDX SBOM should not contain hardcoded 0.14.0");
+        assert!(
+            json_str.contains(env!("CARGO_PKG_VERSION")),
+            "SPDX SBOM should contain CARGO_PKG_VERSION"
+        );
+        assert!(
+            !json_str.contains("0.14.0"),
+            "SPDX SBOM should not contain hardcoded 0.14.0"
+        );
 
         let json_str2 = generate_sbom(&lf, SbomFormat::CycloneDxJson, "test-ns").unwrap();
-        assert!(json_str2.contains(env!("CARGO_PKG_VERSION")),
-            "CycloneDX SBOM should contain CARGO_PKG_VERSION");
+        assert!(
+            json_str2.contains(env!("CARGO_PKG_VERSION")),
+            "CycloneDX SBOM should contain CARGO_PKG_VERSION"
+        );
     }
 }
