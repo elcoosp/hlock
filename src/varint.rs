@@ -1,4 +1,5 @@
 /// Encodes a u64 into an Unsigned LEB128 (Varint) byte vector.
+#[must_use]
 pub fn encode_varint(value: u64) -> Vec<u8> {
     let mut buffer = Vec::new();
     let mut mut_value = value;
@@ -17,6 +18,11 @@ pub fn encode_varint(value: u64) -> Vec<u8> {
 
 /// Decodes a Unsigned LEB128 (Varint) from a byte slice starting at the cursor.
 /// Updates the cursor to point to the byte immediately following the varint.
+///
+/// # Errors
+/// Returns `"Unexpected end of bytes while decoding varint"` when `bytes` ends
+/// before the continuation bits terminate, and `"Varint too large for u64"`
+/// when the encoding spans more than the 10 bytes a `u64` can occupy.
 pub fn decode_varint(bytes: &[u8], cursor: &mut usize) -> Result<u64, &'static str> {
     let mut result: u64 = 0;
     let mut shift: u32 = 0;
@@ -28,7 +34,7 @@ pub fn decode_varint(bytes: &[u8], cursor: &mut usize) -> Result<u64, &'static s
         let byte = bytes[*cursor];
         *cursor += 1;
 
-        result |= ((byte & 0x7F) as u64) << shift;
+        result |= u64::from(byte & 0x7F) << shift;
 
         if byte & 0x80 == 0 {
             break;
