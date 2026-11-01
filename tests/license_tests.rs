@@ -15,21 +15,19 @@ fn test_license_roundtrip() {
                 expression: "MIT".to_string(),
             },
         ],
-        packages: vec![
-            hlock::lockfile::Package {
-                name: "lodash".to_string(),
-                source_idx: 0,
-                major: 4,
-                minor: 17,
-                patch: 21,
-                ..Default::default()
-            },
-        ],
+        packages: vec![hlock::lockfile::Package {
+            name: "lodash".to_string(),
+            source_idx: 0,
+            major: 4,
+            minor: 17,
+            patch: 21,
+            ..Default::default()
+        }],
         ..Lockfile::default()
     };
 
     let serialized = lockfile::serialize(&mut lockfile).unwrap();
-    println!("Serialized:\n{}", serialized);
+    println!("Serialized:\n{serialized}");
 
     // The serialized output should have an empty line after header
     // Our serialize function should produce that automatically
@@ -43,7 +41,8 @@ fn test_license_roundtrip() {
 #[test]
 fn test_license_parse_in_header() {
     // Note: license directives belong after the empty line (in package section)
-    let content = "@source 0 https://registry.npmjs.org/\n\n@license lodash MIT\n@license express MIT\n";
+    let content =
+        "@source 0 https://registry.npmjs.org/\n\n@license lodash MIT\n@license express MIT\n";
     let lockfile = lockfile::deserialize(content).unwrap();
     assert_eq!(lockfile.licenses.len(), 2);
     assert_eq!(lockfile.licenses[0].expression, "MIT");
@@ -53,12 +52,10 @@ fn test_license_parse_in_header() {
 fn test_license_for_api() {
     let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
-        licenses: vec![
-            LicenseEntry {
-                package: "lodash".to_string(),
-                expression: "MIT".to_string(),
-            },
-        ],
+        licenses: vec![LicenseEntry {
+            package: "lodash".to_string(),
+            expression: "MIT".to_string(),
+        }],
         ..Lockfile::default()
     };
 
@@ -80,12 +77,10 @@ fn test_unlicensed_packages_api() {
                 ..Default::default()
             },
         ],
-        licenses: vec![
-            LicenseEntry {
-                package: "licensed-pkg".to_string(),
-                expression: "MIT".to_string(),
-            },
-        ],
+        licenses: vec![LicenseEntry {
+            package: "licensed-pkg".to_string(),
+            expression: "MIT".to_string(),
+        }],
         ..Lockfile::default()
     };
 
