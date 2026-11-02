@@ -15,9 +15,9 @@ fn main() {
 
     let pub_key = demo_pub_key();
     let packages = demo_packages(variant);
-    let mut lockfile = demo_lockfile(packages, pub_key);
+    let lockfile = demo_lockfile(packages, pub_key);
 
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
     print!("{serialized}");
 }
 
