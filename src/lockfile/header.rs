@@ -229,12 +229,15 @@ impl HeaderAcc {
     }
 }
 
-/// Decodes a hex string into bytes, dropping invalid nibble pairs.
-fn hex_to_bytes(hex: &str) -> Vec<u8> {
-    (0..hex.len())
-        .step_by(2)
-        .filter_map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
-        .collect()
+/// Strictly decodes a hex string into bytes.
+///
+/// 0.x dropped invalid nibble pairs, silently corrupting public keys and
+/// signatures; 1.0 surfaces malformed hex as a header error.
+fn hex_to_bytes(hex: &str, line_number: usize, field: &str) -> Result<Vec<u8>, Error> {
+    crate::hex::decode(hex).map_err(|err| Error::InvalidHeader {
+        line_number,
+        reason: format!("{field}: {err}"),
+    })
 }
 
 /// Parses a signature algorithm ID (`00` = Ed25519, `02` = ML-DSA-65).
@@ -312,7 +315,7 @@ fn parse_trust_root(acc: &mut HeaderAcc, rest: &str, line_number: usize) -> Resu
         reason: "Invalid expires_epoch".to_string(),
     })?;
     let role = parse_role(role_str, line_number, "Unknown role")?;
-    let public_key = hex_to_bytes(public_key_hex);
+    let public_key = hex_to_bytes(public_key_hex, line_number, "trust-root public key")?;
 
     acc.trust_roots.push(crate::policy::TrustRoot {
         key_id,
@@ -450,8 +453,8 @@ fn parse_trust_root_rotation(
         reason: "Invalid expires_epoch in rotation".to_string(),
     })?;
     let new_role = parse_role(role_str, line_number, "Unknown role in rotation")?;
-    let new_public_key = hex_to_bytes(pub_key_hex);
-    let rotation_signature = hex_to_bytes(sig_hex);
+    let new_public_key = hex_to_bytes(pub_key_hex, line_number, "rotation public key")?;
+    let rotation_signature = hex_to_bytes(sig_hex, line_number, "rotation signature")?;
 
     acc.root_rotations.push(crate::lockfile::TrustRootRotation {
         old_key_id,
