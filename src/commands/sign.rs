@@ -28,14 +28,14 @@ pub(crate) fn run(
             std::process::exit(2);
         }
     };
-    let mut lockfile = match deserialize(&content) {
+    let lockfile = match deserialize(&content) {
         Ok(lf) => lf,
         Err(e) => {
             eprintln!("[{}] Parse error: {}", e.error_code(), e);
             std::process::exit(2);
         }
     };
-    let serialized = match serialize(&mut lockfile) {
+    let serialized = match serialize(&lockfile) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("[{}] Serialize error: {}", e.error_code(), e);
