@@ -4,7 +4,7 @@ use hlock::signature::SignatureAlgorithm;
 
 #[test]
 fn test_trust_root_roundtrip() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
         trust_roots: vec![
             TrustRoot {
@@ -25,7 +25,7 @@ fn test_trust_root_roundtrip() {
         ..Lockfile::default()
     };
 
-    let serialized = lockfile::serialize(&mut lockfile).unwrap();
+    let serialized = lockfile::serialize(&lockfile).unwrap();
     let deserialized = lockfile::deserialize(&serialized).unwrap();
     assert_eq!(deserialized.trust_roots.len(), 2);
     assert_eq!(deserialized.trust_roots[0].key_id, "ci@company.com");
