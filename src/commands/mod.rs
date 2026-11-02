@@ -5,8 +5,9 @@
 
 pub(crate) mod audit;
 pub(crate) mod check;
+pub(crate) mod ci;
 pub(crate) mod completions;
-pub(crate) mod dedup;
+pub(crate) mod config_cmd;
 pub(crate) mod dependents;
 pub(crate) mod deps;
 pub(crate) mod diff;
@@ -15,7 +16,7 @@ pub(crate) mod explain;
 pub(crate) mod fix;
 pub(crate) mod graph;
 pub(crate) mod import;
-pub(crate) mod info;
+pub(crate) mod init;
 pub(crate) mod keygen;
 pub(crate) mod licenses;
 pub(crate) mod lint_cmd;
@@ -26,15 +27,16 @@ pub(crate) mod sbom_cmd;
 pub(crate) mod sign;
 pub(crate) mod stats;
 pub(crate) mod tree;
+pub(crate) mod trust;
 pub(crate) mod verify;
 pub(crate) mod why;
 
 pub(crate) use super::{
-    Cli, ExplanationKind, FixType, ImportFormat, Lockfile, OutdatedSourceType, UpdateType,
-    apply_fixes, build_fix_plan, check_outdated, deserialize, diff_lockfiles, explain_advisory,
-    explain_rule, extract_subgraph, extract_subgraph_platform, fnv, generate_sbom, import_npm,
-    import_yarn, lint, lockfile, merge, merge_lockfiles, policy, sbom, serialize, serialize_diff,
-    sign_lockfile, signature, validate_digest, verify_signature,
+    Cli, ExplanationKind, FixType, HlockConfig, ImportFormat, Lockfile, OutdatedSourceType,
+    UpdateType, apply_fixes, build_fix_plan, check_outdated, deserialize, diff_lockfiles,
+    explain_advisory, explain_rule, generate_sbom, import_npm, import_yarn, lint, lockfile, merge,
+    merge_lockfiles, policy, sbom, serialize, serialize_diff, sign_lockfile, signature,
+    validate_digest, verify_signature,
 };
 pub(crate) use crate::output;
 pub(crate) use std::collections::{HashMap, HashSet};
@@ -77,6 +79,35 @@ fn read_input(path: &std::path::Path) -> Result<String, hlock::Error> {
     } else {
         std::fs::read_to_string(path).map_err(hlock::Error::Io)
     }
+}
+
+/// Loads a baseline file (audit/ci): either a JSON array of advisory ids or
+/// `{"schema": ..., "advisory_ids": [...]}`.
+///
+/// Exits with status 2 on unreadable or malformed baselines (config error).
+pub(crate) fn load_baseline_file(path: &std::path::Path) -> std::collections::BTreeSet<String> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error reading baseline {}: {e}", path.display());
+            std::process::exit(2);
+        }
+    };
+    let value: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[E0901] Baseline {} is not valid JSON: {e}", path.display());
+            std::process::exit(2);
+        }
+    };
+    let empty = Vec::new();
+    let list = value
+        .as_array()
+        .or_else(|| value.get("advisory_ids").and_then(|v| v.as_array()))
+        .unwrap_or(&empty);
+    list.iter()
+        .filter_map(|v| v.as_str().map(str::to_string))
+        .collect()
 }
 
 fn parse_trusted_key(spec: &str) -> Option<(String, (Vec<u8>, signature::SignatureAlgorithm))> {
