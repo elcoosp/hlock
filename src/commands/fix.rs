@@ -19,6 +19,10 @@ pub(crate) enum FixMode {
 pub(crate) struct FixArgs<'a> {
     pub(crate) file: &'a Path,
     pub(crate) mode: FixMode,
+    /// Restrict the fix plan to a single package.
+    pub(crate) package: Option<&'a str>,
+    /// Force the target version (requires `package`).
+    pub(crate) to: Option<&'a str>,
     pub(crate) dry_run: bool,
     pub(crate) interactive: bool,
     pub(crate) format: &'a str,
@@ -26,10 +30,13 @@ pub(crate) struct FixArgs<'a> {
 }
 
 /// Runs the `fix` command.
+#[allow(clippy::too_many_lines)] // linear orchestration, split adds indirection
 pub(crate) fn run(args: &FixArgs<'_>, ctx: Ctx) {
     let FixArgs {
         file,
         mode,
+        package,
+        to,
         dry_run,
         interactive,
         format,
@@ -70,12 +77,31 @@ pub(crate) fn run(args: &FixArgs<'_>, ctx: Ctx) {
     }
 
     let plan = match build_fix_plan(&lockfile, fix_type, timeout) {
-        Ok(p) => p,
+        Ok(mut p) => {
+            // `--package <name> [--to <version>]` narrows the plan.
+            if let Some(pkg) = *package {
+                p.fixes.retain(|f| f.package == *pkg);
+                if let Some(target) = *to {
+                    for fix in &mut p.fixes {
+                        fix.fixed = (*target).to_string();
+                    }
+                }
+            }
+            p
+        }
         Err(e) => {
             eprintln!("Error building fix plan: {e}");
             std::process::exit(2);
         }
     };
+
+    if let Some(pkg) = *package {
+        let known = lockfile.packages.iter().any(|p| p.name == *pkg);
+        if !known {
+            eprintln!("Error: package '{pkg}' not found in lockfile");
+            std::process::exit(1);
+        }
+    }
 
     if plan.fixes.is_empty() {
         if !quiet {
@@ -97,7 +123,7 @@ pub(crate) fn run(args: &FixArgs<'_>, ctx: Ctx) {
         apply_all(&mut lockfile, &plan, quiet);
     }
 
-    let serialized = match serialize(&mut lockfile) {
+    let serialized = match serialize(&lockfile) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("[{}] Serialize error: {}", e.error_code(), e);
