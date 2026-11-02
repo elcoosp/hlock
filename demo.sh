@@ -85,8 +85,8 @@ MERGE_EXIT=$?
 echo "  Merge exit code: $MERGE_EXIT"
 echo ""
 
-echo "Step 14: Info command"
-"$HLOCK" info "$DEMO_DIR/demo.hlock"
+echo "Step 14: Stats command"
+"$HLOCK" stats "$DEMO_DIR/demo.hlock"
 echo ""
 
 echo "Step 15: Why command"
