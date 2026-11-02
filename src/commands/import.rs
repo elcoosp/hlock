@@ -24,7 +24,7 @@ pub(crate) fn run(source: &Path, from: &str, output: Option<&Path>, registry: &s
         }
     };
 
-    let (mut lockfile, result) = match format {
+    let (lockfile, result) = match format {
         ImportFormat::Yarn | ImportFormat::Pnpm => match import_yarn(&source_content, registry) {
             Ok(r) => r,
             Err(e) => {
@@ -41,7 +41,7 @@ pub(crate) fn run(source: &Path, from: &str, output: Option<&Path>, registry: &s
         },
     };
 
-    let serialized = match serialize(&mut lockfile) {
+    let serialized = match serialize(&lockfile) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("[{}] Serialize error: {}", e.error_code(), e);
