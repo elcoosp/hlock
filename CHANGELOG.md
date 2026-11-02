@@ -1,3 +1,58 @@
+## [1.0.0] - 2026-11-03
+
+**Breaking release.** No backward compatibility with the 0.x wire format or
+library API. Full rationale in `docs/specs/v1.0.0.md`.
+
+### ⚠ Breaking changes
+- **Wire format payload v0x10**: content ids are domain-separated BLAKE3-64
+  (was FNV-1a) with hard `E0106 ContentIdCollision` detection; overlong
+  varints (`E0107`), lossy UTF-8 (`E0108`) and non-canonical base64url tails
+  are rejected. Lockfiles produced by 0.x fail to parse with a migration hint.
+- **Library API**: free graph functions are gone; one cached `Graph` answers
+  all queries (`extract_subgraph`, `topological_sort`, `transitive_deps`,
+  `reachability`, …). `serialize` takes `&Lockfile` (never reorders the
+  caller's data). `has_dep_path` / typed queries take `EdgeFilter`
+  (`--dep-type peer` is no longer a silent no-op).
+- **CLI removals**: `info` (use `stats`), `dedup` (use `stats --dedup`).
+- **Verification hardening**: rotation records must carry a valid signature by
+  the old root key (`E0306`); digest is mandatory at the gates (`E0205`);
+  strict hex everywhere; `deserialize` reports all body parse errors (bounded)
+  instead of the first.
+- **Uniform exit codes**: 0 success, 1 findings/verification failure, 2
+  usage/input/config error.
+
+### Features
+- `hlock ci` — one-shot supply-chain gate (verify + lint + audit) with
+  per-gate status, aggregate JSON envelope and CI-friendly exit codes.
+- `hlock init` — bootstrap from `package-lock.json` / `yarn.lock` with
+  optional `--with-trust-root` (keygen + trust directive + digest in one step).
+- `hlock trust list|rotate` — inspect roots; generate signed rotation records
+  (self-validated before write; private key material written 0600).
+- `hlock audit --baseline / --write-baseline` — no-new-vulnerabilities policy
+  (`hlock/baseline/v1` files, `[NEW]` markers, JSON `new_vs_baseline`).
+- `hlock config` — resolved configuration; config wiring for `[lint]`,
+  `[verify]`, `[licenses]`, `[outdated]`, `[import]`, `[output]` (CLI wins);
+  invalid TOML is a hard `E0901`, missing explicit config `E0902`.
+- Global `--json` shorthand; JSON envelope `{"schema":"hlock/v1",…}`.
+- `hlock explain --list [filter]` — the lint registry as documentation, backed
+  by `LintRule::metadata()` so `lint`, `explain` and docs cannot drift.
+- Did-you-mean suggestions (Levenshtein ≤ 2) for unknown rules.
+- `hlock fix --package <name> --to <version>`.
+- `examples/bench.rs` perf gate with explicit budgets.
+
+### Performance
+- CSR forward+reverse adjacency built in O(V+E): `extract_subgraph` ~O(n³) →
+  linear BFS (11 ms @ 5k packages); `stats` O(V·E) → SCC-condensed bitset
+  closures (1.7 ms); `sbom` O(P·D) → single pass; `merge` O(P²) → hash dedup.
+- Iterative cycle detection and topological sort (no stack overflow on 10k+
+  chains); `has_dep_path` early-exit BFS.
+- Zero-alloc varint push, pre-sized buffers, const base64url decode table,
+  strict hex decoder with position-aware errors.
+
+### Documentation
+- New `docs/specs/v1.0.0.md` (the v1.0 specification), README rewrite around
+  the CI-gate workflow, CHANGELOG (this file).
+
 ## [0.19.0] - 2026-11-01
 ### Features
 - Complete v0.19.0 polish pass
