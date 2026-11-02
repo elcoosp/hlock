@@ -11,8 +11,35 @@ pub enum Error {
     #[error("Line {line_number}: Invalid Base64URL payload syntax")]
     InvalidBase64 { line_number: usize },
 
-    #[error("Line {line_number}: Unsupported payload version {version}")]
-    UnknownPayloadVersion { line_number: usize, version: u8 },
+    #[error("Line {line_number}: Payload ends unexpectedly (truncated mid-field)")]
+    PayloadTruncated { line_number: usize },
+
+    #[error(
+        "Line {line_number}: Unsupported payload version 0x{version:02x} (this build supports 0x{supported:02x}); re-serialize the lockfile with hlock >= 1.0"
+    )]
+    UnknownPayloadVersion {
+        line_number: usize,
+        version: u8,
+        supported: u8,
+    },
+
+    #[error("Line {line_number}: Non-canonical (overlong) varint encoding")]
+    NonCanonicalVarint { line_number: usize },
+
+    #[error("Line {line_number}: Payload field '{field}' is not valid UTF-8")]
+    InvalidUtf8 {
+        line_number: usize,
+        field: &'static str,
+    },
+
+    #[error("Digest length {len} exceeds the wire-format maximum of 255 bytes")]
+    DigestTooLong { len: usize },
+
+    #[error("Content-id collision: {0}")]
+    ContentIdCollision(String),
+
+    #[error("{count} parse error(s); first: {first}")]
+    MultipleParseErrors { count: usize, first: Box<Error> },
 
     #[error("Line {line_number}: BLAKE3 payload digest mismatch")]
     PayloadDigestMismatch { line_number: usize },
@@ -127,6 +154,9 @@ pub enum Error {
     #[error("Multiple @digest directives found")]
     DuplicateDigestDirective,
 
+    #[error("Lockfile has no @digest directive; run 'hlock digest --write <file>' or re-serialize")]
+    MissingDigest,
+
     #[error("Merge conflict on package '{package_name}': {description}")]
     MergeConflict {
         package_name: String,
@@ -206,6 +236,11 @@ pub enum Error {
     #[error("Trust root rotation invalid: {reason}")]
     TrustRootRotationInvalid { reason: String },
 
+    #[error(
+        "Trust root rotation signature by '{key_id}' is invalid or was not signed by the outgoing root key"
+    )]
+    RotationSignatureInvalid { key_id: String },
+
     #[error("Line {line_number}: Invalid VEX status '{status}'")]
     InvalidVexStatus { line_number: usize, status: String },
 
@@ -226,6 +261,7 @@ impl Error {
             // Parse: E0100-E0199
             Error::MissingDelimiter { .. } => "E0101",
             Error::InvalidBase64 { .. } => "E0102",
+            Error::PayloadTruncated { .. } => "E0120",
             Error::UnknownPayloadVersion { .. } => "E0103",
             Error::InvalidHeader { .. } => "E0104",
             Error::UnknownDepType { .. } => "E0105",
@@ -239,6 +275,11 @@ impl Error {
             Error::DuplicateProvenance { .. } => "E0113",
             Error::InvalidWorkspaceHash { .. } => "E0114",
             Error::LazyIndexCorrupt { .. } => "E0115",
+            Error::NonCanonicalVarint { .. } => "E0116",
+            Error::InvalidUtf8 { .. } => "E0117",
+            Error::DigestTooLong { .. } => "E0118",
+            Error::ContentIdCollision(_) => "E0119",
+            Error::MultipleParseErrors { .. } => "E0121",
             // Digest: E0200-E0299
             Error::PayloadDigestMismatch { .. } => "E0201",
             Error::DigestMismatch { .. } => "E0202",
@@ -246,12 +287,14 @@ impl Error {
             Error::PatchDigestMismatch { .. } => "E0204",
             Error::ArtifactDigestMismatch { .. } => "E0205",
             Error::ScriptDigestMismatch { .. } => "E0206",
+            Error::MissingDigest => "E0207",
             // Signature: E0300-E0399
             Error::InvalidSignature { .. } => "E0301",
             Error::TrustRootExpired { .. } => "E0302",
             Error::MissingTrustRoot => "E0303",
             Error::TrustRootVerificationFailed { .. } => "E0304",
             Error::TrustRootRotationInvalid { .. } => "E0305",
+            Error::RotationSignatureInvalid { .. } => "E0306",
             // Lint: E0400-E0499
             Error::PhantomDependency { .. } => "E0401",
             Error::OrphanPatchHash { .. } => "E0402",
@@ -286,6 +329,39 @@ impl Error {
             Error::ImportFailed { .. } => "E0804",
         }
     }
+
+    /// Optional actionable hint for the CLI to print below the error.
+    #[must_use]
+    pub fn hint(&self) -> Option<&'static str> {
+        match self {
+            Error::UnknownPayloadVersion { .. } => Some(
+                "the 0.x payload format is no longer readable; re-run 'hlock import' on the upstream manifest",
+            ),
+            Error::MissingDigest => Some(
+                "re-serialize with 'hlock digest --write <file>' to attach a whole-file digest",
+            ),
+            Error::DuplicateDigestDirective => {
+                Some("keep exactly one @digest directive, at the end of the file")
+            }
+            Error::ContentIdCollision(_) => {
+                Some("collision is cryptographically implausible; the file is likely hand-edited")
+            }
+            Error::MissingContentId { .. } => {
+                Some("a dependency edge references a package that is not in the lockfile")
+            }
+            Error::InvalidBase64 { .. } => Some("payload lines must be unpadded URL-safe base64"),
+            Error::MissingTrustRoot => Some(
+                "add a trust root with 'hlock trust add' or regenerate via 'hlock init --with-trust-root'",
+            ),
+            Error::RotationSignatureInvalid { .. } => Some(
+                "rotations must be signed by the outgoing root key: 'hlock trust rotate' produces valid records",
+            ),
+            Error::NetworkError { .. } => Some(
+                "check connectivity; use the offline variant of this command if the registry is unreachable",
+            ),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -305,9 +381,22 @@ mod tests {
             Error::Io(io::Error::other("boom")),
             Error::MissingDelimiter { line_number: 1 },
             Error::InvalidBase64 { line_number: 2 },
+            Error::PayloadTruncated { line_number: 33 },
             Error::UnknownPayloadVersion {
                 line_number: 3,
                 version: 9,
+                supported: crate::payload::PAYLOAD_VERSION,
+            },
+            Error::NonCanonicalVarint { line_number: 30 },
+            Error::InvalidUtf8 {
+                line_number: 31,
+                field: "name",
+            },
+            Error::DigestTooLong { len: 300 },
+            Error::ContentIdCollision("a and b".into()),
+            Error::MultipleParseErrors {
+                count: 2,
+                first: Box::new(Error::MissingDelimiter { line_number: 5 }),
             },
             Error::PayloadDigestMismatch { line_number: 4 },
             Error::InvalidDependencyIndex {
@@ -417,6 +506,7 @@ mod tests {
     fn merge_variants() -> Vec<Error> {
         vec![
             Error::DuplicateDigestDirective,
+            Error::MissingDigest,
             Error::MergeConflict {
                 package_name: "p".into(),
                 description: "clash".into(),
@@ -485,6 +575,7 @@ mod tests {
             Error::TrustRootRotationInvalid {
                 reason: "bad rotation".into(),
             },
+            Error::RotationSignatureInvalid { key_id: "k".into() },
             Error::InvalidVexStatus {
                 line_number: 14,
                 status: "maybe".into(),
@@ -504,7 +595,7 @@ mod tests {
         let codes: Vec<&'static str> = variants.iter().map(Error::error_code).collect();
         assert_eq!(
             codes.len(),
-            53,
+            61,
             "expected the full variant list, got {}",
             codes.len()
         );
@@ -581,5 +672,32 @@ mod tests {
         let err: Error = io::Error::other("disk").into();
         assert!(matches!(err, Error::Io(_)));
         assert!(err.to_string().contains("disk"));
+    }
+
+    #[test]
+    fn hints_are_actionable_where_present() {
+        assert!(Error::MissingDigest.hint().is_some());
+        assert!(
+            Error::UnknownPayloadVersion {
+                line_number: 1,
+                version: 8,
+                supported: crate::payload::PAYLOAD_VERSION
+            }
+            .hint()
+            .is_some()
+        );
+        assert!(Error::Io(io::Error::other("x")).hint().is_none());
+    }
+
+    #[test]
+    fn unknown_payload_version_message_mentions_migration() {
+        let err = Error::UnknownPayloadVersion {
+            line_number: 3,
+            version: 8,
+            supported: crate::payload::PAYLOAD_VERSION,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("0x08"), "{msg}");
+        assert!(msg.contains("hlock >= 1.0"), "{msg}");
     }
 }
