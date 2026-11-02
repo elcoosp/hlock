@@ -1,9 +1,73 @@
 //! `audit` command implementation.
+//!
+//! v1.0 adds `--baseline` / `--write-baseline` for a no-new-vulnerabilities
+//! policy: `--write-baseline <file>` records every current advisory id, and
+//! `--baseline <file>` fails only on advisories that are *not* in the record.
 
-use super::{Ctx, HashSet, Path, deserialize, policy, read_input, severity_label};
+use super::{
+    Ctx, HashSet, Path, deserialize, load_baseline_file, policy, read_input, severity_label,
+};
+use std::collections::BTreeSet;
+
+/// Arguments for the `audit` command.
+pub(crate) struct AuditArgs<'a> {
+    pub(crate) file: &'a Path,
+    pub(crate) online: bool,
+    pub(crate) merge: bool,
+    pub(crate) format: &'a str,
+    pub(crate) timeout: u64,
+    /// Compare against a baseline and fail only on *new* advisories.
+    pub(crate) baseline: Option<&'a Path>,
+    /// Write the current advisory ids as a new baseline and exit 0.
+    pub(crate) write_baseline: Option<&'a Path>,
+}
+
+/// One canonical advisory finding: `package/advisory_id`.
+fn finding_id(package: &str, advisory_id: &str) -> String {
+    format!("{package}/{advisory_id}")
+}
+
+/// Collects the canonical ids of every embedded + online finding.
+pub(crate) fn collect_finding_ids(
+    report: &hlock::policy::AuditReport,
+    online_vulns: &[hlock::osv::OsvVulnerability],
+) -> BTreeSet<String> {
+    let mut ids: BTreeSet<String> = report
+        .all_advisories()
+        .map(|a| finding_id(&a.package, &a.advisory_id))
+        .collect();
+    for v in online_vulns {
+        ids.insert(v.id.clone());
+    }
+    ids
+}
+
+/// Writes the current findings as a baseline file.
+fn write_baseline_file(path: &Path, ids: &BTreeSet<String>) {
+    let json = serde_json::json!({
+        "schema": "hlock/baseline/v1",
+        "advisory_ids": ids.iter().cloned().collect::<Vec<_>>(),
+    });
+    if let Err(e) = std::fs::write(
+        path,
+        serde_json::to_string_pretty(&json).unwrap_or_default(),
+    ) {
+        eprintln!("Error writing baseline {}: {e}", path.display());
+        std::process::exit(2);
+    }
+}
 
 /// Runs the `audit` command.
-pub(crate) fn run(file: &Path, online: bool, merge: bool, format: &str, timeout: u64, ctx: Ctx) {
+pub(crate) fn run(args: &AuditArgs<'_>, ctx: Ctx) {
+    let AuditArgs {
+        file,
+        online,
+        merge,
+        format,
+        timeout,
+        baseline,
+        write_baseline,
+    } = args;
     let Ctx { quiet, verbose, .. } = ctx;
 
     if verbose {
@@ -34,15 +98,37 @@ pub(crate) fn run(file: &Path, online: bool, merge: bool, format: &str, timeout:
         );
     }
 
-    let (online_vulns, online_errors) = if online {
-        query_online(&lockfile, timeout, verbose)
+    let (online_vulns, online_errors) = if *online {
+        query_online(&lockfile, *timeout, verbose)
     } else {
         (Vec::new(), Vec::new())
     };
 
-    if format == "json" {
+    let current_ids = collect_finding_ids(&report, &online_vulns);
+
+    // `--write-baseline` short-circuits: record and exit successfully.
+    if let Some(path) = write_baseline {
+        write_baseline_file(path, &current_ids);
+        if !quiet {
+            println!(
+                "Baseline written to {} ({} advisories)",
+                path.display(),
+                current_ids.len()
+            );
+        }
+        return;
+    }
+
+    // `--baseline`: compute the delta against the recorded ids.
+    let baseline_ids = baseline.map(load_baseline_file);
+    let new_ids: BTreeSet<String> = match &baseline_ids {
+        Some(recorded) => current_ids.difference(recorded).cloned().collect(),
+        None => BTreeSet::new(),
+    };
+
+    if *format == "json" {
         owo_colors::set_override(false);
-        let json = audit_json(&report, &online_vulns, &online_errors);
+        let json = audit_json(&report, &online_vulns, &online_errors, &new_ids);
         if !quiet {
             println!("{json}");
         }
@@ -52,16 +138,22 @@ pub(crate) fn run(file: &Path, online: bool, merge: bool, format: &str, timeout:
             &lockfile,
             &online_vulns,
             &online_errors,
-            merge,
-            online,
+            *merge,
+            *online,
+            &new_ids,
             ctx,
         );
     }
 
-    let has_critical_or_high =
-        report.has_critical_or_high() || online_vulns.iter().any(is_crit_high);
-    if has_critical_or_high {
+    if !new_ids.is_empty() {
         std::process::exit(1);
+    }
+    if baseline_ids.is_none() {
+        let has_critical_or_high =
+            report.has_critical_or_high() || online_vulns.iter().any(is_crit_high);
+        if has_critical_or_high {
+            std::process::exit(1);
+        }
     }
 }
 
@@ -109,6 +201,7 @@ fn audit_json(
     report: &hlock::policy::AuditReport,
     online_vulns: &[hlock::osv::OsvVulnerability],
     online_errors: &[String],
+    new_ids: &BTreeSet<String>,
 ) -> String {
     let embedded: Vec<serde_json::Value> = report
         .all_advisories()
@@ -140,11 +233,13 @@ fn audit_json(
         "embedded": embedded,
         "online": online_json,
         "online_errors": online_errors,
+        "new_vs_baseline": new_ids.iter().cloned().collect::<Vec<_>>(),
     }))
     .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
 }
 
 /// Prints the text audit report.
+#[allow(clippy::too_many_arguments)] // renderer parameters are all used
 fn audit_text(
     report: &hlock::policy::AuditReport,
     lockfile: &hlock::Lockfile,
@@ -152,6 +247,7 @@ fn audit_text(
     online_errors: &[String],
     merge: bool,
     online: bool,
+    new_ids: &BTreeSet<String>,
     ctx: Ctx,
 ) {
     let Ctx {
@@ -159,12 +255,18 @@ fn audit_text(
         color_enabled,
         ..
     } = ctx;
+    let is_new = |package: &str, id: &str| new_ids.contains(&finding_id(package, id));
     for adv in report.all_advisories() {
         let sev_str = severity_label(adv.severity, color_enabled);
+        let marker = if is_new(&adv.package, &adv.advisory_id) {
+            " [NEW]"
+        } else {
+            ""
+        };
         if !quiet {
             println!(
-                "{:10}{:16}{}   {}   (embedded)",
-                sev_str, adv.package, adv.advisory_id, adv.affected_versions
+                "{:10}{:16}{}{}   {}   (embedded)",
+                sev_str, adv.package, adv.advisory_id, marker, adv.affected_versions
             );
         }
     }
@@ -182,17 +284,26 @@ fn audit_text(
             let sev = hlock::osv::osv_severity(vuln);
             let sev_str = severity_label(sev, color_enabled);
             let fixed = hlock::osv::find_fixed_version(vuln);
-            let fixed_str = fixed.as_deref().unwrap_or("—");
+            let fixed_str = fixed.as_deref().unwrap_or("-");
+            let marker = if new_ids.contains(&vuln.id) {
+                " [NEW]"
+            } else {
+                ""
+            };
             if !quiet {
                 println!(
-                    "{:10}{}   {}   (online, fixed: {})",
-                    sev_str, vuln.id, vuln.summary, fixed_str
+                    "{:10}{}{}   {}   (online, fixed: {})",
+                    sev_str, vuln.id, marker, vuln.summary, fixed_str
                 );
             }
         }
     }
 
     if !quiet {
+        if !new_ids.is_empty() {
+            println!();
+            println!("{} new advisories since baseline", new_ids.len());
+        }
         println!("---");
         let crit_high = report.critical.len() + report.high.len();
         let online_crit_high = online_vulns.iter().filter(|v| is_crit_high(v)).count();
