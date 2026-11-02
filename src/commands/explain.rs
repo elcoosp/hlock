@@ -158,13 +158,111 @@ fn render_advisory(
     }
 }
 
+/// Levenshtein edit distance between two strings (small, allocation-light).
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+/// Best matching known rule name within edit distance 2, if any.
+fn closest_rule(input: &str) -> Option<&'static str> {
+    hlock::rule_registry()
+        .iter()
+        .map(|m| m.name)
+        .min_by_key(|name| levenshtein(input, name))
+        .filter(|name| levenshtein(input, name) <= 2)
+}
+
+/// Renders the rule registry as a table (`explain --list [filter]`).
+fn render_rule_list(filter: Option<&str>, format: &str, quiet: bool, color_enabled: bool) {
+    let registry = hlock::rule_registry();
+    let rules: Vec<_> = registry
+        .iter()
+        .filter(|m| filter.is_none_or(|f| m.name.contains(f) || m.category.as_str().contains(f)))
+        .collect();
+
+    if rules.is_empty() {
+        eprintln!("Error: no rule matches filter '{filter:?}'.");
+        std::process::exit(1);
+    }
+
+    if output::parse_format(format) == output::OutputFormat::Json {
+        if !quiet {
+            let json = serde_json::json!({
+                "count": rules.len(),
+                "rules": rules.iter().map(|m| serde_json::json!({
+                    "name": m.name,
+                    "severity": match m.severity {
+                        hlock::lint::LintSeverity::Error => "error",
+                        hlock::lint::LintSeverity::Warning => "warning",
+                        hlock::lint::LintSeverity::Info => "info",
+                    },
+                    "category": m.category.as_str(),
+                    "summary": m.summary,
+                })).collect::<Vec<_>>(),
+            });
+            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        }
+        return;
+    }
+
+    if quiet {
+        return;
+    }
+    let bold = output::styler(color_enabled, output::Style::Bold);
+    let cyan = output::styler(color_enabled, output::Style::Cyan);
+    println!("{} ({} rules)", bold("Lint rule registry"), rules.len());
+    println!();
+    for m in &rules {
+        let sev = match m.severity {
+            hlock::lint::LintSeverity::Error => "ERROR  ",
+            hlock::lint::LintSeverity::Warning => "WARN   ",
+            hlock::lint::LintSeverity::Info => "INFO   ",
+        };
+        println!(
+            "  {} {:20} {:16} {}",
+            sev,
+            bold(m.name),
+            cyan(m.category.as_str()),
+            m.summary
+        );
+    }
+}
+
 /// Runs the `explain` command.
-pub(crate) fn run(rule_or_id: &str, file: Option<&Path>, format: &str, ctx: Ctx) {
+pub(crate) fn run(
+    rule_or_id: Option<&str>,
+    list: bool,
+    file: Option<&Path>,
+    format: &str,
+    ctx: Ctx,
+) {
     let Ctx {
         quiet,
         color_enabled,
         ..
     } = ctx;
+
+    if list {
+        render_rule_list(rule_or_id, format, quiet, color_enabled);
+        return;
+    }
+
+    let Some(rule_or_id) = rule_or_id else {
+        eprintln!("Error: provide a rule or advisory id, or use --list.");
+        std::process::exit(2);
+    };
 
     if let Some(explanation) = explain_rule(rule_or_id) {
         render_rule(rule_or_id, &explanation, format, quiet, color_enabled);
@@ -180,6 +278,9 @@ pub(crate) fn run(rule_or_id: &str, file: Option<&Path>, format: &str, ctx: Ctx)
     }
 
     eprintln!("Error: '{rule_or_id}' not found as a rule or advisory.");
-    eprintln!("Hint: Use --file <lockfile> to look up advisory IDs.");
+    if let Some(guess) = closest_rule(rule_or_id) {
+        eprintln!("Did you mean '{guess}'?");
+    }
+    eprintln!("Hint: run 'hlock explain --list' to see all rules.");
     std::process::exit(1);
 }
