@@ -14,7 +14,7 @@ fn write_temp_file(name: &str, content: &str) -> PathBuf {
 }
 
 fn make_lockfile_with_issues() -> String {
-    let mut lf = hlock::Lockfile {
+    let lf = hlock::Lockfile {
         sources: vec![
             hlock::Source::Git("git+https://github.com/evil/pkg.git".to_string()),
             hlock::Source::Registry("https://registry.npmjs.org/".to_string()),
@@ -71,7 +71,7 @@ fn make_lockfile_with_issues() -> String {
         }],
         ..Default::default()
     };
-    hlock::serialize(&mut lf).unwrap()
+    hlock::serialize(&lf).unwrap()
 }
 
 #[test]
