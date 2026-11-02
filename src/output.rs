@@ -136,6 +136,7 @@ impl C<'_> {
             self.text.to_string()
         }
     }
+    #[allow(dead_code)]
     pub fn b(&self) -> String {
         if self.on {
             use owo_colors::OwoColorize;
