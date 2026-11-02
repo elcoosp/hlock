@@ -49,6 +49,84 @@ impl LintReport {
 pub trait LintRule: Send + Sync {
     fn name(&self) -> &str;
     fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding>;
+
+    /// Static documentation for the rule: the single source of truth that
+    /// `lint`, `explain --list` and the docs all render. Rule names can no
+    /// longer drift between the linter and its explanations.
+    fn metadata(&self) -> RuleMetadata;
+}
+
+/// Static documentation for a lint rule.
+#[derive(Debug, Clone, Copy)]
+pub struct RuleMetadata {
+    /// Canonical rule name (matches [`LintFinding::rule`] and `--rule`).
+    pub name: &'static str,
+    /// Severity of the findings this rule emits.
+    pub severity: LintSeverity,
+    /// Functional category.
+    pub category: RuleCategory,
+    /// One-line summary shown by `explain --list`.
+    pub summary: &'static str,
+}
+
+/// Functional category of a lint rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuleCategory {
+    /// Bit-for-bit reproducibility of installs.
+    Reproducibility,
+    /// Integrity hashes, digest strength, attestations.
+    Integrity,
+    /// Dependency semantics (peer/dev/runtime confusion).
+    Semantics,
+    /// Known vulnerabilities.
+    Security,
+    /// License presence and policy compliance.
+    Licensing,
+    /// Key management and trust chain.
+    Trust,
+}
+
+impl RuleCategory {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Reproducibility => "reproducibility",
+            Self::Integrity => "integrity",
+            Self::Semantics => "semantics",
+            Self::Security => "security",
+            Self::Licensing => "licensing",
+            Self::Trust => "trust",
+        }
+    }
+}
+
+/// Metadata of every rule in the default set, in registry order.
+///
+/// This is the table `explain --list` renders; keep it in sync with
+/// [`lint_default`].
+#[must_use]
+pub fn rule_registry() -> Vec<RuleMetadata> {
+    let rules: Vec<Box<dyn LintRule>> = vec![
+        Box::new(NoGitUrls),
+        Box::new(RequireIntegrity),
+        Box::new(NoSha1),
+        Box::new(NoPeerAsRuntime),
+        Box::new(MaxDepth { max: 5 }),
+        Box::new(RequireAttestation),
+        Box::new(NoKnownVulnerabilities),
+        Box::new(RequireLicense),
+        Box::new(DenyCopyleft),
+        Box::new(RequireTrustRoot),
+        Box::new(NoExpiredKeys),
+        Box::new(DenyPostinstall),
+    ];
+    rules.iter().map(|r| r.metadata()).collect()
+}
+
+/// Looks up one rule's metadata by exact name.
+#[must_use]
+pub fn rule_metadata_by_name(name: &str) -> Option<RuleMetadata> {
+    rule_registry().into_iter().find(|m| m.name == name)
 }
 
 #[must_use]
@@ -77,6 +155,14 @@ impl LintRule for NoGitUrls {
     fn name(&self) -> &'static str {
         "no-git-urls"
     }
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            name: "no-git-urls",
+            severity: LintSeverity::Error,
+            category: RuleCategory::Reproducibility,
+            summary: "package sourced from a mutable git URL instead of a versioned registry tarball",
+        }
+    }
     fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
         let mut findings = Vec::new();
         for pkg in &lockfile.packages {
@@ -101,6 +187,14 @@ pub struct RequireIntegrity;
 impl LintRule for RequireIntegrity {
     fn name(&self) -> &'static str {
         "require-integrity"
+    }
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            name: "require-integrity",
+            severity: LintSeverity::Error,
+            category: RuleCategory::Integrity,
+            summary: "package has no integrity hash, so tampered artifacts cannot be detected",
+        }
     }
     fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
         let mut findings = Vec::new();
@@ -127,6 +221,14 @@ impl LintRule for NoSha1 {
     fn name(&self) -> &'static str {
         "no-sha1"
     }
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            name: "no-sha1",
+            severity: LintSeverity::Warning,
+            category: RuleCategory::Integrity,
+            summary: "package integrity uses SHA-1, which is collision-broken",
+        }
+    }
     fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
         let mut findings = Vec::new();
         for pkg in &lockfile.packages {
@@ -150,6 +252,14 @@ pub struct NoPeerAsRuntime;
 impl LintRule for NoPeerAsRuntime {
     fn name(&self) -> &'static str {
         "no-peer-as-runtime"
+    }
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            name: "no-peer-as-runtime",
+            severity: LintSeverity::Warning,
+            category: RuleCategory::Semantics,
+            summary: "declared as runtime dependency but resolved as a peer, hiding install failures",
+        }
     }
     fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
         let mut findings = Vec::new();
@@ -180,6 +290,14 @@ impl LintRule for MaxDepth {
     fn name(&self) -> &'static str {
         "max-depth"
     }
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            name: "max-depth",
+            severity: LintSeverity::Warning,
+            category: RuleCategory::Reproducibility,
+            summary: "dependency chain exceeds the configured depth (default 5), widening the audit surface",
+        }
+    }
     fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
         let mut findings = Vec::new();
         for prov in &lockfile.provenance {
@@ -204,6 +322,14 @@ pub struct RequireAttestation;
 impl LintRule for RequireAttestation {
     fn name(&self) -> &'static str {
         "require-attestation"
+    }
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            name: "require-attestation",
+            severity: LintSeverity::Info,
+            category: RuleCategory::Integrity,
+            summary: "package ships no SLSA/in-toto attestation for its artifacts",
+        }
     }
     fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
         let mut findings = Vec::new();
@@ -262,6 +388,14 @@ impl LintRule for NoKnownVulnerabilities {
     fn name(&self) -> &'static str {
         "no-known-vulnerabilities"
     }
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            name: "no-known-vulnerabilities",
+            severity: LintSeverity::Error,
+            category: RuleCategory::Security,
+            summary: "embedded advisory matches an installed package version",
+        }
+    }
     fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
         let mut findings = Vec::new();
         let report = lockfile.audit();
@@ -289,6 +423,14 @@ impl LintRule for RequireLicense {
     fn name(&self) -> &'static str {
         "require-license"
     }
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            name: "require-license",
+            severity: LintSeverity::Error,
+            category: RuleCategory::Licensing,
+            summary: "package has no declared license, so redistribution terms are unknown",
+        }
+    }
     fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
         lockfile
             .unlicensed_packages()
@@ -308,6 +450,14 @@ pub struct DenyCopyleft;
 impl LintRule for DenyCopyleft {
     fn name(&self) -> &'static str {
         "deny-copyleft"
+    }
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            name: "deny-copyleft",
+            severity: LintSeverity::Warning,
+            category: RuleCategory::Licensing,
+            summary: "package is licensed under a strong copyleft license (GPL family)",
+        }
     }
     fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
         let mut findings = Vec::new();
@@ -341,6 +491,14 @@ impl LintRule for RequireTrustRoot {
     fn name(&self) -> &'static str {
         "require-trust-root"
     }
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            name: "require-trust-root",
+            severity: LintSeverity::Error,
+            category: RuleCategory::Trust,
+            summary: "lockfile has no trust root, so signatures cannot be pinned to a key set",
+        }
+    }
     fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
         let roots = lockfile.trust_roots_for_role(crate::policy::TrustRole::Root);
         if roots.is_empty() {
@@ -363,6 +521,14 @@ pub struct NoExpiredKeys;
 impl LintRule for NoExpiredKeys {
     fn name(&self) -> &'static str {
         "no-expired-keys"
+    }
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            name: "no-expired-keys",
+            severity: LintSeverity::Error,
+            category: RuleCategory::Trust,
+            summary: "a trust root key is expired and can no longer verify signatures",
+        }
     }
     fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
         let mut findings = Vec::new();
@@ -392,6 +558,14 @@ pub struct DenyPostinstall;
 impl LintRule for DenyPostinstall {
     fn name(&self) -> &'static str {
         "deny-postinstall"
+    }
+    fn metadata(&self) -> RuleMetadata {
+        RuleMetadata {
+            name: "deny-postinstall",
+            severity: LintSeverity::Warning,
+            category: RuleCategory::Security,
+            summary: "package declares a lifecycle script (preinstall/postinstall) that runs arbitrary code",
+        }
     }
     fn check(&self, lockfile: &Lockfile) -> Vec<LintFinding> {
         let mut findings = Vec::new();
@@ -455,6 +629,14 @@ mod tests {
         fn name(&self) -> &'static str {
             "always-error"
         }
+        fn metadata(&self) -> RuleMetadata {
+            RuleMetadata {
+                name: "always-error",
+                severity: LintSeverity::Error,
+                category: RuleCategory::Security,
+                summary: "test rule that always errors",
+            }
+        }
         fn check(&self, _lockfile: &Lockfile) -> Vec<LintFinding> {
             vec![LintFinding {
                 rule: "always-error".to_string(),
@@ -469,6 +651,14 @@ mod tests {
     impl LintRule for AlwaysWarning {
         fn name(&self) -> &'static str {
             "always-warning"
+        }
+        fn metadata(&self) -> RuleMetadata {
+            RuleMetadata {
+                name: "always-warning",
+                severity: LintSeverity::Warning,
+                category: RuleCategory::Security,
+                summary: "test rule that always warns",
+            }
         }
         fn check(&self, _lockfile: &Lockfile) -> Vec<LintFinding> {
             vec![LintFinding {
