@@ -3,7 +3,7 @@ use hlock::policy::LicenseEntry;
 
 #[test]
 fn test_license_roundtrip() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
         licenses: vec![
             LicenseEntry {
@@ -26,7 +26,7 @@ fn test_license_roundtrip() {
         ..Lockfile::default()
     };
 
-    let serialized = lockfile::serialize(&mut lockfile).unwrap();
+    let serialized = lockfile::serialize(&lockfile).unwrap();
     println!("Serialized:\n{serialized}");
 
     // The serialized output should have an empty line after header
