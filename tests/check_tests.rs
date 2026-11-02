@@ -14,7 +14,7 @@ fn write_temp_file(name: &str, content: &str) -> PathBuf {
 }
 
 fn make_clean_lockfile() -> String {
-    let mut lf = hlock::Lockfile {
+    let lf = hlock::Lockfile {
         sources: vec![hlock::Source::Registry(
             "https://registry.npmjs.org/".to_string(),
         )],
@@ -44,11 +44,11 @@ fn make_clean_lockfile() -> String {
         }],
         ..Default::default()
     };
-    hlock::serialize(&mut lf).unwrap()
+    hlock::serialize(&lf).unwrap()
 }
 
 fn make_dirty_lockfile() -> String {
-    let mut lf = hlock::Lockfile {
+    let lf = hlock::Lockfile {
         sources: vec![
             hlock::Source::Registry("https://registry.npmjs.org/".to_string()),
             hlock::Source::Git("git+https://github.com/evil/pkg.git".to_string()),
@@ -70,7 +70,7 @@ fn make_dirty_lockfile() -> String {
         }],
         ..Default::default()
     };
-    hlock::serialize(&mut lf).unwrap()
+    hlock::serialize(&lf).unwrap()
 }
 
 #[test]
