@@ -14,7 +14,7 @@ fn write_temp_file(name: &str, content: &str) -> PathBuf {
 }
 
 fn make_simple_lockfile() -> String {
-    let mut lf = hlock::Lockfile {
+    let lf = hlock::Lockfile {
         sources: vec![hlock::Source::Registry(
             "https://registry.npmjs.org/".to_string(),
         )],
@@ -44,7 +44,7 @@ fn make_simple_lockfile() -> String {
         }],
         ..Default::default()
     };
-    hlock::serialize(&mut lf).unwrap()
+    hlock::serialize(&lf).unwrap()
 }
 
 fn strip_ansi(s: &str) -> String {
@@ -74,7 +74,7 @@ fn test_color_never_no_ansi() {
     let path = write_temp_file("color_never.hlock", &serialized);
     let output = Command::new(hlock_bin())
         .arg("--color=never")
-        .arg("info")
+        .arg("stats")
         .arg(&path)
         .output()
         .expect("failed to run hlock");
@@ -92,7 +92,7 @@ fn test_color_always_has_ansi() {
     let path = write_temp_file("color_always.hlock", &serialized);
     let output = Command::new(hlock_bin())
         .arg("--color=always")
-        .arg("info")
+        .arg("verify")
         .arg(&path)
         .output()
         .expect("failed to run hlock");
@@ -110,7 +110,7 @@ fn test_json_no_ansi_even_with_color_always() {
     let path = write_temp_file("color_json.hlock", &serialized);
     let output = Command::new(hlock_bin())
         .arg("--color=always")
-        .arg("info")
+        .arg("stats")
         .arg(&path)
         .arg("--format=json")
         .output()
@@ -142,12 +142,12 @@ fn test_verify_color_never() {
 }
 
 #[test]
-fn test_info_never_still_has_content() {
+fn test_stats_never_still_has_content() {
     let serialized = make_simple_lockfile();
-    let path = write_temp_file("info_content.hlock", &serialized);
+    let path = write_temp_file("stats_content.hlock", &serialized);
     let output = Command::new(hlock_bin())
         .arg("--color=never")
-        .arg("info")
+        .arg("stats")
         .arg(&path)
         .output()
         .expect("failed to run hlock");
@@ -157,7 +157,7 @@ fn test_info_never_still_has_content() {
         "should contain Packages header even without color, got: {stdout}"
     );
     assert!(
-        stdout.contains("Sources:"),
-        "should contain Sources header, got: {stdout}"
+        stdout.contains("Directives:"),
+        "should contain Directives header, got: {stdout}"
     );
 }
