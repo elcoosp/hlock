@@ -68,10 +68,17 @@ pub(crate) fn run(
         .collect();
 
     let transitive_names: Vec<String> = if transitive {
+        let graph = match hlock::Graph::new(&lockfile) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("[{}] Graph error: {}", e.error_code(), e);
+                std::process::exit(2);
+            }
+        };
         match dep_type {
-            "runtime" => hlock::runtime_dependents_of(&lockfile, package),
-            "dev" => hlock::dev_dependents_of(&lockfile, package),
-            _ => hlock::dependents_of(&lockfile, package),
+            "runtime" => graph.runtime_dependents_of(package),
+            "dev" => graph.dev_dependents_of(package),
+            _ => graph.dependents_of(package),
         }
     } else {
         Vec::new()
