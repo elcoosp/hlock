@@ -68,10 +68,17 @@ pub(crate) fn run(
         .collect();
 
     let transitive_names: HashSet<String> = if transitive {
+        let graph = match hlock::Graph::new(&lockfile) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("[{}] Graph error: {}", e.error_code(), e);
+                std::process::exit(2);
+            }
+        };
         match dep_type {
-            "runtime" => hlock::runtime_deps(&lockfile, package),
-            "dev" => hlock::dev_deps(&lockfile, package),
-            _ => hlock::transitive_deps(&lockfile, package),
+            "runtime" => graph.runtime_deps(package),
+            "dev" => graph.dev_deps(package),
+            _ => graph.transitive_deps(package),
         }
     } else {
         HashSet::new()
