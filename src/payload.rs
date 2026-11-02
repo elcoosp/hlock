@@ -1,6 +1,13 @@
 use crate::error::Error;
 use crate::lockfile::{Attestation, PeerResolution, SlsaPredicate};
 
+/// Wire-format payload version for the 1.0 series.
+///
+/// 0.x wrote `0x08`; the 1.0 format changes content-id derivation to
+/// domain-separated BLAKE3-64 and tightens decode strictness, so the version
+/// byte moves to `0x10`. Old lockfiles are rejected with a migration hint.
+pub const PAYLOAD_VERSION: u8 = 0x10;
+
 #[derive(Debug, Clone)]
 pub struct HashPayload {
     pub algo_id: u8,
@@ -64,16 +71,22 @@ pub struct PayloadData {
     pub patch_hash: Option<(u8, Vec<u8>)>,
 }
 
-#[must_use]
-pub fn pack_payload(data: &PayloadData) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(128);
+///
+/// # Errors
+///
+/// Returns `Err` if payload validation fails.
+pub fn pack_payload(data: &PayloadData) -> Result<Vec<u8>, Error> {
+    validate_payload(data)?;
+    // Empirical sizing: an empty payload is 33 bytes (version + 32-byte
+    // trailer); typical packages land in the 128-512 byte range.
+    let mut buf = Vec::with_capacity(160);
 
-    buf.push(0x08);
+    buf.push(PAYLOAD_VERSION);
     pack_logical_name(&mut buf, data.logical_name.as_ref());
-    buf.extend(crate::varint::encode_varint(data.source_idx as u64));
-    buf.extend(crate::varint::encode_varint(data.major));
-    buf.extend(crate::varint::encode_varint(data.minor));
-    buf.extend(crate::varint::encode_varint(data.patch));
+    crate::varint::push_varint(&mut buf, data.source_idx as u64);
+    crate::varint::push_varint(&mut buf, data.major);
+    crate::varint::push_varint(&mut buf, data.minor);
+    crate::varint::push_varint(&mut buf, data.patch);
     pack_hashes(&mut buf, &data.hashes);
     pack_features(&mut buf, &data.features);
     pack_resolved_peers(&mut buf, &data.resolved_peers);
@@ -87,25 +100,61 @@ pub fn pack_payload(data: &PayloadData) -> Vec<u8> {
 
     let hash = blake3::hash(&buf);
     buf.extend_from_slice(hash.as_bytes());
-    buf
+    Ok(buf)
+}
+
+/// Rejects payload data that cannot round-trip the wire format **before** any
+/// bytes are written: digests must fit the 1-byte wire length and the patch
+/// hash must be exactly 32 bytes (fixed-width field).
+///
+/// # Errors
+/// Returns [`Error::DigestTooLong`] for oversized digests.
+fn validate_payload(data: &PayloadData) -> Result<(), Error> {
+    for hash in &data.hashes {
+        check_digest_len(&hash.digest)?;
+        if let Attestation::ExternalBundleSha256(bundle) = &hash.attestation {
+            check_digest_len(bundle)?;
+        }
+    }
+    for ex in &data.exports {
+        check_digest_len(&ex.digest)?;
+    }
+    for art in &data.artifacts {
+        check_digest_len(&art.digest)?;
+    }
+    for hook in &data.hook_hashes {
+        check_digest_len(&hook.digest)?;
+    }
+    if let Some((_, digest)) = &data.patch_hash {
+        check_digest_len(digest)?;
+    }
+    Ok(())
 }
 
 /// Appends a length-prefixed UTF-8 string field (varint length + raw bytes).
 fn push_str_field(buf: &mut Vec<u8>, s: &str) {
     let bytes = s.as_bytes();
-    buf.extend(crate::varint::encode_varint(bytes.len() as u64));
+    crate::varint::push_varint(buf, bytes.len() as u64);
     buf.extend_from_slice(bytes);
 }
 
 /// Appends a raw digest preceded by its one-byte length.
 ///
-/// The wire format stores digest lengths in a single byte. Lengths of 256 or
-/// more wrap modulo 256, exactly matching the wrapping of the historical
-/// `as u8` cast; such oversized digests can never round-trip because the
-/// trailer check in `unpack_payload` rejects them.
+/// The wire format stores digest lengths in a single byte; [`validate_payload`]
+/// has already rejected lengths of 256 or more, so the cast cannot truncate.
 fn push_digest(buf: &mut Vec<u8>, digest: &[u8]) {
-    buf.push(digest.len().to_le_bytes()[0]);
+    debug_assert!(digest.len() < 256, "validated by validate_payload");
+    #[allow(clippy::cast_possible_truncation)] // enforced by debug_assert + validate_payload
+    buf.push(digest.len() as u8);
     buf.extend_from_slice(digest);
+}
+
+/// Returns `Err` when `digest` cannot round-trip through the 1-byte wire length.
+fn check_digest_len(digest: &[u8]) -> Result<(), Error> {
+    if digest.len() >= 256 {
+        return Err(Error::DigestTooLong { len: digest.len() });
+    }
+    Ok(())
 }
 
 fn pack_logical_name(buf: &mut Vec<u8>, logical_name: Option<&String>) {
@@ -116,7 +165,7 @@ fn pack_logical_name(buf: &mut Vec<u8>, logical_name: Option<&String>) {
 }
 
 fn pack_hashes(buf: &mut Vec<u8>, hashes: &[HashPayload]) {
-    buf.extend(crate::varint::encode_varint(hashes.len() as u64));
+    crate::varint::push_varint(buf, hashes.len() as u64);
     for hash in hashes {
         buf.push(hash.algo_id);
         push_digest(buf, &hash.digest);
@@ -137,14 +186,14 @@ fn pack_hashes(buf: &mut Vec<u8>, hashes: &[HashPayload]) {
 }
 
 fn pack_features(buf: &mut Vec<u8>, features: &[String]) {
-    buf.extend(crate::varint::encode_varint(features.len() as u64));
+    crate::varint::push_varint(buf, features.len() as u64);
     for feat in features {
         push_str_field(buf, feat);
     }
 }
 
 fn pack_resolved_peers(buf: &mut Vec<u8>, peers: &[PeerResolution]) {
-    buf.extend(crate::varint::encode_varint(peers.len() as u64));
+    crate::varint::push_varint(buf, peers.len() as u64);
     for peer in peers {
         push_str_field(buf, &peer.peer_name);
         buf.extend_from_slice(&peer.satisfied_by_content_id.to_le_bytes());
@@ -153,7 +202,7 @@ fn pack_resolved_peers(buf: &mut Vec<u8>, peers: &[PeerResolution]) {
 }
 
 fn pack_deps(buf: &mut Vec<u8>, deps: &[DepPayload]) {
-    buf.extend(crate::varint::encode_varint(deps.len() as u64));
+    crate::varint::push_varint(buf, deps.len() as u64);
     for dep in deps {
         buf.extend_from_slice(&dep.content_id.to_le_bytes());
         buf.push(dep.dep_type);
@@ -161,17 +210,15 @@ fn pack_deps(buf: &mut Vec<u8>, deps: &[DepPayload]) {
             buf.push(dep.target_os.unwrap_or(0x00));
             buf.push(dep.target_arch.unwrap_or(0x00));
         }
-        buf.extend(crate::varint::encode_varint(
-            dep.req_feat_indices.len() as u64
-        ));
+        crate::varint::push_varint(buf, dep.req_feat_indices.len() as u64);
         for idx in &dep.req_feat_indices {
-            buf.extend(crate::varint::encode_varint(*idx as u64));
+            crate::varint::push_varint(buf, *idx as u64);
         }
     }
 }
 
 fn pack_peer_requirements(buf: &mut Vec<u8>, reqs: &[PeerReqPayload]) {
-    buf.extend(crate::varint::encode_varint(reqs.len() as u64));
+    crate::varint::push_varint(buf, reqs.len() as u64);
     for req in reqs {
         push_str_field(buf, &req.peer_name);
         push_str_field(buf, &req.version_range);
@@ -180,7 +227,7 @@ fn pack_peer_requirements(buf: &mut Vec<u8>, reqs: &[PeerReqPayload]) {
 }
 
 fn pack_platform_tags(buf: &mut Vec<u8>, tags: &[PlatformTagPayload]) {
-    buf.extend(crate::varint::encode_varint(tags.len() as u64));
+    crate::varint::push_varint(buf, tags.len() as u64);
     for tag in tags {
         buf.push(tag.os_id);
         buf.push(tag.arch_id);
@@ -188,7 +235,7 @@ fn pack_platform_tags(buf: &mut Vec<u8>, tags: &[PlatformTagPayload]) {
 }
 
 fn pack_exports(buf: &mut Vec<u8>, exports: &[ExportPayload]) {
-    buf.extend(crate::varint::encode_varint(exports.len() as u64));
+    crate::varint::push_varint(buf, exports.len() as u64);
     for ex in exports {
         push_str_field(buf, &ex.identifier);
         buf.push(ex.hash_algo);
@@ -197,7 +244,7 @@ fn pack_exports(buf: &mut Vec<u8>, exports: &[ExportPayload]) {
 }
 
 fn pack_artifacts(buf: &mut Vec<u8>, artifacts: &[ArtifactPayload]) {
-    buf.extend(crate::varint::encode_varint(artifacts.len() as u64));
+    crate::varint::push_varint(buf, artifacts.len() as u64);
     for art in artifacts {
         buf.push(art.os_id);
         buf.push(art.arch_id);
@@ -207,7 +254,7 @@ fn pack_artifacts(buf: &mut Vec<u8>, artifacts: &[ArtifactPayload]) {
 }
 
 fn pack_hook_hashes(buf: &mut Vec<u8>, hook_hashes: &[HookHashPayload]) {
-    buf.extend(crate::varint::encode_varint(hook_hashes.len() as u64));
+    crate::varint::push_varint(buf, hook_hashes.len() as u64);
     for sh in hook_hashes {
         push_str_field(buf, &sh.hook_type);
         buf.push(sh.hash_algo);
@@ -218,6 +265,11 @@ fn pack_hook_hashes(buf: &mut Vec<u8>, hook_hashes: &[HookHashPayload]) {
 fn pack_patch_hash(buf: &mut Vec<u8>, patch_hash: Option<&(u8, Vec<u8>)>) {
     match patch_hash {
         Some((algo, digest)) => {
+            debug_assert_eq!(
+                digest.len(),
+                32,
+                "patch hash must be exactly 32 bytes to round-trip the fixed-width wire field"
+            );
             buf.push(0x01);
             buf.push(*algo);
             buf.extend_from_slice(digest);
@@ -231,23 +283,26 @@ fn pack_patch_hash(buf: &mut Vec<u8>, patch_hash: Option<&(u8, Vec<u8>)>) {
 ///
 /// # Errors
 /// Returns [`Error::UnknownPayloadVersion`] when the leading version byte is not
-/// `0x08`; [`Error::InvalidBase64`] when the payload is shorter than 8 bytes,
-/// truncated mid-field, or its trailing digest block is not exactly 32 bytes;
+/// [`PAYLOAD_VERSION`]; [`Error::PayloadTruncated`] when the payload is shorter
+/// than a valid empty payload, truncated mid-field, or its trailing digest block
+/// is not exactly 32 bytes; [`Error::NonCanonicalVarint`] for overlong varints;
+/// [`Error::InvalidUtf8`] for string fields that are not UTF-8;
 /// [`Error::UnknownHashAlgorithm`], [`Error::UnknownAttestationType`], or
 /// [`Error::UnknownDepType`] when a type-id field carries an unrecognised value;
 /// and [`Error::PayloadDigestMismatch`] when the trailing BLAKE3 digest does not
 /// match the recomputed hash of the payload body.
 pub fn unpack_payload(bytes: &[u8], line_number: usize) -> Result<PayloadData, Error> {
     if bytes.len() < 8 {
-        return Err(Error::InvalidBase64 { line_number });
+        return Err(Error::PayloadTruncated { line_number });
     }
     let mut cursor = 0;
 
     let version = read_u8(bytes, &mut cursor, line_number)?;
-    if version != 0x08 {
+    if version != PAYLOAD_VERSION {
         return Err(Error::UnknownPayloadVersion {
             line_number,
             version,
+            supported: PAYLOAD_VERSION,
         });
     }
 
@@ -315,15 +370,12 @@ fn read_u8(bytes: &[u8], cursor: &mut usize, line_number: usize) -> Result<u8, E
     let byte = bytes
         .get(*cursor)
         .copied()
-        .ok_or(Error::InvalidBase64 { line_number })?;
+        .ok_or(Error::PayloadTruncated { line_number })?;
     *cursor += 1;
     Ok(byte)
 }
 
 /// Ensures `need` more bytes are available from `cursor` onwards.
-///
-/// Mirrors the historical `cursor + need > bytes.len()` guard without the
-/// potential overflow, so it never panics.
 fn require_available(
     bytes: &[u8],
     cursor: usize,
@@ -332,22 +384,22 @@ fn require_available(
 ) -> Result<(), Error> {
     match cursor.checked_add(need) {
         Some(end) if end <= bytes.len() => Ok(()),
-        _ => Err(Error::InvalidBase64 { line_number }),
+        _ => Err(Error::PayloadTruncated { line_number }),
     }
 }
 
-/// Reads one varint, reporting any decode failure as `InvalidBase64`.
+/// Reads one varint, mapping the typed decode failure onto the payload errors.
 fn read_varint_u64(bytes: &[u8], cursor: &mut usize, line_number: usize) -> Result<u64, Error> {
-    crate::varint::decode_varint(bytes, cursor).map_err(|_| Error::InvalidBase64 { line_number })
+    crate::varint::decode_varint(bytes, cursor).map_err(|err| match err {
+        crate::varint::VarintError::NonCanonical => Error::NonCanonicalVarint { line_number },
+        _ => Error::PayloadTruncated { line_number },
+    })
 }
 
 /// Reads one varint and converts it to a `usize`.
-///
-/// On 32-bit targets a varint wider than the pointer width is reported as
-/// `InvalidBase64` instead of being silently truncated.
 fn read_varint(bytes: &[u8], cursor: &mut usize, line_number: usize) -> Result<usize, Error> {
     let raw = read_varint_u64(bytes, cursor, line_number)?;
-    usize::try_from(raw).map_err(|_| Error::InvalidBase64 { line_number })
+    usize::try_from(raw).map_err(|_| Error::PayloadTruncated { line_number })
 }
 
 /// Reads an 8-byte little-endian `u64` at `cursor`, advancing the cursor by 8.
@@ -356,7 +408,7 @@ fn read_le_u64(bytes: &[u8], cursor: &mut usize, line_number: usize) -> Result<u
         .checked_add(8)
         .and_then(|end| bytes.get(*cursor..end))
         .and_then(|slice| <[u8; 8]>::try_from(slice).ok())
-        .ok_or(Error::InvalidBase64 { line_number })?;
+        .ok_or(Error::PayloadTruncated { line_number })?;
     *cursor += 8;
     Ok(u64::from_le_bytes(chunk))
 }
@@ -371,12 +423,15 @@ fn read_slice<'a>(
     let slice = cursor
         .checked_add(len)
         .and_then(|end| bytes.get(*cursor..end))
-        .ok_or(Error::InvalidBase64 { line_number })?;
+        .ok_or(Error::PayloadTruncated { line_number })?;
     *cursor += len;
     Ok(slice)
 }
 
-/// Reads `len` bytes and lossily converts them to a `String`.
+/// Reads `len` bytes and strictly converts them to a `String`.
+///
+/// 0.x silently replaced invalid UTF-8 with an empty string, corrupting names
+/// and feature tables; 1.0 rejects the payload.
 fn read_string(
     bytes: &[u8],
     cursor: &mut usize,
@@ -384,7 +439,12 @@ fn read_string(
     line_number: usize,
 ) -> Result<String, Error> {
     let slice = read_slice(bytes, cursor, len, line_number)?;
-    Ok(String::from_utf8(slice.to_vec()).unwrap_or_default())
+    std::str::from_utf8(slice)
+        .map(str::to_owned)
+        .map_err(|_| Error::InvalidUtf8 {
+            line_number,
+            field: "string",
+        })
 }
 
 /// Reads an optional string: `None` for a zero length, the decoded string otherwise.
@@ -670,7 +730,7 @@ fn verify_payload_digest(bytes: &[u8], cursor: usize, line_number: usize) -> Res
     let tail = bytes
         .get(cursor..)
         .and_then(|rest| <[u8; 32]>::try_from(rest).ok())
-        .ok_or(Error::InvalidBase64 { line_number })?;
+        .ok_or(Error::PayloadTruncated { line_number })?;
     let expected_hash = blake3::Hash::from_bytes(tail);
     if expected_hash != blake3::hash(&bytes[..cursor]) {
         return Err(Error::PayloadDigestMismatch { line_number });
@@ -703,14 +763,14 @@ mod tests {
     }
 
     #[test]
-    fn test_v12_version_byte() {
-        let packed = pack_payload(&empty_data());
-        assert_eq!(packed[0], 0x08);
+    fn test_v10_version_byte() {
+        let packed = pack_payload(&empty_data()).unwrap();
+        assert_eq!(packed[0], PAYLOAD_VERSION);
     }
 
     #[test]
-    fn test_v12_blake3_trailer() {
-        let packed = pack_payload(&empty_data());
+    fn test_v10_blake3_trailer() {
+        let packed = pack_payload(&empty_data()).unwrap();
         assert_eq!(packed.len(), 48);
         let trailer = &packed[packed.len() - 32..];
         let expected = blake3::hash(&packed[..packed.len() - 32]);
@@ -718,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn test_v12_blake3_roundtrip() {
+    fn test_v10_blake3_roundtrip() {
         let data = PayloadData {
             logical_name: Some("alias".to_string()),
             source_idx: 2,
@@ -758,7 +818,7 @@ mod tests {
             hook_hashes: vec![],
             patch_hash: None,
         };
-        let packed = pack_payload(&data);
+        let packed = pack_payload(&data).unwrap();
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert_eq!(unpacked.logical_name, Some("alias".to_string()));
         assert_eq!(unpacked.source_idx, 2);
@@ -773,7 +833,7 @@ mod tests {
 
     #[test]
     fn test_unpack_rejects_old_v07_payload() {
-        let mut bad_payload = pack_payload(&empty_data());
+        let mut bad_payload = pack_payload(&empty_data()).unwrap();
         bad_payload[0] = 0x07;
         assert!(matches!(
             unpack_payload(&bad_payload, 1),
@@ -782,6 +842,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::items_after_test_module)]
     fn test_pack_base_structure() {
         let data = PayloadData {
             logical_name: None,
@@ -804,8 +865,8 @@ mod tests {
             hook_hashes: vec![],
             patch_hash: None,
         };
-        let packed = pack_payload(&data);
-        assert_eq!(packed[0], 0x08);
+        let packed = pack_payload(&data).unwrap();
+        assert_eq!(packed[0], PAYLOAD_VERSION);
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert_eq!(unpacked.source_idx, 1);
         assert_eq!(unpacked.hashes.len(), 1);
@@ -836,7 +897,7 @@ mod tests {
             hook_hashes: vec![],
             patch_hash: None,
         };
-        let packed = pack_payload(&data);
+        let packed = pack_payload(&data).unwrap();
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert_eq!(unpacked.deps[0].content_id, 12_345_678);
         assert_eq!(unpacked.deps[0].dep_type, 0x00);
@@ -871,7 +932,7 @@ mod tests {
             hook_hashes: vec![],
             patch_hash: None,
         };
-        let packed = pack_payload(&data);
+        let packed = pack_payload(&data).unwrap();
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert_eq!(unpacked.features[0], "sync");
         assert_eq!(unpacked.deps[0].content_id, 99);
@@ -904,7 +965,7 @@ mod tests {
             hook_hashes: vec![],
             patch_hash: None,
         };
-        let packed = pack_payload(&data);
+        let packed = pack_payload(&data).unwrap();
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert!(
             matches!(&unpacked.hashes[0].attestation, Attestation::InlineSlsa(p) if p.builder == "github.com/actions")
@@ -934,7 +995,7 @@ mod tests {
             hook_hashes: vec![],
             patch_hash: None,
         };
-        let packed = pack_payload(&data);
+        let packed = pack_payload(&data).unwrap();
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert_eq!(unpacked.logical_name, Some("react-v18".to_string()));
         assert_eq!(unpacked.resolved_peers[0].peer_name, "react");
@@ -964,7 +1025,7 @@ mod tests {
             hook_hashes: vec![],
             patch_hash: None,
         };
-        let packed = pack_payload(&data);
+        let packed = pack_payload(&data).unwrap();
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert_eq!(unpacked.peer_requirements.len(), 1);
         assert_eq!(unpacked.peer_requirements[0].peer_name, "react");
@@ -1011,7 +1072,7 @@ mod tests {
             hook_hashes: vec![],
             patch_hash: None,
         };
-        let packed = pack_payload(&data);
+        let packed = pack_payload(&data).unwrap();
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert_eq!(unpacked.peer_requirements.len(), 2);
         assert_eq!(unpacked.peer_requirements[0].peer_name, "react");
@@ -1045,7 +1106,7 @@ mod tests {
             }],
             patch_hash: None,
         };
-        let packed = pack_payload(&data);
+        let packed = pack_payload(&data).unwrap();
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert_eq!(unpacked.hook_hashes.len(), 1);
         assert_eq!(unpacked.hook_hashes[0].hook_type, "postinstall");
@@ -1073,7 +1134,7 @@ mod tests {
             hook_hashes: vec![],
             patch_hash: Some((0x03, vec![0xBB; 32])),
         };
-        let packed = pack_payload(&data);
+        let packed = pack_payload(&data).unwrap();
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert_eq!(unpacked.patch_hash.as_ref().map(|(a, _)| *a), Some(0x03));
         assert_eq!(unpacked.patch_hash.as_ref().map(|(_, d)| d.len()), Some(32));
@@ -1081,7 +1142,7 @@ mod tests {
 
     #[test]
     fn test_pack_patch_hash_absent() {
-        let packed = pack_payload(&empty_data());
+        let packed = pack_payload(&empty_data()).unwrap();
         let unpacked = unpack_payload(&packed, 0).unwrap();
         assert!(unpacked.patch_hash.is_none());
     }
