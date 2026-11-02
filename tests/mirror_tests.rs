@@ -2,7 +2,7 @@ use hlock::lockfile::{self, Lockfile, Mirror, Source};
 
 #[test]
 fn test_mirror_roundtrip() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
         mirrors: vec![
             Mirror {
@@ -17,7 +17,7 @@ fn test_mirror_roundtrip() {
         ..Lockfile::default()
     };
 
-    let serialized = lockfile::serialize(&mut lockfile).unwrap();
+    let serialized = lockfile::serialize(&lockfile).unwrap();
     let deserialized = lockfile::deserialize(&serialized).unwrap();
     assert_eq!(deserialized.mirrors.len(), 2);
     assert_eq!(deserialized.mirrors[0].scope, "@internal");
