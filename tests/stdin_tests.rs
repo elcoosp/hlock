@@ -15,7 +15,7 @@ fn write_temp_file(name: &str, content: &str) -> PathBuf {
 }
 
 fn make_simple_lockfile() -> String {
-    let mut lf = hlock::Lockfile {
+    let lf = hlock::Lockfile {
         sources: vec![hlock::Source::Registry(
             "https://registry.npmjs.org/".to_string(),
         )],
@@ -45,7 +45,7 @@ fn make_simple_lockfile() -> String {
         }],
         ..Default::default()
     };
-    hlock::serialize(&mut lf).unwrap()
+    hlock::serialize(&lf).unwrap()
 }
 
 fn run_with_stdin(args: &[&str], input: &str) -> (bool, String, String) {
@@ -126,14 +126,14 @@ fn test_stdin_audit() {
 }
 
 #[test]
-fn test_stdin_info() {
+fn test_stdin_stats() {
     let content = make_simple_lockfile();
-    let (success, raw_stdout, _) = run_with_stdin(&["info", "-", "--color=never"], &content);
+    let (success, raw_stdout, _) = run_with_stdin(&["stats", "-", "--color=never"], &content);
     let stdout = strip_ansi(&raw_stdout);
     assert!(
         success,
-        "info from stdin should succeed, stderr: {}",
-        run_with_stdin(&["info", "-", "--color=never"], &content).2
+        "stats from stdin should succeed, stderr: {}",
+        run_with_stdin(&["stats", "-", "--color=never"], &content).2
     );
     assert!(
         stdout.contains("Packages:"),
@@ -142,14 +142,14 @@ fn test_stdin_info() {
 }
 
 #[test]
-fn test_stdin_info_json() {
+fn test_stdin_stats_json() {
     let content = make_simple_lockfile();
-    let (success, stdout, _) = run_with_stdin(&["info", "-", "--format", "json"], &content);
-    assert!(success, "info --format json from stdin should succeed");
+    let (success, stdout, _) = run_with_stdin(&["stats", "-", "--format", "json"], &content);
+    assert!(success, "stats --format json from stdin should succeed");
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("should be valid JSON");
     assert!(
-        parsed["package_count"].is_number(),
-        "should have package_count"
+        parsed["total_packages"].is_number(),
+        "should have total_packages"
     );
 }
 
@@ -189,13 +189,13 @@ fn test_stdin_sbom() {
 }
 
 #[test]
-fn test_stdin_dedup() {
+fn test_stdin_stats_dedup() {
     let content = make_simple_lockfile();
-    let (success, _, _) = run_with_stdin(&["dedup", "-"], &content);
+    let (success, _, _) = run_with_stdin(&["stats", "-", "--dedup"], &content);
     assert!(
         success,
-        "dedup from stdin should succeed, stderr: {}",
-        run_with_stdin(&["dedup", "-"], &content).2
+        "stats --dedup from stdin should succeed, stderr: {}",
+        run_with_stdin(&["stats", "-", "--dedup"], &content).2
     );
 }
 
@@ -316,7 +316,7 @@ fn test_stdin_sign_rejects_in_place() {
 #[test]
 fn test_stdin_color_never_no_ansi() {
     let content = make_simple_lockfile();
-    let (_, raw_stdout, _) = run_with_stdin(&["--color", "never", "info", "-"], &content);
+    let (_, raw_stdout, _) = run_with_stdin(&["--color", "never", "stats", "-"], &content);
     let stdout = strip_ansi(&raw_stdout);
     assert!(
         !stdout.contains("\x1b["),
