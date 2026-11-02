@@ -14,7 +14,7 @@ fn write_temp_file(name: &str, content: &str) -> PathBuf {
 }
 
 fn make_lockfile_with_dependents() -> String {
-    let mut lf = hlock::Lockfile {
+    let lf = hlock::Lockfile {
         sources: vec![hlock::Source::Registry(
             "https://registry.npmjs.org/".to_string(),
         )],
@@ -56,7 +56,7 @@ fn make_lockfile_with_dependents() -> String {
         ],
         ..Default::default()
     };
-    hlock::serialize(&mut lf).unwrap()
+    hlock::serialize(&lf).unwrap()
 }
 
 #[test]
