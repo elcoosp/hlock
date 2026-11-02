@@ -5,7 +5,8 @@ use crate::lockfile::types::{
     TargetArch, TargetOS, WorkspacePkg,
 };
 use crate::provenance::{ProvenanceSourceType, ResolutionProvenance};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockfileHeader {
@@ -31,12 +32,19 @@ struct IndexEntry {
     line_end: usize,
 }
 
-#[derive(Debug, Clone)]
+/// Type alias for the cached content-id map: `cid -> (name, features)`.
+pub type IdMap = HashMap<u64, (String, Vec<String>)>;
+
+#[derive(Debug)]
 pub struct LazyLockfile {
     content: Arc<str>,
     header: LockfileHeader,
+    /// Package index, **sorted by name** so `get_package` can binary-search it.
     index: Vec<IndexEntry>,
     provenance: Vec<ResolutionProvenance>,
+    /// Decoded once on first use; 0.x rebuilt this map on *every* query,
+    /// base64-decoding and BLAKE3-verifying the whole file per call.
+    id_map: OnceLock<IdMap>,
 }
 
 impl LazyLockfile {
@@ -51,7 +59,9 @@ impl LazyLockfile {
         let (header, pkg_start_offset) = scan_header(content)?;
 
         let mut index = Vec::new();
+        let mut seen_names = std::collections::HashSet::new();
         let mut provenance = Vec::new();
+        let mut provenance_seen = std::collections::HashSet::new();
         let mut line_start = pkg_start_offset;
 
         for line in content[pkg_start_offset..].lines() {
@@ -73,13 +83,14 @@ impl LazyLockfile {
 
             if line.starts_with("@provenance ") {
                 if let Ok(prov) = parse_provenance_line(line) {
-                    if let Some(existing) = provenance
+                    // Upsert by package name via a set (0.x was O(P) per line).
+                    if provenance_seen.insert(prov.package_name.clone()) {
+                        provenance.push(prov);
+                    } else if let Some(existing) = provenance
                         .iter()
                         .position(|p: &ResolutionProvenance| p.package_name == prov.package_name)
                     {
                         provenance[existing] = prov;
-                    } else {
-                        provenance.push(prov);
                     }
                 }
                 line_start = line_end + 1;
@@ -89,7 +100,7 @@ impl LazyLockfile {
             if let Some(tab_pos) = line.find('\t') {
                 let name = line[..tab_pos].to_string();
 
-                if index.iter().any(|e: &IndexEntry| e.name == name) {
+                if !seen_names.insert(name.clone()) {
                     let line_num = content[..line_start].lines().count();
                     return Err(Error::LazyIndexCorrupt {
                         line_number: line_num,
@@ -107,11 +118,17 @@ impl LazyLockfile {
             line_start = line_end + 1;
         }
 
+        // Canonical lockfiles are name-sorted, but `get_package`'s binary
+        // search must be correct for *any* input: sort the index explicitly
+        // (0.x binary-searched an unsorted index and silently missed).
+        index.sort_by(|a, b| a.name.cmp(&b.name));
+
         Ok(LazyLockfile {
             content: Arc::from(content),
             header,
             index,
             provenance,
+            id_map: OnceLock::new(),
         })
     }
 
@@ -143,34 +160,65 @@ impl LazyLockfile {
         let Ok(idx) = self.index.binary_search_by(|e| e.name.as_str().cmp(name)) else {
             return Ok(None);
         };
-        let entry = &self.index[idx];
-        let line = &self.content[entry.line_start..entry.line_end];
-        let (_name_str, encoded) = line
-            .split_once('\t')
-            .ok_or(Error::MissingDelimiter { line_number: 0 })?;
-        let binary = crate::base64url::decode(encoded.as_bytes())
-            .map_err(|_| Error::InvalidBase64 { line_number: 0 })?;
-        let payload = crate::payload::unpack_payload(&binary, 0)?;
+        let id_map = self.id_map()?;
+        let mut decode_buf = Vec::new();
+        let pkg = self.decode_entry(&self.index[idx], id_map, &mut decode_buf)?;
+        Ok(Some(pkg))
+    }
 
-        let mut id_map: std::collections::HashMap<u64, (String, Vec<String>)> =
-            std::collections::HashMap::new();
+    /// Builds (once) and returns the content-id map over all indexed packages.
+    ///
+    /// Decoding every payload is unavoidable when dependency edges must be
+    /// resolved, but doing it **once** turns 0.x's per-call O(n × (b64 +
+    /// BLAKE3 + unpack)) cost into an amortized O(1) for every query after
+    /// the first.
+    fn id_map(&self) -> Result<&IdMap, Error> {
+        if let Some(map) = self.id_map.get() {
+            return Ok(map);
+        }
+        let mut map: IdMap = HashMap::with_capacity(self.index.len());
+        let mut seen: HashMap<u64, (String, u64, u64, u64)> =
+            HashMap::with_capacity(self.index.len());
+        let mut decode_buf = Vec::new();
         for entry in &self.index {
             let line = &self.content[entry.line_start..entry.line_end];
-            if let Some((_name_str, encoded)) = line.split_once('\t')
-                && let Ok(binary) = crate::base64url::decode(encoded.as_bytes())
-                && let Ok(pl) = crate::payload::unpack_payload(&binary, 0)
+            let Some((_name_str, encoded)) = line.split_once('\t') else {
+                return Err(Error::MissingDelimiter { line_number: 0 });
+            };
+            crate::base64url::decode_into(encoded.as_bytes(), &mut decode_buf)
+                .map_err(|_| Error::InvalidBase64 { line_number: 0 })?;
+            let payload = crate::payload::unpack_payload(&decode_buf, 0)?;
+            let cid =
+                crate::cid::content_id(&entry.name, payload.major, payload.minor, payload.patch);
+            let identity = (
+                entry.name.clone(),
+                payload.major,
+                payload.minor,
+                payload.patch,
+            );
+            if let Some(first) = seen.get(&cid)
+                && (first.0 != identity.0
+                    || first.1 != identity.1
+                    || first.2 != identity.2
+                    || first.3 != identity.3)
             {
-                let cid = crate::fnv::calculate(&format!(
-                    "{}@{}.{}.{}",
-                    entry.name, pl.major, pl.minor, pl.patch
-                ));
-                id_map.insert(cid, (entry.name.clone(), pl.features.clone()));
+                return Err(Error::ContentIdCollision(format!(
+                    "{}@{}.{}.{} and {}@{}.{}.{} share content id {cid:016x}",
+                    first.0,
+                    first.1,
+                    first.2,
+                    first.3,
+                    identity.0,
+                    identity.1,
+                    identity.2,
+                    identity.3
+                )));
             }
+            seen.insert(cid, identity);
+            map.insert(cid, (entry.name.clone(), payload.features.clone()));
         }
-
-        let mut pkg = payload_to_package(&payload, &self.header.sources, &id_map)?;
-        pkg.name.clone_from(&entry.name);
-        Ok(Some(pkg))
+        let _ = self.id_map.set(map);
+        Ok(self.id_map.get().expect("id map was just inserted"))
     }
 
     /// Returns every indexed package whose source index matches `source_idx`.
@@ -179,11 +227,12 @@ impl LazyLockfile {
     /// Propagates any error returned by [`Self::get_package`] while decoding the
     /// matching packages.
     pub fn get_packages_by_source(&self, source_idx: usize) -> Result<Vec<Package>, Error> {
+        let id_map = self.id_map()?;
         let mut result = Vec::new();
+        let mut decode_buf = Vec::new();
         for entry in &self.index {
-            if let Some(pkg) = self.get_package(&entry.name)?
-                && pkg.source_idx == source_idx
-            {
+            let pkg = self.decode_entry(entry, id_map, &mut decode_buf)?;
+            if pkg.source_idx == source_idx {
                 result.push(pkg);
             }
         }
@@ -199,12 +248,12 @@ impl LazyLockfile {
         &self,
         predicate: impl Fn(&str) -> bool,
     ) -> Result<Vec<Package>, Error> {
+        let id_map = self.id_map()?;
         let mut result = Vec::new();
+        let mut decode_buf = Vec::new();
         for entry in &self.index {
-            if predicate(&entry.name)
-                && let Some(pkg) = self.get_package(&entry.name)?
-            {
-                result.push(pkg);
+            if predicate(&entry.name) {
+                result.push(self.decode_entry(entry, id_map, &mut decode_buf)?);
             }
         }
         Ok(result)
@@ -226,12 +275,17 @@ impl LazyLockfile {
     /// Propagates any error returned by [`Self::get_package`] while decoding the
     /// indexed packages.
     pub fn into_full(self) -> Result<Lockfile, Error> {
+        let id_map = self.id_map()?;
         let mut packages = Vec::with_capacity(self.index.len());
+        let mut decode_buf = Vec::new();
         for entry in &self.index {
-            if let Some(pkg) = self.get_package(&entry.name)? {
-                packages.push(pkg);
-            }
+            packages.push(self.decode_entry(entry, id_map, &mut decode_buf)?);
         }
+        let index_names: std::collections::HashSet<&str> =
+            self.index.iter().map(|e| e.name.as_str()).collect();
+        // Carry the body directives that 0.x dropped on the floor so
+        // `into_full` output matches `deserialize` output.
+        let (advisories, licenses, vex_entries) = scan_body_directives(&self.content, &index_names);
         Ok(Lockfile {
             sources: self.header.sources,
             overrides: self.header.overrides,
@@ -244,16 +298,73 @@ impl LazyLockfile {
             artifacts: self.header.artifacts,
             patches: self.header.patches,
             provenance: self.provenance,
-            advisories: vec![],
-            licenses: vec![],
+            advisories,
+            licenses,
             policies: self.header.policies,
             trust_roots: self.header.trust_roots,
             mirrors: self.header.mirrors,
             root_rotations: self.header.root_rotations,
-            vex_entries: vec![],
+            vex_entries,
             compat: None,
         })
     }
+
+    /// Decodes one indexed package line into a fully built [`Package`].
+    fn decode_entry(
+        &self,
+        entry: &IndexEntry,
+        id_map: &IdMap,
+        decode_buf: &mut Vec<u8>,
+    ) -> Result<Package, Error> {
+        let line = &self.content[entry.line_start..entry.line_end];
+        let (_name_str, encoded) = line
+            .split_once('\t')
+            .ok_or(Error::MissingDelimiter { line_number: 0 })?;
+        crate::base64url::decode_into(encoded.as_bytes(), decode_buf)
+            .map_err(|_| Error::InvalidBase64 { line_number: 0 })?;
+        let payload = crate::payload::unpack_payload(decode_buf, 0)?;
+        let mut pkg = payload_to_package(&payload, &self.header.sources, id_map)?;
+        pkg.name.clone_from(&entry.name);
+        Ok(pkg)
+    }
+}
+
+/// Extracts `@advisory`, `@license` and `@vex` directives from the body so
+/// that `LazyLockfile::into_full` round-trips to the same [`Lockfile`] as
+/// eager deserialization.
+fn scan_body_directives(
+    content: &str,
+    package_names: &std::collections::HashSet<&str>,
+) -> (
+    Vec<crate::policy::Advisory>,
+    Vec<crate::policy::LicenseEntry>,
+    Vec<crate::lockfile::VexEntry>,
+) {
+    // Body starts after the blank separator line.
+    let body = content.split_once("\n\n").map_or(content, |(_, rest)| rest);
+    let mut advisories = Vec::new();
+    let mut licenses = Vec::new();
+    let mut vex_entries = Vec::new();
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("@advisory ") {
+            if let Ok(adv) = crate::lockfile::parse_advisory_line(rest, 0) {
+                advisories.push(adv);
+            }
+        } else if let Some(rest) = line.strip_prefix("@license ") {
+            let (package, expression) = rest.split_once(' ').unwrap_or((rest, ""));
+            if package_names.contains(package) {
+                licenses.push(crate::policy::LicenseEntry {
+                    package: package.to_string(),
+                    expression: expression.to_string(),
+                });
+            }
+        } else if let Some(rest) = line.strip_prefix("@vex ")
+            && let Ok(vex) = crate::lockfile::parse_vex_line(rest, 0)
+        {
+            vex_entries.push(vex);
+        }
+    }
+    (advisories, licenses, vex_entries)
 }
 
 fn payload_to_package(
@@ -372,7 +483,7 @@ mod tests {
     use crate::lockfile::types::{Lockfile, Package, Source};
 
     fn simple_lockfile_content() -> String {
-        let mut lf = Lockfile {
+        let lf = Lockfile {
             sources: vec![Source::Registry("https://r.com/".to_string())],
             overrides: vec![],
             features: vec![],
@@ -410,7 +521,7 @@ mod tests {
             vex_entries: vec![],
             compat: None,
         };
-        crate::lockfile::serialize(&mut lf).unwrap()
+        crate::lockfile::serialize(&lf).unwrap()
     }
 
     #[test]
@@ -526,7 +637,7 @@ mod tests {
     }
 
     fn lockfile_with_provenance_and_directives() -> String {
-        let mut lf = Lockfile {
+        let lf = Lockfile {
             sources: vec![Source::Registry("https://r.com/".to_string())],
             packages: vec![
                 Package {
@@ -548,14 +659,14 @@ mod tests {
             ],
             ..Lockfile::default()
         };
-        let mut content = crate::lockfile::serialize(&mut lf).unwrap();
+        let mut content = crate::lockfile::serialize(&lf).unwrap();
         // Append extra provenance lines before the trailing @digest and fix the digest.
         content = content.replace(
             "@digest ",
             "@provenance alpha ^1.0.0 app 0 0 0\n@provenance beta ^2.0.0 app 4 3 1\n@digest ",
         );
-        let mut parsed = crate::lockfile::deserialize(&content).unwrap();
-        crate::lockfile::serialize(&mut parsed).unwrap()
+        let parsed = crate::lockfile::deserialize(&content).unwrap();
+        crate::lockfile::serialize(&parsed).unwrap()
     }
 
     #[test]
@@ -697,7 +808,7 @@ mod tests {
 
     #[test]
     fn test_lazy_get_package_decodes_dependencies_and_features() {
-        let mut lf = Lockfile {
+        let lf = Lockfile {
             sources: vec![Source::Registry("https://r.com/".to_string())],
             packages: vec![
                 Package {
@@ -755,7 +866,7 @@ mod tests {
             ],
             ..Lockfile::default()
         };
-        let content = crate::lockfile::serialize(&mut lf).unwrap();
+        let content = crate::lockfile::serialize(&lf).unwrap();
         let lazy = LazyLockfile::scan(&content).unwrap();
         let app = lazy.get_package("app").unwrap().unwrap();
         assert_eq!(app.dependencies.len(), 1);
@@ -786,7 +897,7 @@ mod tests {
     fn test_lazy_get_package_reports_missing_dependency() {
         // Rename the dependency's line after serialization: its content id no
         // longer matches any indexed package, so decoding the consumer fails.
-        let mut lf = Lockfile {
+        let lf = Lockfile {
             sources: vec![Source::Registry("https://r.com/".to_string())],
             packages: vec![
                 Package {
@@ -811,7 +922,7 @@ mod tests {
             ],
             ..Lockfile::default()
         };
-        let content = crate::lockfile::serialize(&mut lf).unwrap();
+        let content = crate::lockfile::serialize(&lf).unwrap();
         let renamed = content.replace("\nlib\t", "\ngone\t");
         assert_ne!(content, renamed, "the lib package line must be renamed");
         let lazy = LazyLockfile::scan(&renamed).unwrap();
