@@ -28,7 +28,7 @@ fn strip_ansi(s: &str) -> String {
 #[test]
 fn test_e2e_write_and_read_v5() {
     let temp_path = PathBuf::from("target/test_e2e_v5.hlock");
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://npmjs.org/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -89,7 +89,7 @@ fn test_e2e_write_and_read_v5() {
         ],
     };
 
-    write_lockfile(&temp_path, &mut lockfile).expect("Write failed");
+    write_lockfile(&temp_path, &lockfile).expect("Write failed");
     let read_lockfile = read_lockfile(&temp_path).expect("Read failed");
 
     assert_eq!(read_lockfile.packages.len(), 2);
@@ -103,7 +103,7 @@ fn test_e2e_write_and_read_v5() {
 #[test]
 fn test_e2e_workspace_roundtrip() {
     let temp_path = PathBuf::from("target/test_ws_v5.hlock");
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Workspace],
         overrides: vec![],
         features: vec![],
@@ -136,7 +136,7 @@ fn test_e2e_workspace_roundtrip() {
             ..Default::default()
         }],
     };
-    write_lockfile(&temp_path, &mut lockfile).unwrap();
+    write_lockfile(&temp_path, &lockfile).unwrap();
     let res = read_lockfile(&temp_path).unwrap();
     assert_eq!(res.sources[0], Source::Workspace);
     assert_eq!(res.packages[0].hashes.len(), 0);
@@ -145,7 +145,7 @@ fn test_e2e_workspace_roundtrip() {
 
 #[test]
 fn test_string_api_crc_corruption() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -178,7 +178,7 @@ fn test_string_api_crc_corruption() {
             ..Default::default()
         }],
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
     let mut without_digest = String::new();
     for l in serialized.lines().filter(|l| !l.starts_with("@digest ")) {
         without_digest.push_str(l);
@@ -205,7 +205,7 @@ fn test_string_api_crc_corruption() {
 #[test]
 fn test_e2e_features_roundtrip() {
     let temp_path = PathBuf::from("target/test_feat_v5.hlock");
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![(
@@ -260,7 +260,7 @@ fn test_e2e_features_roundtrip() {
             },
         ],
     };
-    write_lockfile(&temp_path, &mut lockfile).unwrap();
+    write_lockfile(&temp_path, &lockfile).unwrap();
     let res = read_lockfile(&temp_path).unwrap();
     assert_eq!(
         res.packages[0].dependencies[0].requested_features,
@@ -273,7 +273,7 @@ fn test_e2e_features_roundtrip() {
 #[test]
 fn test_e2e_optional_target_roundtrip() {
     let temp_path = PathBuf::from("target/test_opt_v5.hlock");
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -325,7 +325,7 @@ fn test_e2e_optional_target_roundtrip() {
             },
         ],
     };
-    write_lockfile(&temp_path, &mut lockfile).unwrap();
+    write_lockfile(&temp_path, &lockfile).unwrap();
     let res = read_lockfile(&temp_path).unwrap();
     assert!(matches!(
         &res.packages[0].dependencies[0].dep_type,
@@ -336,7 +336,7 @@ fn test_e2e_optional_target_roundtrip() {
 
 #[test]
 fn test_e2e_diff_after_adding_package() {
-    let mut v1 = Lockfile {
+    let v1 = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -369,7 +369,7 @@ fn test_e2e_diff_after_adding_package() {
             ..Default::default()
         }],
     };
-    let serialized_v1 = serialize(&mut v1).unwrap();
+    let serialized_v1 = serialize(&v1).unwrap();
 
     let v2 = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
@@ -503,10 +503,13 @@ fn test_e2e_extract_and_serialize_is_valid() {
         ],
     };
 
-    let app_cid = fnv::calculate("app@1.0.0");
-    let mut subgraph = extract_subgraph(&lockfile, &[app_cid]).unwrap();
+    let app_cid = cid::content_id("app", 1, 0, 0);
+    let subgraph = Graph::new(&lockfile)
+        .unwrap()
+        .extract_subgraph(&[app_cid])
+        .unwrap();
 
-    let serialized_sub = serialize(&mut subgraph).unwrap();
+    let serialized_sub = serialize(&subgraph).unwrap();
     let reparsed = deserialize(&serialized_sub).unwrap();
 
     assert_eq!(reparsed.sources.len(), 2);
@@ -520,7 +523,7 @@ fn test_e2e_extract_and_serialize_is_valid() {
 #[test]
 fn test_e2e_v7_provenance_roundtrip() {
     let temp_path = PathBuf::from("target/test_e2e_v7.hlock");
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -557,7 +560,7 @@ fn test_e2e_v7_provenance_roundtrip() {
             ..Default::default()
         }],
     };
-    write_lockfile(&temp_path, &mut lockfile).unwrap();
+    write_lockfile(&temp_path, &lockfile).unwrap();
     let res = read_lockfile(&temp_path).unwrap();
     assert_eq!(res.packages[0].hashes.len(), 1);
     assert!(matches!(
@@ -609,8 +612,11 @@ fn test_e2e_graph_manipulation_ignores_provenance() {
             ..Default::default()
         }],
     };
-    let cid = fnv::calculate("a@1.0.0");
-    let sub = extract_subgraph(&lockfile, &[cid]).unwrap();
+    let cid = cid::content_id("a", 1, 0, 0);
+    let sub = Graph::new(&lockfile)
+        .unwrap()
+        .extract_subgraph(&[cid])
+        .unwrap();
     match &sub.packages[0].hashes[0].attestation {
         Attestation::InlineSlsa(p) => assert_eq!(p.builder, "b"),
         _ => panic!("Failed to preserve attestation in subgraph"),
@@ -619,7 +625,7 @@ fn test_e2e_graph_manipulation_ignores_provenance() {
 
 #[test]
 fn test_e2e_v8_peer_resolution_topology() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -650,7 +656,7 @@ fn test_e2e_v8_peer_resolution_topology() {
                 features: vec![],
                 resolved_peers: vec![PeerResolution {
                     peer_name: "react".to_string(),
-                    satisfied_by_content_id: fnv::calculate("react@18.0.0"),
+                    satisfied_by_content_id: cid::content_id("react", 18, 0, 0),
                     is_hoisted_to_root: true,
                 }],
                 dependencies: vec![],
@@ -671,7 +677,7 @@ fn test_e2e_v8_peer_resolution_topology() {
             },
         ],
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
     let res = deserialize(&serialized).unwrap();
     assert_eq!(res.packages[0].resolved_peers[0].peer_name, "react");
     assert!(res.packages[0].resolved_peers[0].is_hoisted_to_root);
@@ -709,20 +715,23 @@ fn test_e2e_graph_extract_preserves_peers() {
             features: vec![],
             resolved_peers: vec![PeerResolution {
                 peer_name: "b".to_string(),
-                satisfied_by_content_id: fnv::calculate("b@1.0.0"),
+                satisfied_by_content_id: cid::content_id("b", 1, 0, 0),
                 is_hoisted_to_root: false,
             }],
             dependencies: vec![],
             ..Default::default()
         }],
     };
-    let sub = extract_subgraph(&lockfile, &[fnv::calculate("a@1.0.0")]).unwrap();
+    let sub = Graph::new(&lockfile)
+        .unwrap()
+        .extract_subgraph(&[cid::content_id("a", 1, 0, 0)])
+        .unwrap();
     assert_eq!(sub.packages[0].resolved_peers[0].peer_name, "b");
 }
 
 #[test]
 fn test_e2e_v8_alias_and_cas_roundtrip() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::CasHttp("https://cas.example.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -755,7 +764,7 @@ fn test_e2e_v8_alias_and_cas_roundtrip() {
             ..Default::default()
         }],
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
     let deserialized = deserialize(&serialized).unwrap();
 
     assert_eq!(
@@ -772,7 +781,7 @@ fn test_e2e_v8_alias_and_cas_roundtrip() {
 #[test]
 fn test_e2e_ipfs_source_roundtrip() {
     let temp_path = PathBuf::from("target/test_ipfs.hlock");
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Ipfs("ipfs://QmXyZ1abcDEF".to_string())],
         overrides: vec![],
         features: vec![],
@@ -805,7 +814,7 @@ fn test_e2e_ipfs_source_roundtrip() {
             ..Default::default()
         }],
     };
-    write_lockfile(&temp_path, &mut lockfile).unwrap();
+    write_lockfile(&temp_path, &lockfile).unwrap();
     let res = read_lockfile(&temp_path).unwrap();
     assert_eq!(
         res.sources[0],
@@ -817,7 +826,7 @@ fn test_e2e_ipfs_source_roundtrip() {
 
 #[test]
 fn test_e2e_v9_peer_requirements_roundtrip() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -858,7 +867,7 @@ fn test_e2e_v9_peer_requirements_roundtrip() {
                 ],
                 resolved_peers: vec![PeerResolution {
                     peer_name: "react".to_string(),
-                    satisfied_by_content_id: fnv::calculate("react@18.0.0"),
+                    satisfied_by_content_id: cid::content_id("react", 18, 0, 0),
                     is_hoisted_to_root: true,
                 }],
                 dependencies: vec![],
@@ -875,7 +884,7 @@ fn test_e2e_v9_peer_requirements_roundtrip() {
             },
         ],
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
     let res = deserialize(&serialized).unwrap();
 
     let rdom = res.packages.iter().find(|p| p.name == "react-dom").unwrap();
@@ -890,7 +899,7 @@ fn test_e2e_v9_peer_requirements_roundtrip() {
 
 #[test]
 fn test_e2e_v9_platform_tags_roundtrip() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -948,7 +957,7 @@ fn test_e2e_v9_platform_tags_roundtrip() {
             },
         ],
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
     let res = deserialize(&serialized).unwrap();
 
     assert_eq!(res.packages[0].platform_tags.len(), 1);
@@ -969,7 +978,7 @@ fn test_e2e_sign_lockfile_and_verify() {
     let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
     let verifying_key_bytes = *signing_key.verifying_key().as_bytes();
 
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -998,7 +1007,7 @@ fn test_e2e_sign_lockfile_and_verify() {
             ..Default::default()
         }],
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
 
     let signed = sign_lockfile(
         &serialized,
@@ -1027,7 +1036,7 @@ fn test_e2e_signed_lockfile_deserializes_correctly() {
         0x7f, 0x60,
     ];
 
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -1067,7 +1076,7 @@ fn test_e2e_signed_lockfile_deserializes_correctly() {
             },
         ],
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
     let signed = sign_lockfile(
         &serialized,
         "bot@github-actions",
@@ -1197,11 +1206,12 @@ fn platform_extraction_lockfile() -> Lockfile {
 #[test]
 fn test_e2e_platform_extraction_macos() {
     let lockfile = platform_extraction_lockfile();
-    let app_cid = fnv::calculate("app@1.0.0");
+    let app_cid = cid::content_id("app", 1, 0, 0);
 
-    let mac_res =
-        extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::MacOS, TargetArch::Aarch64)
-            .unwrap();
+    let mac_res = Graph::new(&lockfile)
+        .unwrap()
+        .extract_subgraph_platform(&[app_cid], TargetOS::MacOS, TargetArch::Aarch64)
+        .unwrap();
     let mac_names: HashSet<&str> = mac_res.packages.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(
         mac_res.packages.len(),
@@ -1218,11 +1228,12 @@ fn test_e2e_platform_extraction_macos() {
 #[test]
 fn test_e2e_platform_extraction_linux() {
     let lockfile = platform_extraction_lockfile();
-    let app_cid = fnv::calculate("app@1.0.0");
+    let app_cid = cid::content_id("app", 1, 0, 0);
 
-    let linux_res =
-        extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Linux, TargetArch::X86_64)
-            .unwrap();
+    let linux_res = Graph::new(&lockfile)
+        .unwrap()
+        .extract_subgraph_platform(&[app_cid], TargetOS::Linux, TargetArch::X86_64)
+        .unwrap();
     let linux_names: HashSet<&str> = linux_res.packages.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(
         linux_res.packages.len(),
@@ -1239,11 +1250,12 @@ fn test_e2e_platform_extraction_linux() {
 #[test]
 fn test_e2e_platform_extraction_windows() {
     let lockfile = platform_extraction_lockfile();
-    let app_cid = fnv::calculate("app@1.0.0");
+    let app_cid = cid::content_id("app", 1, 0, 0);
 
-    let win_res =
-        extract_subgraph_platform(&lockfile, &[app_cid], TargetOS::Windows, TargetArch::X86_64)
-            .unwrap();
+    let win_res = Graph::new(&lockfile)
+        .unwrap()
+        .extract_subgraph_platform(&[app_cid], TargetOS::Windows, TargetArch::X86_64)
+        .unwrap();
     let win_names: HashSet<&str> = win_res.packages.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(
         win_res.packages.len(),
@@ -1273,7 +1285,7 @@ fn test_v014_reexports_exist() {
 
 #[test]
 fn test_e2e_merge_no_conflicts() {
-    let mut base = Lockfile {
+    let base = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -1302,7 +1314,7 @@ fn test_e2e_merge_no_conflicts() {
         vex_entries: vec![],
         compat: None,
     };
-    let serialized_base = serialize(&mut base).unwrap();
+    let serialized_base = serialize(&base).unwrap();
     let parsed_base = deserialize(&serialized_base).unwrap();
 
     let mut ours = parsed_base.clone();
@@ -1345,7 +1357,7 @@ fn test_e2e_merge_no_conflicts() {
 
 #[test]
 fn test_e2e_merge_roundtrip() {
-    let mut base = Lockfile {
+    let base = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -1379,7 +1391,7 @@ fn test_e2e_merge_roundtrip() {
         vex_entries: vec![],
         compat: None,
     };
-    let serialized_base = serialize(&mut base).unwrap();
+    let serialized_base = serialize(&base).unwrap();
     let parsed_base = deserialize(&serialized_base).unwrap();
 
     let ours = parsed_base.clone();
@@ -1388,8 +1400,8 @@ fn test_e2e_merge_roundtrip() {
     let result =
         hlock::merge_lockfiles(&parsed_base, &ours, &theirs, hlock::ConflictStrategy::Fail)
             .unwrap();
-    let mut merged = result.lockfile;
-    let reserialized = serialize(&mut merged).unwrap();
+    let merged = result.lockfile;
+    let reserialized = serialize(&merged).unwrap();
     let redeserialized = deserialize(&reserialized).unwrap();
     assert_eq!(redeserialized.packages.len(), 1);
     assert_eq!(redeserialized.packages[0].name, "core");
@@ -1397,7 +1409,7 @@ fn test_e2e_merge_roundtrip() {
 
 #[test]
 fn test_e2e_lazy_parse() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -1442,7 +1454,7 @@ fn test_e2e_lazy_parse() {
         vex_entries: vec![],
         compat: None,
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
     let lazy = hlock::LazyLockfile::scan(&serialized).unwrap();
     assert_eq!(lazy.package_count(), 2);
     let alpha = lazy.get_package("alpha").unwrap().unwrap();
@@ -1456,7 +1468,7 @@ fn test_e2e_lazy_parse() {
 
 #[test]
 fn test_e2e_lazy_validate_digest() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -1485,7 +1497,7 @@ fn test_e2e_lazy_validate_digest() {
         vex_entries: vec![],
         compat: None,
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
     let lazy = hlock::LazyLockfile::scan(&serialized).unwrap();
     assert!(lazy.validate_digest().is_ok());
 }
@@ -1625,7 +1637,7 @@ fn test_e2e_lint_default() {
 
 #[test]
 fn test_e2e_provenance_roundtrip() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -1661,7 +1673,7 @@ fn test_e2e_provenance_roundtrip() {
         vex_entries: vec![],
         compat: None,
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
     let deserialized = deserialize(&serialized).unwrap();
     assert_eq!(deserialized.provenance.len(), 1);
     assert_eq!(deserialized.provenance[0].package_name, "lodash");
@@ -1700,17 +1712,18 @@ fn test_v013_reexports_exist() {
         compat: None,
         packages: vec![],
     };
-    let _ = hlock::runtime_deps(&lockfile, "x");
-    let _ = hlock::dev_deps(&lockfile, "x");
-    let _ = hlock::runtime_dependents_of(&lockfile, "x");
-    let _ = hlock::dev_dependents_of(&lockfile, "x");
-    let _ = hlock::has_dep_path(&lockfile, "a", "b", hlock::DepType::Runtime);
-    let _ = hlock::dep_count(&lockfile, "x", hlock::DepType::Runtime);
+    let graph = hlock::Graph::new(&lockfile).unwrap();
+    let _ = graph.runtime_deps("x");
+    let _ = graph.dev_deps("x");
+    let _ = graph.runtime_dependents_of("x");
+    let _ = graph.dev_dependents_of("x");
+    let _ = graph.has_dep_path("a", "b", EdgeFilter::Runtime);
+    let _ = graph.dep_count("x", hlock::DepType::Runtime);
 }
 
 #[test]
 fn test_e2e_diff_serialization_text() {
-    let mut v1 = Lockfile {
+    let v1 = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -1739,7 +1752,7 @@ fn test_e2e_diff_serialization_text() {
             ..Default::default()
         }],
     };
-    let serialized_v1 = serialize(&mut v1).unwrap();
+    let serialized_v1 = serialize(&v1).unwrap();
     let parsed_v1 = deserialize(&serialized_v1).unwrap();
 
     let v2 = Lockfile {
@@ -1804,7 +1817,7 @@ fn test_e2e_diff_serialization_text() {
 
 #[test]
 fn test_e2e_diff_serialization_json() {
-    let mut v1 = Lockfile {
+    let v1 = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -1833,7 +1846,7 @@ fn test_e2e_diff_serialization_json() {
             ..Default::default()
         }],
     };
-    let serialized_v1 = serialize(&mut v1).unwrap();
+    let serialized_v1 = serialize(&v1).unwrap();
     let parsed_v1 = deserialize(&serialized_v1).unwrap();
 
     let v2 = Lockfile {
@@ -1886,7 +1899,7 @@ fn test_e2e_diff_serialization_json() {
 #[test]
 fn test_e2e_digest_roundtrip() {
     let temp_path = std::path::PathBuf::from("target/test_digest_v13.hlock");
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -1920,7 +1933,7 @@ fn test_e2e_digest_roundtrip() {
             ..Default::default()
         }],
     };
-    write_lockfile(&temp_path, &mut lockfile).unwrap();
+    write_lockfile(&temp_path, &lockfile).unwrap();
     let content = std::fs::read_to_string(&temp_path).unwrap();
     assert!(content.contains("@digest "));
     assert!(validate_digest(&content).is_ok());
@@ -1940,7 +1953,7 @@ fn test_e2e_ml_dsa65_signed_lockfile() {
     let sk_bytes = FipsSerDes::into_bytes(sk);
     let vk_bytes = FipsSerDes::into_bytes(pk);
 
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -1969,7 +1982,7 @@ fn test_e2e_ml_dsa65_signed_lockfile() {
             ..Default::default()
         }],
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
 
     let signed = sign_lockfile(
         &serialized,
@@ -2063,31 +2076,33 @@ fn test_e2e_typed_graph_queries() {
         ],
     };
 
-    let rt = runtime_deps(&lockfile, "app");
+    let graph = Graph::new(&lockfile).unwrap();
+
+    let rt = graph.runtime_deps("app");
     assert!(rt.contains("lodash"));
     assert!(!rt.contains("jest"));
 
-    let dd = dev_deps(&lockfile, "app");
+    let dd = graph.dev_deps("app");
     assert!(dd.contains("jest"));
     assert!(!dd.contains("lodash"));
 
-    let rt_deps = runtime_dependents_of(&lockfile, "lodash");
+    let rt_deps = graph.runtime_dependents_of("lodash");
     assert!(rt_deps.contains(&"app".to_string()));
     assert!(rt_deps.contains(&"jest".to_string()));
 
-    let dd_deps = dev_dependents_of(&lockfile, "lodash");
+    let dd_deps = graph.dev_dependents_of("lodash");
     assert_eq!(dd_deps, [] as [std::string::String; 0]);
 
-    assert!(has_dep_path(&lockfile, "app", "lodash", DepType::Runtime));
-    assert!(!has_dep_path(&lockfile, "app", "jest", DepType::Runtime));
+    assert!(graph.has_dep_path("app", "lodash", EdgeFilter::Runtime));
+    assert!(!graph.has_dep_path("app", "jest", EdgeFilter::Runtime));
 
-    assert_eq!(dep_count(&lockfile, "app", DepType::Runtime), 1);
-    assert_eq!(dep_count(&lockfile, "app", DepType::Dev), 1);
+    assert_eq!(graph.dep_count("app", DepType::Runtime), 1);
+    assert_eq!(graph.dep_count("app", DepType::Dev), 1);
 }
 
 #[test]
 fn test_digest_covers_licenses() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -2124,7 +2139,7 @@ fn test_digest_covers_licenses() {
         vex_entries: vec![],
         compat: None,
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
     assert!(validate_digest(&serialized).is_ok());
     let tampered = serialized.replace("MIT", "GPL");
     assert!(matches!(
@@ -2135,7 +2150,7 @@ fn test_digest_covers_licenses() {
 
 #[test]
 fn test_vex_roundtrip() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -2170,7 +2185,7 @@ fn test_vex_roundtrip() {
         }],
         compat: None,
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
     let deserialized = deserialize(&serialized).unwrap();
     assert_eq!(deserialized.vex_entries.len(), 1);
     assert_eq!(deserialized.vex_entries[0].package, "lodash");
@@ -2333,7 +2348,7 @@ fn test_effective_advisories_includes_no_vex() {
 
 #[test]
 fn test_trust_root_rotation_roundtrip() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
         features: vec![],
@@ -2370,7 +2385,7 @@ fn test_trust_root_rotation_roundtrip() {
         vex_entries: vec![],
         compat: None,
     };
-    let serialized = serialize(&mut lockfile).unwrap();
+    let serialized = serialize(&lockfile).unwrap();
     let deserialized = deserialize(&serialized).unwrap();
     assert_eq!(deserialized.root_rotations.len(), 1);
     assert_eq!(deserialized.root_rotations[0].old_key_id, "old@key");
@@ -2434,6 +2449,30 @@ fn test_root_rotation_rejects_expired_old_key() {
 
 #[test]
 fn test_root_rotation_accepts_valid() {
+    // v1.0: a rotation record must carry a real signature by the old root key.
+    #[allow(clippy::cast_possible_truncation)] // i < 32
+    let old_seed: [u8; 32] = core::array::from_fn(|i| i as u8 + 1);
+    let old_signing = ed25519_dalek::SigningKey::from_bytes(&old_seed);
+    let old_pub = old_signing.verifying_key().as_bytes().to_vec();
+
+    #[allow(clippy::cast_possible_truncation)] // i < 32
+    let new_seed: [u8; 32] = core::array::from_fn(|i| i as u8 + 100);
+    let new_signing = ed25519_dalek::SigningKey::from_bytes(&new_seed);
+    let new_pub = new_signing.verifying_key().as_bytes().to_vec();
+
+    let rotation_signature = hlock::signature::sign_rotation(
+        "new@key",
+        hlock::signature::SignatureAlgorithm::Ed25519,
+        &new_pub,
+        9999,
+        hlock::policy::TrustRole::Root,
+        "old@key",
+        1,
+        hlock::signature::SignatureAlgorithm::Ed25519,
+        &old_seed,
+    )
+    .expect("rotation signing");
+
     let lockfile = Lockfile {
         sources: vec![Source::Registry("https://r.com/".to_string())],
         overrides: vec![],
@@ -2452,7 +2491,56 @@ fn test_root_rotation_accepts_valid() {
         trust_roots: vec![hlock::policy::TrustRoot {
             key_id: "old@key".to_string(),
             algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
-            public_key: vec![42u8; 32],
+            public_key: old_pub,
+            expires_epoch: 9999,
+            role: hlock::policy::TrustRole::Root,
+        }],
+        mirrors: vec![],
+        root_rotations: vec![hlock::TrustRootRotation {
+            old_key_id: "old@key".to_string(),
+            new_key_id: "new@key".to_string(),
+            threshold: 1,
+            new_algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
+            new_public_key: new_pub,
+            new_expires_epoch: 9999,
+            new_role: hlock::policy::TrustRole::Root,
+            rotation_signature_key_id: "old@key".to_string(),
+            rotation_signature,
+        }],
+        vex_entries: vec![],
+        compat: None,
+    };
+    assert!(lockfile.validate_root_rotation(1000).is_ok());
+}
+
+#[test]
+fn test_root_rotation_rejects_forged_signature() {
+    // v1.0 (E0306): a rotation record signed by anything but the old root
+    // key must fail validation.
+    #[allow(clippy::cast_possible_truncation)] // i < 32
+    let old_seed: [u8; 32] = core::array::from_fn(|i| i as u8 + 1);
+    let old_signing = ed25519_dalek::SigningKey::from_bytes(&old_seed);
+    let old_pub = old_signing.verifying_key().as_bytes().to_vec();
+
+    let lockfile = Lockfile {
+        sources: vec![Source::Registry("https://r.com/".to_string())],
+        overrides: vec![],
+        features: vec![],
+        metadata: vec![],
+        workspace_root: None,
+        workspace_pkgs: vec![],
+        hoist_boundaries: vec![],
+        packages: vec![],
+        artifacts: vec![],
+        patches: vec![],
+        provenance: vec![],
+        advisories: vec![],
+        licenses: vec![],
+        policies: vec![],
+        trust_roots: vec![hlock::policy::TrustRoot {
+            key_id: "old@key".to_string(),
+            algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
+            public_key: old_pub,
             expires_epoch: 9999,
             role: hlock::policy::TrustRole::Root,
         }],
@@ -2471,7 +2559,12 @@ fn test_root_rotation_accepts_valid() {
         vex_entries: vec![],
         compat: None,
     };
-    assert!(lockfile.validate_root_rotation(1000).is_ok());
+    match lockfile.validate_root_rotation(1000) {
+        Err(hlock::Error::RotationSignatureInvalid { key_id }) => {
+            assert_eq!(key_id, "old@key");
+        }
+        other => panic!("expected RotationSignatureInvalid, got {other:?}"),
+    }
 }
 
 #[test]
