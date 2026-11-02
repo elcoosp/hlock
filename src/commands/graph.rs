@@ -1,9 +1,6 @@
 //! `graph` command implementation.
 
-use super::{
-    Ctx, Path, deserialize, extract_subgraph, extract_subgraph_platform, fnv, parse_platform,
-    read_input, serialize,
-};
+use super::{Ctx, Path, deserialize, parse_platform, read_input, serialize};
 
 /// Runs the `graph` command.
 pub(crate) fn run(
@@ -35,7 +32,13 @@ pub(crate) fn run(
     };
 
     if dot {
-        let rendered = hlock::graph::export_dot(&lockfile);
+        let rendered = match hlock::Graph::new(&lockfile) {
+            Ok(g) => g.export_dot(),
+            Err(e) => {
+                eprintln!("[{}] Graph error: {}", e.error_code(), e);
+                std::process::exit(2);
+            }
+        };
         if let Some(out) = output {
             if let Err(e) = std::fs::write(out, &rendered) {
                 eprintln!("Error writing {}: {}", out.display(), e);
@@ -47,14 +50,16 @@ pub(crate) fn run(
         return;
     }
 
-    let root_cids: Vec<u64> =
-        root.iter()
-            .filter_map(|name| {
-                lockfile.packages.iter().find(|p| p.name == *name).map(|p| {
-                    fnv::calculate(&format!("{}@{}.{}.{}", p.name, p.major, p.minor, p.patch))
-                })
-            })
-            .collect();
+    let root_cids: Vec<u64> = root
+        .iter()
+        .filter_map(|name| {
+            lockfile
+                .packages
+                .iter()
+                .find(|p| p.name == *name)
+                .map(hlock::cid::package_cid)
+        })
+        .collect();
 
     if root_cids.len() != root.len() {
         eprintln!("Some root packages not found in lockfile");
@@ -63,18 +68,19 @@ pub(crate) fn run(
 
     let result = if let Some(plat) = platform {
         if let Some((os, arch)) = parse_platform(plat) {
-            extract_subgraph_platform(&lockfile, &root_cids, os, arch)
+            hlock::Graph::new(&lockfile)
+                .and_then(|g| g.extract_subgraph_platform(&root_cids, os, arch))
         } else {
             eprintln!("Invalid platform format. Use <os>-<arch> (e.g. linux-x86_64)");
             std::process::exit(1);
         }
     } else {
-        extract_subgraph(&lockfile, &root_cids)
+        hlock::Graph::new(&lockfile).and_then(|g| g.extract_subgraph(&root_cids))
     };
 
     match result {
-        Ok(mut sub) => {
-            let serialized = serialize(&mut sub).unwrap();
+        Ok(sub) => {
+            let serialized = serialize(&sub).unwrap();
             if let Some(out) = output {
                 if let Err(e) = std::fs::write(out, &serialized) {
                     eprintln!("Error writing {}: {}", out.display(), e);
