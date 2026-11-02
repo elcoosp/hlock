@@ -67,8 +67,8 @@ pub(crate) fn run(
                     conflict.theirs.minor
                 );
             }
-            let mut merged = result.lockfile;
-            let serialized = serialize(&mut merged).unwrap();
+            let merged = result.lockfile;
+            let serialized = serialize(&merged).unwrap();
             if let Some(out) = output {
                 if let Err(e) = std::fs::write(out, &serialized) {
                     eprintln!("Error writing {}: {}", out.display(), e);
