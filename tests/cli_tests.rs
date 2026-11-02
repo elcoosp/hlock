@@ -20,7 +20,7 @@ fn make_simple_lockfile() -> String {
         )],
         ..Default::default()
     };
-    hlock::serialize(&mut lf.clone()).unwrap()
+    hlock::serialize(&lf.clone()).unwrap()
 }
 
 #[test]
@@ -81,8 +81,8 @@ fn test_cli_lint_errors() {
         }],
         ..Default::default()
     };
-    let mut lf_mut = lf;
-    let serialized = hlock::serialize(&mut lf_mut).unwrap();
+    let lf_mut = lf;
+    let serialized = hlock::serialize(&lf_mut).unwrap();
     let path = write_temp_file("lint_errors.hlock", &serialized);
     let output = Command::new(hlock_bin())
         .arg("lint")
@@ -114,8 +114,8 @@ fn test_cli_diff_text() {
         }],
         ..Default::default()
     };
-    let mut lf2_mut = lf2;
-    let s2 = hlock::serialize(&mut lf2_mut).unwrap();
+    let lf2_mut = lf2;
+    let s2 = hlock::serialize(&lf2_mut).unwrap();
 
     let path1 = write_temp_file("diff_old.hlock", &s1);
     let path2 = write_temp_file("diff_new.hlock", &s2);
