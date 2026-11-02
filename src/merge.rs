@@ -729,8 +729,8 @@ mod tests {
         });
         let theirs = base.clone();
         let result = merge_lockfiles(&base, &ours, &theirs, ConflictStrategy::Fail).unwrap();
-        let mut merged = result.lockfile;
-        let serialized = crate::lockfile::serialize(&mut merged).unwrap();
+        let merged = result.lockfile;
+        let serialized = crate::lockfile::serialize(&merged).unwrap();
         let deserialized = crate::lockfile::deserialize(&serialized).unwrap();
         assert_eq!(deserialized.packages.len(), 2);
     }
