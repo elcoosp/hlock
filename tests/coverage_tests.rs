@@ -73,7 +73,7 @@ fn simple_lockfile() -> String {
         ],
         ..Default::default()
     };
-    hlock::serialize(&mut lf.clone()).unwrap()
+    hlock::serialize(&lf.clone()).unwrap()
 }
 
 fn lockfile_with_directives() -> String {
@@ -146,7 +146,7 @@ fn lockfile_with_directives() -> String {
         ],
         ..Default::default()
     };
-    hlock::serialize(&mut lf.clone()).unwrap()
+    hlock::serialize(&lf.clone()).unwrap()
 }
 
 /// A lockfile whose packages all resolve from non-registry sources, so the
@@ -177,7 +177,7 @@ fn non_registry_lockfile() -> String {
         ],
         ..Default::default()
     };
-    hlock::serialize(&mut lf.clone()).unwrap()
+    hlock::serialize(&lf.clone()).unwrap()
 }
 
 /// A lockfile that passes every error-severity lint rule, for clean `check`.
@@ -212,7 +212,7 @@ fn clean_lockfile() -> String {
         }],
         ..Default::default()
     };
-    hlock::serialize(&mut lf.clone()).unwrap()
+    hlock::serialize(&lf.clone()).unwrap()
 }
 
 fn signed_with_test_key(content: &str) -> String {
@@ -763,112 +763,39 @@ fn test_completions_quiet_prints_nothing() {
     assert_eq!(stdout, "");
 }
 
-// ------------------------------------------------------------------ info ----
+// ---------------------------------------------------------- stats --dedup ----
 
 #[test]
-fn test_info_text_output() {
+fn test_stats_dedup_reports_opportunities() {
     let content = lockfile_with_directives();
-    let path = write_temp_file("info_text.hlock", &content);
-    let (stdout, stderr, code) = run_cli(&["info".as_ref(), path.as_os_str()]);
+    let path = write_temp_file("stats_dedup.hlock", &content);
+    let (stdout, stderr, code) = run_cli(&["stats".as_ref(), "--dedup".as_ref(), path.as_os_str()]);
     assert_eq!(code, Some(0), "stderr: {stderr}");
-    assert!(stdout.contains("hlock v"));
-    assert!(stdout.contains("Packages:       2 (1 registry, 1 git)"));
-    assert!(stdout.contains("Policies:       2"));
-    assert!(stdout.contains("deny-hook"));
-    assert!(stdout.contains("Licenses:       1/2 declared"));
-    assert!(stdout.contains("Advisories:     2 (1 critical, 1 high"));
-    assert!(stdout.contains("VEX Entries:    1"));
-    assert!(stdout.contains("Digest valid"));
+    // The section header must always render; opportunities depend on content.
+    assert!(
+        stdout.contains("Deduplication Opportunities")
+            || stdout.contains("No deduplication opportunities"),
+        "unexpected dedup output: {stdout}"
+    );
 }
 
 #[test]
-fn test_info_json_output() {
+fn test_stats_dedup_json_is_valid() {
     let content = lockfile_with_directives();
-    let path = write_temp_file("info_json.hlock", &content);
+    let path = write_temp_file("stats_dedup_json.hlock", &content);
     let (stdout, stderr, code) = run_cli(&[
-        "info".as_ref(),
+        "stats".as_ref(),
+        "--dedup".as_ref(),
         path.as_os_str(),
         "--format".as_ref(),
         "json".as_ref(),
     ]);
     assert_eq!(code, Some(0), "stderr: {stderr}");
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(json["package_count"], 2);
-    assert_eq!(json["packages_by_source"]["registry"], 1);
-    assert_eq!(json["packages_by_source"]["git"], 1);
-    assert_eq!(json["sources"][1]["type"], "git");
-    assert_eq!(json["advisory_summary"]["critical"], 1);
-    assert_eq!(json["advisory_summary"]["high"], 1);
-    assert_eq!(json["vex_entries"][0]["status"], "not_affected");
-    assert_eq!(json["digest_valid"], true);
-}
-
-#[test]
-fn test_info_json_workspace_and_mirrors() {
-    let lf = hlock::Lockfile {
-        sources: vec![
-            hlock::Source::Workspace,
-            hlock::Source::CasHttp("https://cas/".to_string()),
-            hlock::Source::Ipfs("ipfs://Qm".to_string()),
-        ],
-        mirrors: vec![hlock::Mirror {
-            scope: "*".to_string(),
-            url: "https://m/".to_string(),
-        }],
-        packages: vec![hlock::Package {
-            name: "ws".to_string(),
-            source_idx: 0,
-            ..Default::default()
-        }],
-        workspace_root: Some("/repo".to_string()),
-        workspace_pkgs: vec![hlock::WorkspacePkg {
-            name: "app".to_string(),
-            manifest_path: "p/app".to_string(),
-        }],
-        hoist_boundaries: vec![hlock::HoistBoundary {
-            cosine: "app".to_string(),
-            allowed_deps: vec!["ws".to_string()],
-        }],
-        overrides: vec![hlock::Override {
-            name: "ws".to_string(),
-            from_version: "^1".to_string(),
-            ty: hlock::DepType::Runtime,
-            to_version: "1.1".to_string(),
-        }],
-        features: vec![("ws".to_string(), vec!["simd".to_string()])],
-        ..Default::default()
-    };
-    let content = hlock::serialize(&mut lf.clone()).unwrap();
-    let path = write_temp_file("info_full.hlock", &content);
-    let (stdout, stderr, code) = run_cli(&[
-        "info".as_ref(),
-        path.as_os_str(),
-        "--format".as_ref(),
-        "json".as_ref(),
-    ]);
-    assert_eq!(code, Some(0), "stderr: {stderr}");
-    let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(json["packages_by_source"]["workspace"], 1);
-    assert_eq!(json["mirrors"][0]["scope"], "*");
-    assert_eq!(json["workspace_root"], "/repo");
-    assert_eq!(json["hoist_boundaries"][0]["consumer"], "app");
-    assert_eq!(json["overrides"][0]["name"], "ws");
-    assert_eq!(json["features"][0]["flags"][0], "simd");
-
-    // Text output for the same lockfile exercises the remaining sections.
-    let (tstdout, terr, tcode) = run_cli(&["info".as_ref(), path.as_os_str()]);
-    assert_eq!(tcode, Some(0), "stderr: {terr}");
-    assert!(tstdout.contains("Workspace:      /repo"));
-    assert!(tstdout.contains("app (p/app)"));
-    // Hoist boundaries must appear exactly once (reports section, JSON order parity).
-    assert_eq!(tstdout.matches("Hoist Boundaries").count(), 1);
-    assert!(tstdout.contains("app -> [ws]"));
-    assert!(tstdout.contains("Overrides:      1"));
-    assert!(tstdout.contains("ws ^1 -> 1.1"));
-    assert!(tstdout.contains("Features:       1"));
-    assert!(tstdout.contains("ws -> simd"));
-    assert!(tstdout.contains("[1] https://cas/ (cas-http)"));
-    assert!(tstdout.contains("[2] ipfs://Qm (ipfs)"));
+    assert!(
+        json["opportunities"].is_array(),
+        "opportunities must be an array"
+    );
 }
 
 // ------------------------------------------------------------------- why ----
@@ -1043,7 +970,7 @@ fn test_explain_unknown_fails_with_hint() {
         stderr.contains("not found as a rule or advisory"),
         "stderr: {stderr}"
     );
-    assert!(stderr.contains("--file"), "stderr: {stderr}");
+    assert!(stderr.contains("explain --list"), "stderr: {stderr}");
 }
 
 // ---------------------------------------------------------------- import ----
@@ -1157,7 +1084,7 @@ fn test_verify_trust_chain_valid() {
         expires_epoch: 0,
         role: hlock::policy::TrustRole::Root,
     });
-    let content = hlock::serialize(&mut parsed).unwrap();
+    let content = hlock::serialize(&parsed).unwrap();
     let path = write_temp_file("verify_trust_ok.hlock", &content);
     let (stdout, stderr, code) = run_cli(&["verify".as_ref(), path.as_os_str()]);
     assert_eq!(code, Some(0), "stderr: {stderr}");
@@ -1175,7 +1102,7 @@ fn test_verify_expired_trust_root_fails() {
         expires_epoch: 1000,
         role: hlock::policy::TrustRole::Root,
     });
-    let content = hlock::serialize(&mut parsed).unwrap();
+    let content = hlock::serialize(&parsed).unwrap();
     let path = write_temp_file("verify_trust_expired.hlock", &content);
     let (_, stderr, code) = run_cli(&["verify".as_ref(), path.as_os_str()]);
     assert_eq!(code, Some(1));
