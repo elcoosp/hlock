@@ -21,7 +21,7 @@ pub struct SignatureDirective {
 #[derive(Debug, thiserror::Error)]
 pub enum SignatureError {
     #[error("Base64URL decode failed: {0}")]
-    InvalidBase64(&'static str),
+    InvalidBase64(String),
     #[error("Ed25519 verification failed")]
     VerificationFailed,
     #[error("ML-DSA-65 verification failed")]
@@ -88,8 +88,8 @@ pub fn parse_signature_directive(line: &str) -> Result<SignatureDirective, Signa
             .map_err(|_| SignatureError::MalformedDirective {
                 reason: "expires_epoch must be decimal".to_string(),
             })?;
-    let signature_bytes =
-        base64url::decode(sig_b64.as_bytes()).map_err(SignatureError::InvalidBase64)?;
+    let signature_bytes = base64url::decode(sig_b64.as_bytes())
+        .map_err(|err| SignatureError::InvalidBase64(err.to_string()))?;
     let expected_len = match algorithm {
         SignatureAlgorithm::Ed25519 => 64,
         SignatureAlgorithm::MlDsa65 => fips204::ml_dsa_65::SIG_LEN,
@@ -364,6 +364,211 @@ fn verify_mldsa65(
         return Err(SignatureError::MlDsaVerificationFailed);
     }
     Ok(())
+}
+
+/// Domain-separation tag for the canonical root-rotation payload.
+const ROTATION_DOMAIN: &[u8] = b"hlock/rotation/v1";
+
+/// Builds the canonical rotation payload signed by the *old* root key:
+///
+/// `"hlock/rotation/v1" || len32le(new_key_id) || new_key_id || algo_id ||
+/// len32le(new_pubkey) || new_pubkey || new_expires.u64le || len8(role) ||
+/// role || len32le(old_key_id) || old_key_id || threshold`
+///
+/// Every variable-length field is length-prefixed, so the encoding is
+/// injective and no field boundary can be forged.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)] // length prefixes of bounded fields
+pub fn rotation_payload(
+    new_key_id: &str,
+    algorithm: SignatureAlgorithm,
+    new_public_key: &[u8],
+    new_expires_epoch: u64,
+    new_role: crate::policy::TrustRole,
+    old_key_id: &str,
+    threshold: u8,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(
+        ROTATION_DOMAIN.len()
+            + 4
+            + new_key_id.len()
+            + 1
+            + 4
+            + new_public_key.len()
+            + 8
+            + 1
+            + 4
+            + old_key_id.len()
+            + 1,
+    );
+    out.extend_from_slice(ROTATION_DOMAIN);
+    out.extend_from_slice(&(new_key_id.len() as u32).to_le_bytes());
+    out.extend_from_slice(new_key_id.as_bytes());
+    out.push(match algorithm {
+        SignatureAlgorithm::Ed25519 => 0x00,
+        SignatureAlgorithm::MlDsa65 => 0x02,
+    });
+    out.extend_from_slice(&(new_public_key.len() as u32).to_le_bytes());
+    out.extend_from_slice(new_public_key);
+    out.extend_from_slice(&new_expires_epoch.to_le_bytes());
+    out.push(new_role.as_str().len() as u8);
+    out.extend_from_slice(new_role.as_str().as_bytes());
+    out.extend_from_slice(&(old_key_id.len() as u32).to_le_bytes());
+    out.extend_from_slice(old_key_id.as_bytes());
+    out.push(threshold);
+    out
+}
+
+/// Signs the canonical rotation payload with the old root's private key.
+///
+/// # Errors
+/// Returns [`SignatureError::MalformedDirective`] when the key length does
+/// not match the algorithm.
+#[allow(clippy::too_many_arguments)] // explicit crypto parameter list
+pub fn sign_rotation(
+    new_key_id: &str,
+    algorithm: SignatureAlgorithm,
+    new_public_key: &[u8],
+    new_expires_epoch: u64,
+    new_role: crate::policy::TrustRole,
+    old_key_id: &str,
+    threshold: u8,
+    old_algorithm: SignatureAlgorithm,
+    old_private_key: &[u8],
+) -> Result<Vec<u8>, SignatureError> {
+    let payload = rotation_payload(
+        new_key_id,
+        algorithm,
+        new_public_key,
+        new_expires_epoch,
+        new_role,
+        old_key_id,
+        threshold,
+    );
+    match old_algorithm {
+        SignatureAlgorithm::Ed25519 => {
+            let seed: [u8; 32] =
+                old_private_key
+                    .try_into()
+                    .map_err(|_| SignatureError::MalformedDirective {
+                        reason: "Ed25519 private key must be 32 bytes".to_string(),
+                    })?;
+            let sk = ed25519_dalek::SigningKey::from_bytes(&seed);
+            Ok(sk.sign(&payload).to_bytes().to_vec())
+        }
+        SignatureAlgorithm::MlDsa65 => {
+            let key_bytes: <fips204::ml_dsa_65::PrivateKey as FipsSerDes>::ByteArray =
+                old_private_key
+                    .try_into()
+                    .map_err(|_| SignatureError::MalformedDirective {
+                        reason: format!(
+                            "ML-DSA-65 private key must be {} bytes",
+                            fips204::ml_dsa_65::SK_LEN
+                        ),
+                    })?;
+            let sk: fips204::ml_dsa_65::PrivateKey = FipsSerDes::try_from_bytes(key_bytes)
+                .map_err(|e| SignatureError::MalformedDirective {
+                    reason: format!("invalid ML-DSA-65 private key: {e}"),
+                })?;
+            let sig: <fips204::ml_dsa_65::PrivateKey as FipsSigner>::Signature =
+                FipsSigner::try_sign(&sk, &payload, &[]).map_err(|e| {
+                    SignatureError::MalformedDirective {
+                        reason: format!("ML-DSA-65 signing failed: {e}"),
+                    }
+                })?;
+            Ok(sig.to_vec())
+        }
+    }
+}
+
+/// Verifies a `@root-rotation` record against the *old* root's public key.
+///
+/// This is the check `verify` / `check` / `ci` enforce: a rotation record
+/// whose signature was not produced by the old root key is rejected
+/// (mapped to `E0306 RotationSignatureInvalid` by the lockfile layer).
+///
+/// # Errors
+/// Returns [`SignatureError::VerificationFailed`] /
+/// [`SignatureError::MlDsaVerificationFailed`] when the signature is invalid
+/// and [`SignatureError::MalformedDirective`] when the key material is
+/// malformed.
+pub fn verify_rotation_signature(
+    rotation: &crate::lockfile::TrustRootRotation,
+    old_public_key: &[u8],
+    old_algorithm: SignatureAlgorithm,
+) -> Result<(), SignatureError> {
+    let payload = rotation_payload(
+        &rotation.new_key_id,
+        rotation.new_algorithm,
+        &rotation.new_public_key,
+        rotation.new_expires_epoch,
+        rotation.new_role,
+        &rotation.old_key_id,
+        rotation.threshold,
+    );
+    match old_algorithm {
+        SignatureAlgorithm::Ed25519 => {
+            if old_public_key.len() != ed25519_dalek::PUBLIC_KEY_LENGTH {
+                return Err(SignatureError::MalformedDirective {
+                    reason: "Ed25519 public key must be 32 bytes".to_string(),
+                });
+            }
+            let pk_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = old_public_key
+                .try_into()
+                .map_err(|_| SignatureError::MalformedDirective {
+                    reason: "invalid Ed25519 public key".to_string(),
+                })?;
+            let pk = ed25519_dalek::VerifyingKey::from_bytes(&pk_bytes)
+                .map_err(|_| SignatureError::VerificationFailed)?;
+            let Ok(sig) = ed25519_dalek::Signature::from_slice(&rotation.rotation_signature) else {
+                return Err(SignatureError::VerificationFailed);
+            };
+            pk.verify(&payload, &sig)
+                .map_err(|_| SignatureError::VerificationFailed)
+        }
+        SignatureAlgorithm::MlDsa65 => {
+            let key_bytes: <fips204::ml_dsa_65::PublicKey as FipsSerDes>::ByteArray =
+                old_public_key
+                    .try_into()
+                    .map_err(|_| SignatureError::MalformedDirective {
+                        reason: format!(
+                            "ML-DSA-65 public key must be {} bytes",
+                            fips204::ml_dsa_65::PK_LEN
+                        ),
+                    })?;
+            let vk: fips204::ml_dsa_65::PublicKey =
+                FipsSerDes::try_from_bytes(key_bytes).map_err(|e| {
+                    SignatureError::MalformedDirective {
+                        reason: format!("invalid ML-DSA-65 public key: {e}"),
+                    }
+                })?;
+            let sig_bytes: <fips204::ml_dsa_65::PublicKey as FipsVerifier>::Signature = rotation
+                .rotation_signature
+                .as_slice()
+                .try_into()
+                .map_err(|_| SignatureError::MalformedDirective {
+                    reason: "invalid ML-DSA-65 signature".to_string(),
+                })?;
+            if !FipsVerifier::verify(&vk, &payload, &sig_bytes, &[]) {
+                return Err(SignatureError::MlDsaVerificationFailed);
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Builds the new [`crate::policy::TrustRoot`] a rotation record introduces.
+#[must_use]
+pub fn rotation_new_root(
+    rotation: &crate::lockfile::TrustRootRotation,
+) -> crate::policy::TrustRoot {
+    crate::policy::TrustRoot {
+        key_id: rotation.new_key_id.clone(),
+        algorithm: rotation.new_algorithm,
+        public_key: rotation.new_public_key.clone(),
+        expires_epoch: rotation.new_expires_epoch,
+        role: rotation.new_role,
+    }
 }
 
 #[cfg(test)]
@@ -781,7 +986,7 @@ mod tests {
         }
         // Display strings for the standalone error variants.
         assert_eq!(
-            SignatureError::InvalidBase64("bad").to_string(),
+            SignatureError::InvalidBase64(String::from("bad")).to_string(),
             "Base64URL decode failed: bad"
         );
         assert_eq!(
