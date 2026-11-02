@@ -24,7 +24,10 @@ struct LockfileStats {
 }
 
 /// Runs the `stats` command.
-pub(crate) fn run(file: &Path, format: &str, ctx: Ctx) {
+///
+/// With `--dedup` the command reports deduplication opportunities instead of
+/// the general metrics (this replaces the 0.x `dedup` command).
+pub(crate) fn run(file: &Path, dedup: bool, format: &str, ctx: Ctx) {
     let Ctx { quiet, .. } = ctx;
 
     let content = match read_input(file) {
@@ -42,6 +45,11 @@ pub(crate) fn run(file: &Path, format: &str, ctx: Ctx) {
         }
     };
 
+    if dedup {
+        render_dedup(&lockfile, format, ctx);
+        return;
+    }
+
     let stats = compute(&lockfile);
     if output::parse_format(format) == output::OutputFormat::Json {
         if !quiet {
@@ -52,6 +60,53 @@ pub(crate) fn run(file: &Path, format: &str, ctx: Ctx) {
         }
     } else {
         print_text(&stats, quiet);
+    }
+}
+
+/// Renders deduplication opportunities in the requested format.
+fn render_dedup(lockfile: &hlock::Lockfile, format: &str, ctx: Ctx) {
+    let Ctx {
+        quiet,
+        color_enabled,
+        ..
+    } = ctx;
+    let bold = output::styler(color_enabled, output::Style::Bold);
+    let cyan = output::styler(color_enabled, output::Style::Cyan);
+    let yellow = output::styler(color_enabled, output::Style::Yellow);
+
+    let opportunities = lockfile.dedup_opportunities();
+    if output::parse_format(format) == output::OutputFormat::Json {
+        let json = serde_json::json!({
+            "opportunities": opportunities.iter().map(|o| serde_json::json!({"package": o.package_name, "versions": o.versions, "potential_saving_bytes": o.potential_saving_bytes})).collect::<Vec<_>>(),
+        });
+        if !quiet {
+            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        }
+    } else if !quiet {
+        if opportunities.is_empty() {
+            println!("No deduplication opportunities found.");
+        } else {
+            println!("{}:", bold("Deduplication Opportunities"));
+            println!();
+            println!(
+                "{:12}{:24}{:16}",
+                bold("Package"),
+                bold("Versions"),
+                bold("Est. Saving")
+            );
+            println!(
+                "{:12}{:24}{:16}",
+                "---------", "------------------------", "--------------"
+            );
+            for o in &opportunities {
+                println!(
+                    "{:12}{:24}{} bytes",
+                    bold(&o.package_name),
+                    cyan(&o.versions.join(", ")),
+                    yellow(&format!("~{}", o.potential_saving_bytes))
+                );
+            }
+        }
     }
 }
 
@@ -87,11 +142,15 @@ fn compute(lockfile: &hlock::Lockfile) -> LockfileStats {
         dups
     };
 
-    let deepest_chain = lockfile
-        .packages
-        .iter()
-        .map(|p| hlock::graph::transitive_deps(lockfile, &p.name).len())
-        .max()
+    // Deepest dependency chain via the memoized reachability closure
+    // (O(V+E + V·V/64) total; 0.x ran a full BFS per package, O(V·E)).
+    let deepest_chain = hlock::Graph::new(lockfile)
+        .ok()
+        .and_then(|g| {
+            g.reachability()
+                .ok()
+                .map(|r| (0..g.len()).map(|i| r.closure_size(i)).max().unwrap_or(0))
+        })
         .unwrap_or(0);
 
     let mut lic_hist: HashMap<String, usize> = HashMap::new();
