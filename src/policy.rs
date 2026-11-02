@@ -468,8 +468,20 @@ impl crate::lockfile::Lockfile {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if `MissingTrustRoot` occurs; or if `TrustRootExpired` occurs.
+    /// Returns `Err` if `MissingTrustRoot` occurs; if `TrustRootExpired` occurs;
+    /// or if `TrustRootRotationInvalid` / `RotationSignatureInvalid` occurs for
+    /// any attached rotation record.
     pub fn validate_trust_chain(&self, now_epoch: u64) -> Result<(), crate::error::Error> {
+        self.validate_root_only_chain(now_epoch)?;
+        self.validate_root_rotation(now_epoch)
+    }
+
+    /// Validates that root trust roots exist and are unexpired.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `MissingTrustRoot` or `TrustRootExpired` occurs.
+    fn validate_root_only_chain(&self, now_epoch: u64) -> Result<(), crate::error::Error> {
         let roots: Vec<&TrustRoot> = self.trust_roots_for_role(TrustRole::Root);
         if roots.is_empty() {
             return Err(crate::error::Error::MissingTrustRoot);
@@ -514,7 +526,9 @@ impl crate::lockfile::Lockfile {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if `TrustRootRotationInvalid` occurs; or if `TrustRootExpired` occurs.
+    /// Returns `Err` if `TrustRootRotationInvalid` occurs, if `TrustRootExpired`
+    /// occurs, or if `RotationSignatureInvalid` occurs when the rotation record
+    /// is not signed by the old root key.
     pub fn validate_root_rotation(&self, now_epoch: u64) -> Result<(), crate::error::Error> {
         for rotation in &self.root_rotations {
             let Some(old_root) = self
@@ -538,6 +552,16 @@ impl crate::lockfile::Lockfile {
                     expires_epoch: rotation.new_expires_epoch,
                 });
             }
+            // v1.0: the rotation record itself must be signed by the old root
+            // key over the canonical rotation payload (spec §2.3).
+            crate::signature::verify_rotation_signature(
+                rotation,
+                &old_root.public_key,
+                old_root.algorithm,
+            )
+            .map_err(|_| crate::error::Error::RotationSignatureInvalid {
+                key_id: rotation.old_key_id.clone(),
+            })?;
         }
         Ok(())
     }
