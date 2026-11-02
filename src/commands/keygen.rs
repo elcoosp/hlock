@@ -83,7 +83,7 @@ fn fill_random(dest: &mut [u8]) {
 }
 
 /// Generates an Ed25519 keypair from OS entropy; returns (private, public) key hex.
-fn generate_ed25519() -> (String, String) {
+pub(crate) fn generate_ed25519() -> (String, String) {
     let mut seed = [0u8; 32];
     fill_random(&mut seed);
     let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
@@ -94,7 +94,7 @@ fn generate_ed25519() -> (String, String) {
 }
 
 /// Generates an ML-DSA-65 (FIPS 204) keypair; returns (private, public) key hex.
-fn generate_ml_dsa_65() -> (String, String) {
+pub(crate) fn generate_ml_dsa_65() -> (String, String) {
     use fips204::traits::SerDes as _;
     let (pk, sk) = fips204::ml_dsa_65::try_keygen().unwrap_or_else(|e| {
         eprintln!("Error generating ML-DSA-65 keypair: {e:?}");
