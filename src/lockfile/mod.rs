@@ -20,8 +20,8 @@ pub use header::{format_header, parse_header};
 
 // Import dependencies for serialize/deserialize
 use crate::base64url::{decode, encode};
+use crate::cid;
 use crate::error::Error;
-use crate::fnv;
 use crate::payload::{
     DepPayload, HookHashPayload, PayloadData, PeerReqPayload, PlatformTagPayload,
 };
@@ -37,13 +37,21 @@ use std::path::Path;
 /// Returns `Err` if a source index is out of range ([`Error::MissingSource`]),
 /// a workspace package carries integrity hashes ([`Error::InvalidWorkspaceHash`]),
 /// or a dependency has no matching package ([`Error::MissingContentId`]).
-pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
+pub fn serialize(lockfile: &Lockfile) -> Result<String, Error> {
     let mut out = header::format_header(lockfile)?;
-    lockfile.packages.sort_by(|a, b| a.name.cmp(&b.name));
+    // Canonical order is name-sorted; 1.0 produces it from an index
+    // permutation instead of mutating the caller's data.
+    let mut order: Vec<usize> = (0..lockfile.packages.len()).collect();
+    order.sort_by(|&a, &b| lockfile.packages[a].name.cmp(&lockfile.packages[b].name));
     out.reserve(lockfile.packages.len() * 64);
 
-    for pkg in &lockfile.packages {
-        serialize_package(lockfile, pkg, &mut out)?;
+    let name_cid: HashMap<&str, u64> = lockfile
+        .packages
+        .iter()
+        .map(|p| (p.name.as_str(), cid::package_cid(p)))
+        .collect();
+    for &idx in &order {
+        serialize_package(lockfile, &name_cid, &lockfile.packages[idx], &mut out)?;
     }
     serialize_directives(lockfile, &mut out);
 
@@ -57,7 +65,12 @@ pub fn serialize(lockfile: &mut Lockfile) -> Result<String, Error> {
 }
 
 /// Serializes one package line (name + base64url payload).
-fn serialize_package(lockfile: &Lockfile, pkg: &Package, out: &mut String) -> Result<(), Error> {
+fn serialize_package(
+    lockfile: &Lockfile,
+    name_cid: &HashMap<&str, u64>,
+    pkg: &Package,
+    out: &mut String,
+) -> Result<(), Error> {
     if pkg.source_idx >= lockfile.sources.len() {
         return Err(Error::MissingSource {
             line_number: 0,
@@ -67,14 +80,15 @@ fn serialize_package(lockfile: &Lockfile, pkg: &Package, out: &mut String) -> Re
     if matches!(lockfile.sources[pkg.source_idx], Source::Workspace) && !pkg.hashes.is_empty() {
         return Err(Error::InvalidWorkspaceHash { line_number: 0 });
     }
-    let payload_data = build_payload_data(lockfile, pkg)?;
-    let encoded = encode(&pack_payload(&payload_data));
+    let payload_data = build_payload_data(name_cid, pkg)?;
+    let packed = pack_payload(&payload_data)?;
+    let encoded = encode(&packed);
     let _ = writeln!(out, "{}\t{}", pkg.name, encoded);
     Ok(())
 }
 
 /// Builds the binary payload for a package from its resolved dependencies.
-fn build_payload_data(lockfile: &Lockfile, pkg: &Package) -> Result<PayloadData, Error> {
+fn build_payload_data(name_cid: &HashMap<&str, u64>, pkg: &Package) -> Result<PayloadData, Error> {
     Ok(PayloadData {
         logical_name: pkg.logical_name.clone(),
         source_idx: pkg.source_idx,
@@ -84,7 +98,7 @@ fn build_payload_data(lockfile: &Lockfile, pkg: &Package) -> Result<PayloadData,
         hashes: build_hash_payloads(pkg),
         features: pkg.features.clone(),
         resolved_peers: pkg.resolved_peers.clone(),
-        deps: build_dep_payloads(lockfile, pkg)?,
+        deps: build_dep_payloads(name_cid, pkg)?,
         peer_requirements: build_peer_req_payloads(pkg),
         platform_tags: build_platform_tag_payloads(pkg),
         exports: build_export_payloads(pkg),
@@ -110,16 +124,22 @@ fn build_hash_payloads(pkg: &Package) -> Vec<crate::payload::HashPayload> {
 }
 
 /// Resolves each dependency to its content id and encodes its dep type.
-fn build_dep_payloads(lockfile: &Lockfile, pkg: &Package) -> Result<Vec<DepPayload>, Error> {
+///
+/// A `name -> (cid, dep_package)` map is built once per lockfile (0.x did a
+/// linear `find_package` scan per dependency edge).
+fn build_dep_payloads(
+    name_cid: &HashMap<&str, u64>,
+    pkg: &Package,
+) -> Result<Vec<DepPayload>, Error> {
     let mut deps = Vec::with_capacity(pkg.dependencies.len());
     for dep in &pkg.dependencies {
-        let dep_pkg = lockfile
-            .find_package(&dep.name)
-            .ok_or_else(|| Error::MissingContentId {
+        let dep_cid = name_cid
+            .get(dep.name.as_str())
+            .ok_or_else(|| Error::MissingPackage {
                 package: pkg.name.clone(),
-                content_id: fnv::calculate(&format!("{}@0.0.0", dep.name)),
+                missing_dep: dep.name.clone(),
             })?;
-        let cid = fnv::calculate(&dep_pkg.version_string());
+        let cid = *dep_cid;
         let req_indices = dep
             .requested_features
             .iter()
@@ -270,29 +290,26 @@ fn serialize_directives(lockfile: &Lockfile, out: &mut String) {
 /// a package line has no tab delimiter ([`Error::MissingDelimiter`]),
 /// or a payload is not valid base64url ([`Error::InvalidBase64`]).
 pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
+    // 1.0 reports every body parse error (bounded), not just the first.
+    const MAX_REPORTED_PARSE_ERRORS: usize = 10;
     let (mut lockfile, pkg_content) = header::parse_header(content)?;
     let header_line_count = content.lines().count() - pkg_content.lines().count();
     let mut parsed_payloads = Vec::new();
     let mut patches = Vec::new();
     let mut artifacts = Vec::new();
     let mut provenance: Vec<crate::provenance::ResolutionProvenance> = Vec::new();
-    let mut provenance_parse_errors: Vec<Error> = Vec::new();
+    let mut parse_errors: Vec<Error> = Vec::new();
 
     for (idx, line) in pkg_content.lines().enumerate() {
         if is_skippable_body_line(line) {
             continue;
         }
         let line_num = header_line_count + idx;
-        let first_error = |err: Error, errors: &mut Vec<Error>| {
-            if errors.is_empty() {
-                errors.push(err);
-            }
-        };
 
         if let Some(rest) = line.strip_prefix("@vex ") {
             match parse_vex_line(rest, idx + 1) {
                 Ok(vex) => lockfile.vex_entries.push(vex),
-                Err(e) => first_error(e, &mut provenance_parse_errors),
+                Err(e) => parse_errors.push(e),
             }
         } else if let Some(rest) = line.strip_prefix("@license ") {
             let (package, expression) = rest.split_once(' ').unwrap_or((rest, ""));
@@ -303,7 +320,7 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
         } else if let Some(rest) = line.strip_prefix("@advisory ") {
             match parse_advisory_line(rest, idx + 1) {
                 Ok(adv) => lockfile.advisories.push(adv),
-                Err(e) => first_error(e, &mut provenance_parse_errors),
+                Err(e) => parse_errors.push(e),
             }
         } else if let Some(rest) = line.strip_prefix("@artifact ") {
             artifacts.push(parse_artifact_line(rest));
@@ -316,21 +333,31 @@ pub fn deserialize(content: &str) -> Result<Lockfile, Error> {
                 source_type_id_to_source_type,
             ) {
                 Ok(prov) => upsert_provenance(&mut provenance, prov),
-                Err(e) => first_error(e, &mut provenance_parse_errors),
+                Err(e) => parse_errors.push(e),
             }
         } else {
-            let (name, payload) = decode_package_line(line, line_num)?;
-            if payload.source_idx >= lockfile.sources.len() {
-                return Err(Error::MissingSource {
-                    line_number: line_num,
-                    index: payload.source_idx,
-                });
+            match decode_package_line(line, line_num) {
+                Ok((name, payload)) => {
+                    if payload.source_idx >= lockfile.sources.len() {
+                        parse_errors.push(Error::MissingSource {
+                            line_number: line_num,
+                            index: payload.source_idx,
+                        });
+                    } else {
+                        parsed_payloads.push((name, payload, line_num));
+                    }
+                }
+                Err(e) => parse_errors.push(e),
             }
-            parsed_payloads.push((name, payload, line_num));
+        }
+        if parse_errors.len() >= MAX_REPORTED_PARSE_ERRORS {
+            break;
         }
     }
-    if let Some(err) = provenance_parse_errors.into_iter().next() {
-        return Err(err);
+    if !parse_errors.is_empty() {
+        let count = parse_errors.len();
+        let first = Box::new(parse_errors.remove(0));
+        return Err(Error::MultipleParseErrors { count, first });
     }
 
     lockfile.packages = build_packages(parsed_payloads, lockfile.sources.len())?;
@@ -404,7 +431,10 @@ fn decode_package_line(
 }
 
 /// Parses an `@vex` directive line.
-fn parse_vex_line(rest: &str, line_number: usize) -> Result<crate::lockfile::VexEntry, Error> {
+pub(crate) fn parse_vex_line(
+    rest: &str,
+    line_number: usize,
+) -> Result<crate::lockfile::VexEntry, Error> {
     let mut parts = rest.splitn(5, ' ');
     let package = parts.next().unwrap_or("").to_string();
     let advisory_id = parts.next().unwrap_or("").to_string();
@@ -429,7 +459,10 @@ fn parse_vex_line(rest: &str, line_number: usize) -> Result<crate::lockfile::Vex
 }
 
 /// Parses an `@advisory` directive line.
-fn parse_advisory_line(rest: &str, line_number: usize) -> Result<crate::policy::Advisory, Error> {
+pub(crate) fn parse_advisory_line(
+    rest: &str,
+    line_number: usize,
+) -> Result<crate::policy::Advisory, Error> {
     let mut parts = rest.splitn(5, ' ');
     let package = parts.next().unwrap_or("").to_string();
     let advisory_id = parts.next().unwrap_or("").to_string();
@@ -504,7 +537,7 @@ fn build_packages(
     source_count: usize,
 ) -> Result<Vec<Package>, Error> {
     let _ = source_count;
-    let id_map = build_content_id_map(&parsed_payloads);
+    let id_map = build_content_id_map(&parsed_payloads)?;
     let mut packages = Vec::with_capacity(parsed_payloads.len());
     for (name, payload, _line_num) in parsed_payloads {
         let dependencies = build_dependencies(&name, &payload, &id_map)?;
@@ -530,19 +563,36 @@ fn build_packages(
     Ok(packages)
 }
 
-/// Maps every payload's `name@x.y.z` content id to its name and feature list.
+/// Maps every payload's content id to its name and feature list.
+///
+/// 1.0 content ids are domain-separated BLAKE3-64 (`cid::content_id`). A
+/// 64-bit truncation collision between two distinct identities is a hard
+/// parse error (`ContentIdCollision`) instead of a silent map overwrite.
 pub(crate) fn build_content_id_map(
     parsed_payloads: &[(String, crate::payload::PayloadData, usize)],
-) -> HashMap<u64, (String, Vec<String>)> {
-    let mut id_map: HashMap<u64, (String, Vec<String>)> = HashMap::new();
+) -> Result<HashMap<u64, (String, Vec<String>)>, Error> {
+    let mut id_map: HashMap<u64, (String, Vec<String>)> =
+        HashMap::with_capacity(parsed_payloads.len());
+    let mut seen: HashMap<u64, (String, u64, u64, u64)> =
+        HashMap::with_capacity(parsed_payloads.len());
     for (name, payload, _) in parsed_payloads {
-        let cid = fnv::calculate(&format!(
-            "{}@{}.{}.{}",
-            name, payload.major, payload.minor, payload.patch
-        ));
+        let identity = (name.clone(), payload.major, payload.minor, payload.patch);
+        let cid = cid::content_id(name, payload.major, payload.minor, payload.patch);
+        if let Some(first) = seen.get(&cid)
+            && (first.0 != identity.0
+                || first.1 != identity.1
+                || first.2 != identity.2
+                || first.3 != identity.3)
+        {
+            return Err(Error::ContentIdCollision(format!(
+                "{}@{}.{}.{} and {}@{}.{}.{} share content id {cid:016x}",
+                first.0, first.1, first.2, first.3, identity.0, identity.1, identity.2, identity.3
+            )));
+        }
+        seen.insert(cid, identity);
         id_map.insert(cid, (name.clone(), payload.features.clone()));
     }
-    id_map
+    Ok(id_map)
 }
 
 /// Rebuilds integrity hashes, defaulting unknown algorithm ids to Blake3.
@@ -670,7 +720,7 @@ pub(crate) fn build_patch_hash(
 /// # Errors
 ///
 /// Returns `Err` if input validation fails.
-pub fn write_lockfile(path: &Path, lockfile: &mut Lockfile) -> Result<(), Error> {
+pub fn write_lockfile(path: &Path, lockfile: &Lockfile) -> Result<(), Error> {
     fs::write(path, serialize(lockfile)?)?;
     Ok(())
 }
@@ -715,11 +765,16 @@ pub fn validate_hoist_boundary(lockfile: &Lockfile, cosine_name: &str) -> Result
 ///
 /// Returns `Err` if `OrphanPatchHash` occurs; `PatchFileMissing` occurs; or if the patch digest does not match.
 pub fn validate_patches(lockfile: &Lockfile, lockfile_dir: &std::path::Path) -> Result<(), Error> {
+    let cid_to_idx: HashMap<u64, usize> = lockfile
+        .packages
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (cid::package_cid(p), i))
+        .collect();
     for pd in &lockfile.patches {
-        let pkg = lockfile.packages.iter().find(|p| {
-            let ver_str = format!("{}@{}.{}.{}", p.name, p.major, p.minor, p.patch);
-            fnv::calculate(&ver_str) == pd.content_id
-        });
+        let pkg = cid_to_idx
+            .get(&pd.content_id)
+            .map(|&i| &lockfile.packages[i]);
         let Some(pkg) = pkg else { continue };
         let Some((_algo, expected_digest)) = &pkg.patch_hash else {
             return Err(Error::OrphanPatchHash {
@@ -837,8 +892,8 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_round_trip_with_directives() {
-        let mut lf = lockfile_with_packages();
-        let serialized = serialize(&mut lf).unwrap();
+        let lf = lockfile_with_packages();
+        let serialized = serialize(&lf).unwrap();
         assert!(serialized.contains("@digest "));
         assert!(serialized.contains("@license alpha MIT"));
         assert!(serialized.contains("@advisory beta CVE-2024-1 high https://adv/1 <2.3.5"));
@@ -861,7 +916,7 @@ mod tests {
 
     #[test]
     fn serialize_rejects_source_index_out_of_range() {
-        let mut lf = Lockfile {
+        let lf = Lockfile {
             sources: vec![Source::Registry("https://r.com/".to_string())],
             packages: vec![Package {
                 name: "p".to_string(),
@@ -870,7 +925,7 @@ mod tests {
             }],
             ..Lockfile::default()
         };
-        match serialize(&mut lf) {
+        match serialize(&lf) {
             Err(Error::MissingSource { index, .. }) => assert_eq!(index, 5),
             other => panic!("expected MissingSource, got {other:?}"),
         }
@@ -878,7 +933,7 @@ mod tests {
 
     #[test]
     fn serialize_rejects_workspace_package_with_hashes() {
-        let mut lf = Lockfile {
+        let lf = Lockfile {
             sources: vec![Source::Workspace],
             packages: vec![Package {
                 name: "ws".to_string(),
@@ -892,7 +947,7 @@ mod tests {
             }],
             ..Lockfile::default()
         };
-        match serialize(&mut lf) {
+        match serialize(&lf) {
             Err(Error::InvalidWorkspaceHash { .. }) => {}
             other => panic!("expected InvalidWorkspaceHash, got {other:?}"),
         }
@@ -900,7 +955,7 @@ mod tests {
 
     #[test]
     fn serialize_rejects_dependency_without_package() {
-        let mut lf = Lockfile {
+        let lf = Lockfile {
             sources: vec![Source::Registry("https://r.com/".to_string())],
             packages: vec![Package {
                 name: "app".to_string(),
@@ -914,31 +969,49 @@ mod tests {
             }],
             ..Lockfile::default()
         };
-        match serialize(&mut lf) {
-            Err(Error::MissingContentId { package, .. }) => assert_eq!(package, "app"),
-            other => panic!("expected MissingContentId, got {other:?}"),
+        match serialize(&lf) {
+            Err(Error::MissingPackage {
+                package,
+                missing_dep,
+            }) => {
+                assert_eq!(package, "app");
+                assert_eq!(missing_dep, "ghost");
+            }
+            other => panic!("expected MissingPackage, got {other:?}"),
+        }
+    }
+
+    /// Deserializes `content` and returns the first aggregated parse error.
+    ///
+    /// v1.0 `deserialize` collects up to 10 body errors into
+    /// [`Error::MultipleParseErrors`]; tests assert on the first one.
+    fn first_parse_error(content: &str) -> Error {
+        match deserialize(content) {
+            Err(Error::MultipleParseErrors { first, .. }) => *first,
+            Err(e) => e,
+            Ok(_) => panic!("expected a parse error, got a valid lockfile"),
         }
     }
 
     #[test]
     fn deserialize_rejects_missing_tab_delimiter() {
-        match deserialize("@source 0 https://r/\n\nbadline\n") {
-            Err(Error::MissingDelimiter { line_number }) => assert!(line_number >= 1),
+        match first_parse_error("@source 0 https://r/\n\nbadline\n") {
+            Error::MissingDelimiter { line_number } => assert!(line_number >= 1),
             other => panic!("expected MissingDelimiter, got {other:?}"),
         }
     }
 
     #[test]
     fn deserialize_rejects_invalid_base64() {
-        match deserialize("@source 0 https://r/\n\npkg\t!!!!\n") {
-            Err(Error::InvalidBase64 { .. }) => {}
+        match first_parse_error("@source 0 https://r/\n\npkg\t!!!!\n") {
+            Error::InvalidBase64 { .. } => {}
             other => panic!("expected InvalidBase64, got {other:?}"),
         }
     }
 
     #[test]
     fn deserialize_rejects_payload_source_out_of_range() {
-        let mut lf = Lockfile {
+        let lf = Lockfile {
             sources: vec![Source::Registry("https://r.com/".to_string())],
             packages: vec![Package {
                 name: "p".to_string(),
@@ -948,57 +1021,57 @@ mod tests {
             }],
             ..Lockfile::default()
         };
-        let mut good = serialize(&mut lf).unwrap();
+        let mut good = serialize(&lf).unwrap();
         // Swap the @source directive for a @mirror: the header still parses,
         // but the payload now points at source index 0 of an empty source list.
         good = good.replace("@source 0 https://r.com/\n", "@mirror m https://m/\n");
-        match deserialize(&good) {
-            Err(Error::MissingSource { index, .. }) => assert_eq!(index, 0),
+        match first_parse_error(&good) {
+            Error::MissingSource { index, .. } => assert_eq!(index, 0),
             other => panic!("expected MissingSource, got {other:?}"),
         }
     }
 
     #[test]
     fn deserialize_rejects_bad_vex_status_and_advisory_severity() {
-        let mut lf = lockfile_with_packages();
-        let mut content = serialize(&mut lf).unwrap();
+        let lf = lockfile_with_packages();
+        let mut content = serialize(&lf).unwrap();
         content = content.replace("@digest ", "@vex beta CVE-2024-1 maybe j i\n@digest ");
-        match deserialize(&content) {
-            Err(Error::InvalidVexStatus { status, .. }) => assert_eq!(status, "maybe"),
+        match first_parse_error(&content) {
+            Error::InvalidVexStatus { status, .. } => assert_eq!(status, "maybe"),
             other => panic!("expected InvalidVexStatus, got {other:?}"),
         }
 
-        let mut content = serialize(&mut lf).unwrap();
+        let mut content = serialize(&lf).unwrap();
         content = content.replace("@digest ", "@advisory beta CVE-2024-2 urgent u *\n@digest ");
-        match deserialize(&content) {
-            Err(Error::InvalidAdvisorySeverity { severity, .. }) => assert_eq!(severity, "urgent"),
+        match first_parse_error(&content) {
+            Error::InvalidAdvisorySeverity { severity, .. } => assert_eq!(severity, "urgent"),
             other => panic!("expected InvalidAdvisorySeverity, got {other:?}"),
         }
     }
 
     #[test]
     fn deserialize_rejects_unknown_provenance_type_ids() {
-        let mut lf = lockfile_with_packages();
-        let mut content = serialize(&mut lf).unwrap();
+        let lf = lockfile_with_packages();
+        let mut content = serialize(&lf).unwrap();
         content = content.replace("@digest ", "@provenance beta ^2 app 9 0 1\n@digest ");
-        match deserialize(&content) {
-            Err(Error::UnknownProvenanceDepType { type_id }) => assert_eq!(type_id, 9),
+        match first_parse_error(&content) {
+            Error::UnknownProvenanceDepType { type_id } => assert_eq!(type_id, 9),
             other => panic!("expected UnknownProvenanceDepType, got {other:?}"),
         }
 
-        let mut content = serialize(&mut lf).unwrap();
+        let mut content = serialize(&lf).unwrap();
         content = content.replace("@digest ", "@provenance beta ^2 app 0 9 1\n@digest ");
-        match deserialize(&content) {
-            Err(Error::UnknownProvenanceSourceType { type_id }) => assert_eq!(type_id, 9),
+        match first_parse_error(&content) {
+            Error::UnknownProvenanceSourceType { type_id } => assert_eq!(type_id, 9),
             other => panic!("expected UnknownProvenanceSourceType, got {other:?}"),
         }
     }
 
     #[test]
     fn deserialize_parses_artifact_patch_and_license_lines() {
-        let mut lf = lockfile_with_packages();
-        let mut content = serialize(&mut lf).unwrap();
-        let cid = crate::fnv::calculate("beta@2.3.4");
+        let lf = lockfile_with_packages();
+        let mut content = serialize(&lf).unwrap();
+        let cid = crate::cid::content_id("beta", 2, 3, 4);
         content = content.replace(
             "@digest ",
             &format!("@artifact {cid:016x} 01 02 bin/app\n@patch {cid:016x} 01 p.diff\n@digest "),
@@ -1029,7 +1102,7 @@ mod tests {
             source_type: crate::provenance::ProvenanceSourceType::Git,
             depth: 2,
         }];
-        let content = serialize(&mut lf).unwrap();
+        let content = serialize(&lf).unwrap();
         assert!(content.contains("@vex beta CVE-2024-1 not_affected"));
         assert!(content.contains("@provenance beta ^2.0.0 app 1 2 2"));
         let parsed = deserialize(&content).unwrap();
@@ -1039,8 +1112,8 @@ mod tests {
 
     #[test]
     fn deserialize_replaces_duplicate_provenance_entries() {
-        let mut lf = lockfile_with_packages();
-        let mut content = serialize(&mut lf).unwrap();
+        let lf = lockfile_with_packages();
+        let mut content = serialize(&lf).unwrap();
         content = content.replace(
             "@digest ",
             "@provenance beta ^2 a 0 0 1\n@provenance beta ^3 b 1 0 2\n@digest ",
@@ -1054,8 +1127,8 @@ mod tests {
     fn write_and_read_lockfile_round_trip() {
         let dir = temp_dir("io");
         let path = dir.join("out.hlock");
-        let mut lf = lockfile_with_packages();
-        write_lockfile(&path, &mut lf).unwrap();
+        let lf = lockfile_with_packages();
+        write_lockfile(&path, &lf).unwrap();
         let read_back = read_lockfile(&path).unwrap();
         assert_eq!(read_back.packages.len(), 2);
         assert_eq!(read_back.find_package("alpha").map(|p| p.major), Some(1));
@@ -1129,7 +1202,7 @@ mod tests {
             }],
             ..Lockfile::default()
         };
-        let cid = crate::fnv::calculate("p@1.0.0");
+        let cid = crate::cid::content_id("p", 1, 0, 0);
 
         // A patch directive whose content id matches no package is ignored.
         lf.patches = vec![PatchDirective {
