@@ -37,7 +37,9 @@ pub(crate) fn run(file: &Path, package: &str, format: &str, ctx: Ctx) {
     let fmt = output::parse_format(format);
 
     if fmt == output::OutputFormat::Json {
-        let chains = hlock::graph::all_paths_to_roots(&lockfile, package, 5);
+        let chains = hlock::Graph::new(&lockfile)
+            .map(|g| g.all_paths_to_roots(package, 5))
+            .unwrap_or_default();
         let json = serde_json::json!({
             "package": package,
             "version": version,
@@ -48,7 +50,9 @@ pub(crate) fn run(file: &Path, package: &str, format: &str, ctx: Ctx) {
         }
     } else if !quiet {
         println!("{}@{}", bold(package), cyan(&version));
-        let chains = hlock::graph::all_paths_to_roots(&lockfile, package, 5);
+        let chains = hlock::Graph::new(&lockfile)
+            .map(|g| g.all_paths_to_roots(package, 5))
+            .unwrap_or_default();
         for chain in &chains {
             let mut rev = chain.clone();
             rev.reverse();
