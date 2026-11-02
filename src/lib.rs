@@ -1,10 +1,11 @@
 pub mod base64url;
+pub mod cid;
 pub mod config;
 pub mod error;
 pub mod explain;
 pub mod fix;
-pub mod fnv;
 pub mod graph;
+pub mod hex;
 pub mod import;
 pub mod lazy;
 pub mod lint;
@@ -39,14 +40,13 @@ pub use lockfile::types::{
 pub use config::HlockConfig;
 pub use explain::{Explanation, ExplanationKind, explain_advisory, explain_rule};
 pub use fix::{FixEntry, FixPlan, FixType, apply_fixes, build_fix_plan};
-pub use graph::{
-    all_paths_to_roots, dep_count, dependents_of, detect_cycle, dev_dependents_of, dev_deps,
-    diff_lockfiles, extract_subgraph, extract_subgraph_platform, has_dep_path, leaf_packages,
-    runtime_dependents_of, runtime_deps, topological_sort, transitive_deps, would_create_cycle,
-};
+pub use graph::{EdgeFilter, Graph, Reachability, diff_lockfiles};
 pub use import::{ImportFormat, ImportResult, import_npm, import_yarn};
 pub use lazy::{LazyLockfile, LockfileHeader};
-pub use lint::{LintFinding, LintReport, LintRule, LintSeverity, lint_default};
+pub use lint::{
+    LintFinding, LintReport, LintRule, LintSeverity, RuleCategory, RuleMetadata, lint_default,
+    rule_metadata_by_name, rule_registry,
+};
 pub use lockfile::types::{TrustRootRotation, VexEntry, VexStatus};
 pub use merge::{ConflictStrategy, MergeConflict, MergeResult, merge_lockfiles};
 pub use osv::{OsvResponse, OsvVulnerability, find_fixed_version, osv_severity, query_osv};
