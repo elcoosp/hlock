@@ -3,7 +3,7 @@ use hlock::policy::{Advisory, AdvisorySeverity};
 
 #[test]
 fn test_advisory_roundtrip() {
-    let mut lockfile = Lockfile {
+    let lockfile = Lockfile {
         sources: vec![Source::Registry("https://registry.npmjs.org/".to_string())],
         advisories: vec![
             Advisory {
@@ -24,7 +24,7 @@ fn test_advisory_roundtrip() {
         ..Lockfile::default()
     };
 
-    let serialized = lockfile::serialize(&mut lockfile).unwrap();
+    let serialized = lockfile::serialize(&lockfile).unwrap();
     let deserialized = lockfile::deserialize(&serialized).unwrap();
     assert_eq!(deserialized.advisories.len(), 2);
     assert_eq!(deserialized.advisories[0].package, "lodash");
@@ -85,7 +85,12 @@ fn test_invalid_vex_status() {
     let content = "@source 0 https://registry.npmjs.org/\n\n@vex lodash CVE-2024-12345 invalid_status reason impact\n";
     let result = hlock::lockfile::deserialize(content);
     assert!(result.is_err(), "expected error for invalid VEX status");
-    match result.unwrap_err() {
+    // v1.0 deserialize aggregates body errors; unwrap the first one.
+    let err = match result.unwrap_err() {
+        hlock::Error::MultipleParseErrors { first, .. } => *first,
+        other => other,
+    };
+    match err {
         hlock::Error::InvalidVexStatus { status, .. } => {
             assert_eq!(status, "invalid_status");
         }
