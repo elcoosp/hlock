@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default)]
 #[derive(Default)]
+#[serde(deny_unknown_fields)]
 pub struct HlockConfig {
     pub audit: AuditConfig,
     pub lint: LintConfig,
@@ -19,6 +20,7 @@ pub struct HlockConfig {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct AuditConfig {
     pub online: bool,
     pub severity: String,
@@ -27,6 +29,7 @@ pub struct AuditConfig {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default)]
 #[derive(Default)]
+#[serde(deny_unknown_fields)]
 pub struct LintConfig {
     pub rules: Vec<String>,
     pub exclude_rules: Vec<String>,
@@ -35,6 +38,7 @@ pub struct LintConfig {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default)]
 #[derive(Default)]
+#[serde(deny_unknown_fields)]
 pub struct VerifyConfig {
     pub trusted_keys: Vec<String>,
     #[serde(default)]
@@ -44,6 +48,7 @@ pub struct VerifyConfig {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default)]
 #[derive(Default)]
+#[serde(deny_unknown_fields)]
 pub struct LicensesConfig {
     pub allow: Vec<String>,
     pub deny: Vec<String>,
@@ -52,6 +57,7 @@ pub struct LicensesConfig {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct OutdatedConfig {
     pub check_major: bool,
     pub timeout: u64,
@@ -59,6 +65,7 @@ pub struct OutdatedConfig {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct ImportConfig {
     pub default_registry: String,
 }
@@ -66,6 +73,7 @@ pub struct ImportConfig {
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default)]
 #[derive(Default)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyConfig {
     pub deny_hooks: Vec<String>,
     pub build_env: String,
@@ -73,6 +81,7 @@ pub struct PolicyConfig {
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct OutputConfig {
     pub color: String,
     pub format: String,
