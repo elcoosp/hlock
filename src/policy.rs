@@ -228,12 +228,20 @@ pub struct TrustVerification {
     pub role: TrustRole,
 }
 
+/// Glob matching for policy package patterns (spec §3):
+/// - `*` matches everything;
+/// - `prefix/*` matches names under `prefix/` — the `/` boundary is
+///   required, so `@internal/*` matches `@internal/lodash` but **not**
+///   `@internalx/y`;
+/// - anything else is an exact match.
 fn pattern_matches(pattern: &str, name: &str) -> bool {
     if pattern == "*" {
         return true;
     }
     if let Some(prefix) = pattern.strip_suffix("/*") {
-        return name.starts_with(prefix);
+        return name.len() > prefix.len()
+            && name.starts_with(prefix)
+            && name.as_bytes()[prefix.len()] == b'/';
     }
     pattern == name
 }
@@ -367,26 +375,40 @@ impl crate::lockfile::Lockfile {
         PolicyDecision::NoPolicy
     }
 
+    /// Script policy decision.
+    ///
+    /// Uses the same precedence ladder as [`Self::hook_allowed`] (spec §3):
+    /// specific-deny > specific-allow > wildcard-deny > wildcard-allow >
+    /// no-policy.
     #[must_use]
     pub fn script_allowed(&self, package_name: &str, script_name: &str) -> PolicyDecision {
-        let mut allowed = false;
-        let mut denied = false;
+        let mut specific_allow = false;
+        let mut specific_deny = false;
+        let mut wildcard_deny = false;
+        let mut wildcard_allow = false;
         let mut deny_reason = String::new();
 
         for policy in &self.policies {
             match policy.policy_type {
-                PolicyType::AllowScript => {
+                PolicyType::AllowScript
                     if pattern_matches(&policy.package_pattern, package_name)
-                        && policy.value == script_name
-                    {
-                        allowed = true;
+                        && policy.value == script_name =>
+                {
+                    if policy.package_pattern == "*" {
+                        wildcard_allow = true;
+                    } else {
+                        specific_allow = true;
                     }
                 }
                 PolicyType::DenyScript
                     if pattern_matches(&policy.package_pattern, package_name)
                         && policy.value == script_name =>
                 {
-                    denied = true;
+                    if policy.package_pattern == "*" {
+                        wildcard_deny = true;
+                    } else {
+                        specific_deny = true;
+                    }
                     deny_reason =
                         format!("Script '{script_name}' denied for '{package_name}' by policy");
                 }
@@ -394,11 +416,17 @@ impl crate::lockfile::Lockfile {
             }
         }
 
-        if denied {
+        if specific_deny {
             PolicyDecision::Denied {
                 reason: deny_reason,
             }
-        } else if allowed {
+        } else if specific_allow {
+            PolicyDecision::Allowed
+        } else if wildcard_deny {
+            PolicyDecision::Denied {
+                reason: deny_reason,
+            }
+        } else if wildcard_allow {
             PolicyDecision::Allowed
         } else {
             PolicyDecision::NoPolicy
@@ -550,6 +578,14 @@ impl crate::lockfile::Lockfile {
                 return Err(crate::error::Error::TrustRootExpired {
                     key_id: rotation.new_key_id.clone(),
                     expires_epoch: rotation.new_expires_epoch,
+                });
+            }
+            // The record must attribute its signature to the outgoing root;
+            // a record claiming a different signer is malformed.
+            if rotation.rotation_signature_key_id != rotation.old_key_id {
+                return Err(crate::error::Error::RotationSignerMismatch {
+                    claimed: rotation.rotation_signature_key_id.clone(),
+                    expected: rotation.old_key_id.clone(),
                 });
             }
             // v1.0: the rotation record itself must be signed by the old root
