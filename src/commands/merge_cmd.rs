@@ -68,7 +68,13 @@ pub(crate) fn run(
                 );
             }
             let merged = result.lockfile;
-            let serialized = serialize(&merged).unwrap();
+            let serialized = match serialize(&merged) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[{}] Serialize error: {}", e.error_code(), e);
+                    std::process::exit(1);
+                }
+            };
             if let Some(out) = output {
                 if let Err(e) = std::fs::write(out, &serialized) {
                     eprintln!("Error writing {}: {}", out.display(), e);

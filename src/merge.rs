@@ -34,6 +34,7 @@ pub struct MergeResult {
 /// Returns [`Error::MergeFailed`] when `strategy` is
 /// [`ConflictStrategy::Fail`] and at least one package-level conflict was
 /// detected between `ours` and `theirs`.
+#[allow(clippy::too_many_lines)] // linear orchestration, one union per directive list
 pub fn merge_lockfiles(
     base: &Lockfile,
     ours: &Lockfile,
@@ -109,6 +110,52 @@ pub fn merge_lockfiles(
     let mut merged_packages = merged_packages;
     merged_packages.sort_by(|a, b| a.name.cmp(&b.name));
 
+    // Security-relevant directives are unioned (deduplicated, base first so
+    // ours/theirs only add). Silently dropping embedded advisories, licenses,
+    // policies, trust roots or rotations would destroy supply-chain state.
+    let merged_advisories = union_dedup(
+        base.advisories
+            .iter()
+            .chain(ours.advisories.iter())
+            .chain(theirs.advisories.iter()),
+    );
+    let merged_licenses = union_dedup(
+        base.licenses
+            .iter()
+            .chain(ours.licenses.iter())
+            .chain(theirs.licenses.iter()),
+    );
+    let merged_policies = union_dedup(
+        base.policies
+            .iter()
+            .chain(ours.policies.iter())
+            .chain(theirs.policies.iter()),
+    );
+    let merged_trust_roots = union_dedup(
+        base.trust_roots
+            .iter()
+            .chain(ours.trust_roots.iter())
+            .chain(theirs.trust_roots.iter()),
+    );
+    let merged_root_rotations = union_dedup(
+        base.root_rotations
+            .iter()
+            .chain(ours.root_rotations.iter())
+            .chain(theirs.root_rotations.iter()),
+    );
+    let merged_vex_entries = union_dedup(
+        base.vex_entries
+            .iter()
+            .chain(ours.vex_entries.iter())
+            .chain(theirs.vex_entries.iter()),
+    );
+    let merged_mirrors = union_dedup(
+        base.mirrors
+            .iter()
+            .chain(ours.mirrors.iter())
+            .chain(theirs.mirrors.iter()),
+    );
+
     Ok(MergeResult {
         lockfile: Lockfile {
             sources: merged_sources,
@@ -122,17 +169,29 @@ pub fn merge_lockfiles(
             artifacts: merged_artifacts,
             patches: merged_patches,
             provenance: merged_provenance,
-            advisories: vec![],
-            licenses: vec![],
-            policies: vec![],
-            trust_roots: vec![],
-            mirrors: vec![],
-            root_rotations: vec![],
-            vex_entries: vec![],
+            advisories: merged_advisories,
+            licenses: merged_licenses,
+            policies: merged_policies,
+            trust_roots: merged_trust_roots,
+            mirrors: merged_mirrors,
+            root_rotations: merged_root_rotations,
+            vex_entries: merged_vex_entries,
             compat: None,
         },
         conflicts,
     })
+}
+
+/// Deduplicates `base + ours + theirs` directive lists while preserving
+/// first-occurrence order. Requires `T: Eq`.
+fn union_dedup<'a, T: Eq + Clone + 'a>(items: impl Iterator<Item = &'a T>) -> Vec<T> {
+    let mut out: Vec<T> = Vec::new();
+    for item in items {
+        if !out.contains(item) {
+            out.push(item.clone());
+        }
+    }
+    out
 }
 
 fn merge_sources(
