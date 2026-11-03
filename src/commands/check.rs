@@ -1,8 +1,9 @@
 //! `check` command implementation.
 
 use super::{
-    Ctx, HashMap, Lockfile, Path, build_rule_set, deserialize, lint, output, parse_trusted_key,
-    policy, read_input, severity_label, signature, validate_digest, verify_signature,
+    Ctx, HashMap, Lockfile, Path, build_rule_set, collect_trusted_keys_or_exit, deserialize, lint,
+    now_epoch, output, policy, read_input, severity_label, signature, validate_digest,
+    verify_signature,
 };
 
 /// Arguments for the `check` command.
@@ -79,13 +80,7 @@ fn exit_parse_error(
 fn build_trusted_keys(
     specs: &[String],
 ) -> HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> {
-    let mut trusted: HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> = HashMap::new();
-    for spec in specs {
-        if let Some((key_id, (pubkey, algo))) = parse_trusted_key(spec) {
-            trusted.insert(key_id, (pubkey, algo));
-        }
-    }
-    trusted
+    collect_trusted_keys_or_exit(specs)
 }
 
 /// Returns the `(key_id, algorithm)` of the first trusted key.
@@ -101,21 +96,40 @@ fn first_trusted_key(
 }
 
 /// Verifies the lockfile signature against the trusted keys.
+///
+/// Gate semantics (v1.0.1):
+/// - trusted keys pinned + no `@signature` block → invalid (unsigned file);
+/// - no trusted keys + `@signature` block present → invalid (silent skip);
+/// - no trusted keys + unsigned → recorded as `present: false` (the file is
+///   simply unsigned, nothing to verify);
+/// - keys pinned + signature present → the cryptographic verdict.
 fn signature_status(
     content: &str,
     trusted: &HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)>,
+    now: u64,
 ) -> SignatureStatus {
+    let signed = signature::has_signature_block(content);
     if trusted.is_empty() {
         return SignatureStatus {
             present: false,
-            valid: true,
+            valid: !signed,
             expired: false,
             key_id: String::new(),
             algorithm: signature::SignatureAlgorithm::Ed25519,
             expires_epoch: 0,
         };
     }
-    match verify_signature(content, trusted) {
+    if !signed {
+        return SignatureStatus {
+            present: false,
+            valid: false,
+            expired: false,
+            key_id: String::new(),
+            algorithm: signature::SignatureAlgorithm::Ed25519,
+            expires_epoch: 0,
+        };
+    }
+    match verify_signature(content, trusted, now) {
         Ok(()) => {
             let (key_id, algorithm) = first_trusted_key(trusted);
             SignatureStatus {
@@ -353,8 +367,17 @@ fn print_signature_status(status: &SignatureStatus, color_enabled: bool) {
                 .rb()
             );
         }
-    } else {
+    } else if status.valid {
         println!("  No signature found (use --trusted-key to verify signatures)");
+    } else {
+        println!(
+            "{} Signature missing but required (trusted keys were pinned)",
+            output::C {
+                text: "✗",
+                on: color_enabled
+            }
+            .rb()
+        );
     }
 }
 
@@ -508,8 +531,12 @@ fn failure_reasons(report: &CheckReport) -> Vec<String> {
     if !report.digest_valid {
         fail_parts.push("digest invalid".to_string());
     }
-    if report.signature.present && !report.signature.valid {
-        fail_parts.push("signature invalid".to_string());
+    if !report.signature.valid {
+        if report.signature.present {
+            fail_parts.push("signature invalid".to_string());
+        } else {
+            fail_parts.push("signature missing but required".to_string());
+        }
     }
     if !report.trust_chain_valid {
         fail_parts.push("trust chain invalid".to_string());
@@ -575,13 +602,7 @@ pub(crate) fn run(args: &CheckArgs<'_>, ctx: Ctx) {
 
     let (content, digest_valid, lockfile) = read_and_parse(file, format, ctx);
 
-    let now = if time > 0 {
-        time
-    } else {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs())
-    };
+    let now = if time > 0 { time } else { now_epoch() };
 
     let t_trust = std::time::Instant::now();
     let trust_chain_valid = if lockfile.trust_roots.is_empty() {
@@ -598,7 +619,7 @@ pub(crate) fn run(args: &CheckArgs<'_>, ctx: Ctx) {
     }
 
     let trusted = build_trusted_keys(trusted_key);
-    let sig_status = signature_status(&content, &trusted);
+    let sig_status = signature_status(&content, &trusted, now);
 
     let t_lint = std::time::Instant::now();
     let rules = build_rule_set(rule);
@@ -628,11 +649,12 @@ pub(crate) fn run(args: &CheckArgs<'_>, ctx: Ctx) {
     }
 
     let audit_has_critical_or_high = audit_report.has_critical_or_high();
-    let hard_failure =
-        !digest_valid || (sig_status.present && !sig_status.valid) || !trust_chain_valid;
+    // Hard failures are verification failures (digest, signature, trust
+    // chain) → exit 1 per the CLI contract; parse errors alone exit 2.
+    let hard_failure = !digest_valid || !sig_status.valid || !trust_chain_valid;
     let soft_failure = !lint_errors.is_empty() || audit_has_critical_or_high;
     let exit_code = if hard_failure {
-        2
+        1
     } else {
         i32::from(soft_failure)
     };
