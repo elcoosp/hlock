@@ -128,9 +128,19 @@ pub(crate) fn run(args: &AuditArgs<'_>, ctx: Ctx) {
 
     if *format == "json" {
         owo_colors::set_override(false);
-        let json = audit_json(&report, &online_vulns, &online_errors, &new_ids);
+        let ok = !report.has_critical_or_high() && online_errors.is_empty();
+        let data: serde_json::Value = serde_json::from_str(&audit_json(
+            &report,
+            &online_vulns,
+            &online_errors,
+            &new_ids,
+        ))
+        .unwrap_or(serde_json::Value::Null);
         if !quiet {
-            println!("{json}");
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&super::envelope("audit", ok, &data)).unwrap()
+            );
         }
     } else {
         audit_text(
@@ -146,6 +156,11 @@ pub(crate) fn run(args: &AuditArgs<'_>, ctx: Ctx) {
     }
 
     if !new_ids.is_empty() {
+        std::process::exit(1);
+    }
+    // An online audit with unreachable packages is inconclusive, not clean
+    // (spec §7: network failures never masquerade as "no advisories").
+    if *online && !online_errors.is_empty() {
         std::process::exit(1);
     }
     if baseline_ids.is_none() {
@@ -166,6 +181,10 @@ fn is_crit_high(v: &hlock::osv::OsvVulnerability) -> bool {
 }
 
 /// Queries OSV for every package in the lockfile.
+///
+/// v1.0.1: one `/v1/querybatch` round-trip for the whole graph (spec §7)
+/// instead of one blocking POST per package; the batch transport is retried
+/// with backoff inside [`hlock::osv::query_osv_batch`].
 fn query_online(
     lockfile: &hlock::Lockfile,
     timeout: u64,
@@ -175,16 +194,28 @@ fn query_online(
     let mut errors = Vec::new();
     if verbose {
         eprintln!(
-            "[verbose] Querying OSV for {} packages...",
+            "[verbose] Querying OSV (batch) for {} packages...",
             lockfile.packages.len()
         );
     }
-    for pkg in &lockfile.packages {
-        let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
-        match hlock::osv::query_osv(&pkg.name, &version, timeout) {
-            Ok(response) => vulns.extend(response.vulns),
-            Err(e) => errors.push(format!("{}@{}: {}", pkg.name, version, e)),
+    let queries: Vec<hlock::osv::OsvQuery> = lockfile
+        .packages
+        .iter()
+        .map(|pkg| hlock::osv::OsvQuery {
+            package: hlock::osv::OsvPackage {
+                name: pkg.name.clone(),
+                ecosystem: "npm".to_string(),
+            },
+            version: format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch),
+        })
+        .collect();
+    match hlock::osv::query_osv_batch(&queries, timeout) {
+        Ok(results) => {
+            for response in results {
+                vulns.extend(response.vulns);
+            }
         }
+        Err(e) => errors.push(e),
     }
     if verbose {
         eprintln!(
