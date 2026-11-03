@@ -81,6 +81,121 @@ fn read_input(path: &std::path::Path) -> Result<String, hlock::Error> {
     }
 }
 
+/// Current wall-clock epoch seconds (0 when the clock is before the epoch).
+pub(crate) fn now_epoch() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// Prints a red failure line for a gate error and exits with status 1
+/// (verification failure per the CLI contract).
+pub(crate) fn fail_gate(err: &hlock::Error, ctx: Ctx) -> ! {
+    eprintln!(
+        "{} [{}] {err}",
+        output::C {
+            text: "✗",
+            on: ctx.color_enabled
+        }
+        .rb(),
+        err.error_code()
+    );
+    if let Some(hint) = err.hint() {
+        eprintln!("  hint: {hint}");
+    }
+    std::process::exit(1);
+}
+
+/// Prints a green success line for a gate check unless quiet.
+pub(crate) fn pass_gate(label: &str, ctx: Ctx) {
+    if !ctx.quiet {
+        println!(
+            "{} {label}",
+            output::C {
+                text: "✓",
+                on: ctx.color_enabled
+            }
+            .gb()
+        );
+    }
+}
+
+/// Wraps `data` in the stable JSON envelope every command emits in JSON
+/// mode (spec §9): `{"schema":"hlock/v1","command":…,"ok":…,"data":…}`.
+pub(crate) fn envelope(command: &str, ok: bool, data: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "schema": "hlock/v1",
+        "command": command,
+        "ok": ok,
+        "data": data,
+        "error": serde_json::Value::Null,
+    })
+}
+
+/// Extracts the first SLSA builder id declared by an inline attestation,
+/// used by `verify --sigstore` to pin the cosign certificate identity.
+pub(crate) fn parse_provenance_builder(lockfile: &Lockfile) -> Option<String> {
+    lockfile
+        .packages
+        .iter()
+        .flat_map(|p| p.hashes.iter())
+        .find_map(|h| match &h.attestation {
+            hlock::Attestation::InlineSlsa(pred) => {
+                let builder = pred.builder.trim();
+                (!builder.is_empty()).then(|| builder.to_string())
+            }
+            _ => None,
+        })
+}
+
+/// Writes `data` to `path` atomically: the payload lands in a temporary file
+/// in the same directory which is then renamed over the target. A crash or
+/// full disk mid-write can no longer truncate the caller's lockfile.
+pub(crate) fn atomic_write(path: &std::path::Path, data: &str) -> std::io::Result<()> {
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map_or_else(
+            || std::path::PathBuf::from("."),
+            std::path::Path::to_path_buf,
+        );
+    let mut tmp = dir.join(format!(
+        ".{}.tmp-{}",
+        path.file_name()
+            .map_or_else(|| "hlock".to_string(), |n| n.to_string_lossy().to_string()),
+        std::process::id()
+    ));
+    // Keep the private-key 0600 mode when the caller needs it.
+    let write_result = (|| {
+        #[cfg(unix)]
+        {
+            use std::io::Write as _;
+            use std::os::unix::fs::OpenOptionsExt as _;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            f.write_all(data.as_bytes())
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&tmp, data)
+        }
+    })();
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    let _ = &mut tmp;
+    Ok(())
+}
+
 /// Loads a baseline file (audit/ci): either a JSON array of advisory ids or
 /// `{"schema": ..., "advisory_ids": [...]}`.
 ///
@@ -110,23 +225,64 @@ pub(crate) fn load_baseline_file(path: &std::path::Path) -> std::collections::BT
         .collect()
 }
 
-fn parse_trusted_key(spec: &str) -> Option<(String, (Vec<u8>, signature::SignatureAlgorithm))> {
-    let parts: Vec<&str> = spec.splitn(3, ':').collect();
-    if parts.len() != 3 {
-        return None;
+/// Parses one `KEY_ID:ALGO:HEX` trusted-key spec, strictly.
+///
+/// Malformed specs are a hard error (the whole point of pinning a key is
+/// that a typo must never degrade into "skip verification"), and the hex
+/// payload must decode cleanly with the exact public-key length for the
+/// declared algorithm.
+fn parse_trusted_key(
+    spec: &str,
+) -> Result<(String, (Vec<u8>, signature::SignatureAlgorithm)), String> {
+    let (key_id, rest) = spec
+        .split_once(':')
+        .ok_or_else(|| format!("missing ':' separator (expected KEY_ID:ALGO:HEX, got {spec:?})"))?;
+    let (algo_str, hex_key) = rest.split_once(':').ok_or_else(|| {
+        format!("missing second ':' separator (expected KEY_ID:ALGO:HEX, got {spec:?})")
+    })?;
+    if key_id.is_empty() {
+        return Err(format!("empty key id in trusted key spec {spec:?}"));
     }
-    let key_id = parts[0].to_string();
-    let algo = match parts[1] {
-        "ed25519" => signature::SignatureAlgorithm::Ed25519,
-        "mldsa65" => signature::SignatureAlgorithm::MlDsa65,
-        _ => return None,
+    let (algo, expected_len) = match algo_str {
+        "ed25519" => (signature::SignatureAlgorithm::Ed25519, 32usize),
+        "mldsa65" => (
+            signature::SignatureAlgorithm::MlDsa65,
+            fips204::ml_dsa_65::PK_LEN,
+        ),
+        other => {
+            return Err(format!(
+                "unknown algorithm {other:?} in trusted key spec {spec:?} (supported: ed25519, mldsa65)"
+            ));
+        }
     };
-    let hex_key = parts[2];
-    let pubkey: Vec<u8> = (0..hex_key.len())
-        .step_by(2)
-        .filter_map(|i| u8::from_str_radix(&hex_key[i..i + 2], 16).ok())
-        .collect();
-    Some((key_id, (pubkey, algo)))
+    let pubkey = hlock::hex::decode(hex_key)
+        .map_err(|e| format!("invalid public key hex in {spec:?}: {e}"))?;
+    if pubkey.len() != expected_len {
+        return Err(format!(
+            "public key for {algo_str:?} must be {expected_len} bytes, got {} in {spec:?}",
+            pubkey.len()
+        ));
+    }
+    Ok((key_id.to_string(), (pubkey, algo)))
+}
+
+/// Builds the trusted-key map, exiting with status 2 on any malformed spec.
+fn collect_trusted_keys_or_exit(
+    specs: &[String],
+) -> HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> {
+    let mut trusted = HashMap::new();
+    for spec in specs {
+        match parse_trusted_key(spec) {
+            Ok((key_id, entry)) => {
+                trusted.insert(key_id, entry);
+            }
+            Err(reason) => {
+                eprintln!("Error: {reason}");
+                std::process::exit(2);
+            }
+        }
+    }
+    trusted
 }
 
 fn build_rule_set(rule_args: &[String]) -> Vec<Box<dyn hlock::lint::LintRule>> {
