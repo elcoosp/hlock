@@ -752,6 +752,7 @@ fn dispatch_mutation(command: Commands, json: bool, config: &HlockConfig, ctx: c
 }
 
 /// Runs the inspection commands (read-only lockfile analysis).
+#[allow(clippy::too_many_lines)] // one arm per subcommand is intentional
 fn dispatch_inspection(
     command: Commands,
     json: bool,
@@ -771,27 +772,43 @@ fn dispatch_inspection(
             rule,
             baseline,
             format,
-        } => commands::ci::run(
-            &commands::ci::CiArgs {
-                file: &file,
-                no_verify,
-                no_lint,
-                no_audit,
-                trusted_key: &trusted_key,
-                time,
-                severity: &severity,
-                rule: &rule,
-                baseline: baseline.as_deref(),
-                format: fmt(&format, json),
-            },
-            ctx,
-        ),
+        } => {
+            // [verify] trusted_keys from config when the CLI passes none.
+            let effective_keys: Vec<String> = if trusted_key.is_empty() {
+                config.verify.trusted_keys.clone()
+            } else {
+                trusted_key
+            };
+            commands::ci::run(
+                &commands::ci::CiArgs {
+                    file: &file,
+                    no_verify,
+                    no_lint,
+                    no_audit,
+                    trusted_key: &effective_keys,
+                    time,
+                    severity: &severity,
+                    rule: &rule,
+                    baseline: baseline.as_deref(),
+                    format: fmt(&format, json),
+                },
+                ctx,
+            );
+        }
         Commands::Verify {
             file,
             trusted_key,
             time,
             sigstore,
-        } => commands::verify::run(&file, &trusted_key, time, sigstore, ctx),
+        } => {
+            // [verify] trusted_keys from config when the CLI passes none.
+            let effective_keys: Vec<String> = if trusted_key.is_empty() {
+                config.verify.trusted_keys.clone()
+            } else {
+                trusted_key
+            };
+            commands::verify::run(&file, &effective_keys, time, sigstore, ctx);
+        }
         Commands::Lint {
             file,
             rule,
