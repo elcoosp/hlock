@@ -24,6 +24,14 @@ pub(crate) fn run(source: &Path, from: &str, output: Option<&Path>, registry: &s
         }
     };
 
+    if format == ImportFormat::Pnpm {
+        // A pnpm-lock.yaml fed to the yarn parser yields silently wrong
+        // versions; a security gate refuses rather than guesses.
+        eprintln!(
+            "Error: pnpm import is not supported yet (the yarn parser produces wrong versions); convert with 'pnpm import' to npm first"
+        );
+        std::process::exit(2);
+    }
     let (lockfile, result) = match format {
         ImportFormat::Yarn | ImportFormat::Pnpm => match import_yarn(&source_content, registry) {
             Ok(r) => r,
@@ -45,12 +53,12 @@ pub(crate) fn run(source: &Path, from: &str, output: Option<&Path>, registry: &s
         Ok(s) => s,
         Err(e) => {
             eprintln!("[{}] Serialize error: {}", e.error_code(), e);
-            std::process::exit(1);
+            std::process::exit(2);
         }
     };
 
     if let Some(out) = output {
-        if let Err(e) = std::fs::write(out, &serialized) {
+        if let Err(e) = super::atomic_write(out, &serialized) {
             eprintln!("Error writing {}: {}", out.display(), e);
             std::process::exit(1);
         }
@@ -61,7 +69,9 @@ pub(crate) fn run(source: &Path, from: &str, output: Option<&Path>, registry: &s
         print!("{serialized}");
     }
 
-    if !quiet && output.is_none() {
+    // Warnings (dropped entries, odd sources) always reach stderr — they are
+    // part of the security inventory even when the lockfile goes to a file.
+    if !quiet {
         eprintln!(
             "Imported {} packages from {} ({})",
             result.imported,
