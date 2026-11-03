@@ -32,6 +32,14 @@ pub(crate) fn run(args: &InitArgs<'_>, ctx: Ctx) {
         }
     };
 
+    if args.from == "pnpm" {
+        // A pnpm-lock.yaml fed to the yarn parser yields silently wrong
+        // versions; a security gate refuses rather than guesses.
+        eprintln!(
+            "Error: pnpm import is not supported yet (the yarn parser produces wrong versions); convert with 'pnpm import' to npm first"
+        );
+        std::process::exit(2);
+    }
     let (mut lockfile, result) = match args.from {
         "yarn" | "pnpm" => match import_yarn(&source_content, args.registry) {
             Ok(r) => r,
@@ -96,21 +104,43 @@ pub(crate) fn run(args: &InitArgs<'_>, ctx: Ctx) {
             std::process::exit(2);
         }
     };
-    if let Err(e) = std::fs::write(&out_path, &serialized) {
+
+    // The private key lands at `<out>.key`; refuse the two ways this could
+    // clobber data: an output that already exists (init bootstraps, it never
+    // overwrites) and an output whose own key path is the output itself.
+    let sk_path = out_path.with_extension("key");
+    if args.with_trust_root && sk_path == out_path {
+        eprintln!(
+            "Error: output path '{}' would be overwritten by the generated private key ('{}.key'); choose a different -o path",
+            out_path.display(),
+            out_path.display()
+        );
+        std::process::exit(2);
+    }
+    if out_path.exists() {
+        eprintln!(
+            "Error: output '{}' already exists; init never overwrites an existing lockfile",
+            out_path.display()
+        );
+        std::process::exit(2);
+    }
+    if args.with_trust_root && sk_path.exists() {
+        eprintln!(
+            "Error: private key path '{}' already exists; remove it or choose another -o path",
+            sk_path.display()
+        );
+        std::process::exit(2);
+    }
+
+    if let Err(e) = super::atomic_write(&out_path, &serialized) {
         eprintln!("Error writing {}: {e}", out_path.display());
         std::process::exit(2);
     }
 
     if let Some(private_hex) = private_key_hex {
-        let sk_path = out_path.with_extension("key");
-        if let Err(e) = std::fs::write(&sk_path, format!("{private_hex}\n")) {
+        if let Err(e) = super::atomic_write(&sk_path, &format!("{private_hex}\n")) {
             eprintln!("Error writing private key: {e}");
             std::process::exit(2);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let _ = std::fs::set_permissions(&sk_path, std::fs::Permissions::from_mode(0o600));
         }
         if !quiet {
             println!(
