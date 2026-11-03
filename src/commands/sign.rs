@@ -60,15 +60,20 @@ pub(crate) fn run(
         private_key.to_string()
     };
 
-    let key_bytes: Vec<u8> = (0..key_hex.len())
-        .step_by(2)
-        .filter_map(|i| u8::from_str_radix(&key_hex[i..i + 2], 16).ok())
-        .collect();
+    // Strict hex: a typo must fail loudly instead of silently signing with
+    // truncated key material (spec §2.1).
+    let key_bytes = match hlock::hex::decode(key_hex.trim()) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Error: private key is not valid hex: {e}");
+            std::process::exit(2);
+        }
+    };
 
     match sign_lockfile(&serialized, key_id, algo, &key_bytes, expires) {
         Ok(signed) => {
             if in_place {
-                if let Err(e) = std::fs::write(file, &signed) {
+                if let Err(e) = super::atomic_write(file, &signed) {
                     eprintln!("Error writing {}: {}", file.display(), e);
                     std::process::exit(1);
                 }
