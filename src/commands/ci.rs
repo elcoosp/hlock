@@ -7,14 +7,16 @@
 //! hlock ci package.hlock --trusted-key ci:ed25519:ABCD...
 //! ```
 //!
-//! Exit codes: `0` all gates passed, `1` findings (lint/audit/new-vs-baseline),
-//! `2` hard error (unreadable, parse failure, invalid digest or signature).
-//! `--no-verify`, `--no-lint` and `--no-audit` skip individual gates; every
-//! skipped gate is reported as `skipped` in the JSON report.
+//! Exit codes: `0` all gates passed, `1` findings / verification failure /
+//! unresolved conflict, `2` hard error (unreadable input, parse failure,
+//! invalid config). `--no-verify`, `--no-lint` and `--no-audit` skip
+//! individual gates; every skipped gate is reported as `skipped` in the JSON
+//! report.
 
 use super::{
-    Ctx, HashMap, Path, build_rule_set, deserialize, load_baseline_file, output, parse_trusted_key,
-    read_input, validate_digest, verify_signature,
+    Ctx, HashMap, Path, build_rule_set, collect_trusted_keys_or_exit, deserialize,
+    load_baseline_file, now_epoch, output, read_input, signature, validate_digest,
+    verify_signature,
 };
 
 /// Arguments for the `ci` command.
@@ -75,13 +77,7 @@ impl CiReport {
 fn build_trusted_keys(
     specs: &[String],
 ) -> HashMap<String, (Vec<u8>, hlock::signature::SignatureAlgorithm)> {
-    let mut trusted = HashMap::new();
-    for spec in specs {
-        if let Some((key_id, (pubkey, algo))) = parse_trusted_key(spec) {
-            trusted.insert(key_id, (pubkey, algo));
-        }
-    }
-    trusted
+    collect_trusted_keys_or_exit(specs)
 }
 
 /// Parses the `--severity` argument into a lint severity floor.
@@ -109,6 +105,10 @@ fn meets_min_severity(
 }
 
 /// Runs the verify gate: digest + signature + trust chain (incl. rotations).
+///
+/// Signature policy mirrors `verify`/`check`: a pinned trusted key demands a
+/// signature, and a signed file demands pinned keys — the gate never
+/// silently degrades to digest-only.
 fn run_verify(
     content: &str,
     lockfile: &hlock::Lockfile,
@@ -117,27 +117,34 @@ fn run_verify(
 ) -> (GateStatus, Vec<String>) {
     let mut reasons = Vec::new();
 
-    if validate_digest(content).is_err() {
-        reasons.push("digest missing or invalid (E0205)".to_string());
+    if let Err(e) = validate_digest(content) {
+        reasons.push(format!("digest: {e} ({})", e.error_code()));
     }
 
-    let now = if time > 0 {
-        time
-    } else {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs())
-    };
+    let now = if time > 0 { time } else { now_epoch() };
+
+    let signed = signature::has_signature_block(content);
+    if trusted.is_empty() && signed {
+        reasons.push(format!(
+            "signature: lockfile carries @signature but no trusted keys are configured ({})",
+            hlock::Error::SignatureWithoutTrustedKeys.error_code()
+        ));
+    }
+    if !trusted.is_empty() {
+        if !signed {
+            reasons.push(format!(
+                "signature: lockfile is unsigned but trusted keys were pinned ({})",
+                hlock::Error::UnsignedLockfile.error_code()
+            ));
+        } else if let Err(e) = verify_signature(content, trusted, now) {
+            reasons.push(format!("signature: {e}"));
+        }
+    }
+
     if !lockfile.trust_roots.is_empty()
         && let Err(e) = lockfile.validate_trust_chain(now)
     {
         reasons.push(format!("trust chain: {e} ({})", e.error_code()));
-    }
-
-    if !trusted.is_empty()
-        && let Err(e) = verify_signature(content, trusted)
-    {
-        reasons.push(format!("signature: {e}"));
     }
 
     if reasons.is_empty() {
