@@ -523,7 +523,14 @@ pub fn parse_header(content: &str) -> Result<(Lockfile, &str), Error> {
 
     for (line_num, line) in content.lines().enumerate() {
         if line.is_empty() {
-            let header_end = content.find("\n\n").map_or(content.len(), |i| i + 2);
+            // Accept both LF and CRLF separators; take whichever comes first
+            // so CRLF files do not silently lose their whole body.
+            let sep_lf = content.find("\n\n").map(|i| i + 2);
+            let sep_crlf = content.find("\r\n\r\n").map(|i| i + 4);
+            let header_end = match (sep_lf, sep_crlf) {
+                (Some(a), Some(b)) => a.min(b),
+                (a, b) => a.or(b).unwrap_or(content.len()),
+            };
             let remaining = &content[header_end..];
             return Ok((acc.into_lockfile(), remaining));
         }

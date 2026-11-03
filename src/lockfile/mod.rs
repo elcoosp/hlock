@@ -230,14 +230,19 @@ fn serialize_directives(lockfile: &Lockfile, out: &mut String) {
         let _ = writeln!(
             out,
             "@artifact {:016x} {:02x} {:02x} {}",
-            a.content_id, a.os_id, a.arch_id, a.relative_path
+            a.content_id,
+            a.os_id,
+            a.arch_id,
+            escape_field(&a.relative_path)
         );
     }
     for p in &lockfile.patches {
         let _ = writeln!(
             out,
             "@patch {:016x} {:02x} {}",
-            p.content_id, p.patch_type, p.relative_path
+            p.content_id,
+            p.patch_type,
+            escape_field(&p.relative_path)
         );
     }
     for prov in &lockfile.provenance {
@@ -259,8 +264,8 @@ fn serialize_directives(lockfile: &Lockfile, out: &mut String) {
             adv.package,
             adv.advisory_id,
             adv.severity.as_str(),
-            adv.url,
-            adv.affected_versions
+            escape_field(&adv.url),
+            escape_field(&adv.affected_versions)
         );
     }
     for vex in &lockfile.vex_entries {
@@ -270,13 +275,66 @@ fn serialize_directives(lockfile: &Lockfile, out: &mut String) {
             vex.package,
             vex.advisory_id,
             vex.status.as_str(),
-            vex.justification,
-            vex.impact_statement
+            escape_field(&vex.justification),
+            escape_field(&vex.impact_statement)
         );
     }
     for lic in &lockfile.licenses {
-        let _ = writeln!(out, "@license {} {}", lic.package, lic.expression);
+        let _ = writeln!(
+            out,
+            "@license {} {}",
+            lic.package,
+            escape_field(&lic.expression)
+        );
     }
+}
+
+/// Percent-encodes the characters that would corrupt the space-delimited
+/// directive format (`%`, space, tab, CR, LF) so free-text fields like VEX
+/// justifications or advisory URLs round-trip byte-for-byte.
+fn escape_field(field: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = Vec::with_capacity(field.len());
+    for &b in field.as_bytes() {
+        match b {
+            b'%' | b' ' | b'\t' | b'\r' | b'\n' => {
+                out.push(b'%');
+                out.push(HEX[usize::from(b >> 4)]);
+                out.push(HEX[usize::from(b & 0x0F)]);
+            }
+            _ => out.push(b),
+        }
+    }
+    // Input was valid UTF-8 and only ASCII escapes were inserted.
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// Inverse of [`escape_field`]. Invalid `%` sequences are kept verbatim.
+fn unescape_field(field: &str) -> String {
+    if !field.contains('%') {
+        return field.to_string();
+    }
+    let bytes = field.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (hi, lo) = (
+                (bytes[i + 1] as char).to_digit(16),
+                (bytes[i + 2] as char).to_digit(16),
+            )
+            && let (Some(hi), Some(lo)) = (hi, lo)
+        {
+            #[allow(clippy::cast_possible_truncation)] // hi/lo are 0..=15
+            out.push(((hi * 16) + lo) as u8);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 // Deserialize function
@@ -423,11 +481,38 @@ fn decode_package_line(
     let (name, encoded) = line.split_once('\t').ok_or(Error::MissingDelimiter {
         line_number: line_num,
     })?;
+    validate_package_name(name, line_num)?;
     let binary = decode(encoded.as_bytes()).map_err(|_| Error::InvalidBase64 {
         line_number: line_num,
     })?;
     let payload = unpack_payload(&binary, line_num)?;
     Ok((name.to_string(), payload))
+}
+
+/// Rejects package names that could not round-trip through the line format
+/// or that smuggle URL/path metacharacters into later processing stages
+/// (registry URL interpolation, DOT export, terminal output).
+fn validate_package_name(name: &str, line_num: usize) -> Result<(), Error> {
+    let reject = |reason: &'static str| Error::InvalidPackageName {
+        name: name.to_string(),
+        line_number: line_num,
+        reason: reason.to_string(),
+    };
+    if name.is_empty() {
+        return Err(reject("empty name"));
+    }
+    if name
+        .chars()
+        .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '?' | '#'))
+    {
+        return Err(reject(
+            "whitespace, control characters or URL metacharacters",
+        ));
+    }
+    if name.split('/').any(|seg| seg == "..") {
+        return Err(reject("path traversal segment"));
+    }
+    Ok(())
 }
 
 /// Parses an `@vex` directive line.
@@ -453,8 +538,8 @@ pub(crate) fn parse_vex_line(
         package,
         advisory_id,
         status,
-        justification,
-        impact_statement,
+        justification: unescape_field(&justification),
+        impact_statement: unescape_field(&impact_statement),
     })
 }
 
@@ -481,8 +566,8 @@ pub(crate) fn parse_advisory_line(
         package,
         advisory_id,
         severity,
-        url,
-        affected_versions,
+        url: unescape_field(&url),
+        affected_versions: unescape_field(&affected_versions),
     })
 }
 
@@ -537,6 +622,19 @@ fn build_packages(
     source_count: usize,
 ) -> Result<Vec<Package>, Error> {
     let _ = source_count;
+    // Duplicate names make dependency edges ambiguous (the serializer and
+    // the graph resolve by name), so they are a hard parse error — the lazy
+    // scanner already enforced this.
+    let mut seen_names: std::collections::HashSet<&str> =
+        std::collections::HashSet::with_capacity(parsed_payloads.len());
+    for (name, _, line_num) in &parsed_payloads {
+        if !seen_names.insert(name.as_str()) {
+            return Err(Error::DuplicatePackage {
+                name: name.clone(),
+                line_number: *line_num,
+            });
+        }
+    }
     let id_map = build_content_id_map(&parsed_payloads)?;
     let mut packages = Vec::with_capacity(parsed_payloads.len());
     for (name, payload, _line_num) in parsed_payloads {

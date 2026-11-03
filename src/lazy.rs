@@ -62,27 +62,29 @@ impl LazyLockfile {
         let mut seen_names = std::collections::HashSet::new();
         let mut provenance = Vec::new();
         let mut provenance_seen = std::collections::HashSet::new();
+        // Byte-offset line walk (not `lines()`): `lines()` strips `\r`, so
+        // CRLF input would shift every recorded offset and eventually slice
+        // mid-UTF-8-character. Offsets here are computed from raw bytes.
+        let bytes = content.as_bytes();
         let mut line_start = pkg_start_offset;
-
-        for line in content[pkg_start_offset..].lines() {
-            let line_end = line_start + line.len();
-
-            if line.trim().is_empty() {
-                line_start = line_end + 1;
-                continue;
+        while line_start <= bytes.len() {
+            let line_end = bytes[line_start..]
+                .iter()
+                .position(|&b| b == b'\n')
+                .map_or(bytes.len(), |i| line_start + i);
+            let mut line = &content[line_start..line_end];
+            if line.ends_with('\r') {
+                line = &line[..line.len() - 1];
             }
 
-            if line.starts_with("@artifact ")
-                || line.starts_with("@patch ")
-                || line.starts_with("@digest ")
-                || line.starts_with("@signature ")
-            {
-                line_start = line_end + 1;
-                continue;
-            }
-
-            if line.starts_with("@provenance ") {
-                if let Ok(prov) = parse_provenance_line(line) {
+            if !line.trim().is_empty() {
+                let is_directive = line.starts_with('@');
+                let prov = if line.starts_with("@provenance ") {
+                    parse_provenance_line(line).ok()
+                } else {
+                    None
+                };
+                if let Some(prov) = prov {
                     // Upsert by package name via a set (0.x was O(P) per line).
                     if provenance_seen.insert(prov.package_name.clone()) {
                         provenance.push(prov);
@@ -92,29 +94,28 @@ impl LazyLockfile {
                     {
                         provenance[existing] = prov;
                     }
-                }
-                line_start = line_end + 1;
-                continue;
-            }
+                } else if !is_directive && let Some(tab_pos) = line.find('\t') {
+                    let name = line[..tab_pos].to_string();
 
-            if let Some(tab_pos) = line.find('\t') {
-                let name = line[..tab_pos].to_string();
+                    if !seen_names.insert(name.clone()) {
+                        let line_num = content[..line_start].lines().count();
+                        return Err(Error::LazyIndexCorrupt {
+                            line_number: line_num,
+                            reason: format!("duplicate package name: {name}"),
+                        });
+                    }
 
-                if !seen_names.insert(name.clone()) {
-                    let line_num = content[..line_start].lines().count();
-                    return Err(Error::LazyIndexCorrupt {
-                        line_number: line_num,
-                        reason: format!("duplicate package name: {name}"),
+                    index.push(IndexEntry {
+                        name,
+                        line_start,
+                        line_end,
                     });
                 }
-
-                index.push(IndexEntry {
-                    name,
-                    line_start,
-                    line_end,
-                });
             }
 
+            if line_end >= bytes.len() {
+                break;
+            }
             line_start = line_end + 1;
         }
 
@@ -181,7 +182,10 @@ impl LazyLockfile {
             HashMap::with_capacity(self.index.len());
         let mut decode_buf = Vec::new();
         for entry in &self.index {
-            let line = &self.content[entry.line_start..entry.line_end];
+            let mut line = &self.content[entry.line_start..entry.line_end];
+            if line.ends_with('\r') {
+                line = &line[..line.len() - 1];
+            }
             let Some((_name_str, encoded)) = line.split_once('\t') else {
                 return Err(Error::MissingDelimiter { line_number: 0 });
             };
@@ -317,6 +321,7 @@ impl LazyLockfile {
         decode_buf: &mut Vec<u8>,
     ) -> Result<Package, Error> {
         let line = &self.content[entry.line_start..entry.line_end];
+        let line = line.strip_suffix('\r').unwrap_or(line);
         let (_name_str, encoded) = line
             .split_once('\t')
             .ok_or(Error::MissingDelimiter { line_number: 0 })?;
