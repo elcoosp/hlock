@@ -35,6 +35,9 @@ pub enum Error {
     #[error("Digest length {len} exceeds the wire-format maximum of 255 bytes")]
     DigestTooLong { len: usize },
 
+    #[error("Patch hash must be exactly 32 bytes, got {len}")]
+    InvalidPatchHashLength { len: usize },
+
     #[error("Content-id collision: {0}")]
     ContentIdCollision(String),
 
@@ -157,6 +160,11 @@ pub enum Error {
     #[error("Lockfile has no @digest directive; run 'hlock digest --write <file>' or re-serialize")]
     MissingDigest,
 
+    #[error(
+        "@digest directive is not positioned at the end of the body; it only covers {covered} of {total} bytes"
+    )]
+    DigestPlacement { covered: usize, total: usize },
+
     #[error("Merge conflict on package '{package_name}': {description}")]
     MergeConflict {
         package_name: String,
@@ -187,6 +195,16 @@ pub enum Error {
 
     #[error("Lazy lockfile index corrupt at line {line_number}: {reason}")]
     LazyIndexCorrupt { line_number: usize, reason: String },
+
+    #[error("Duplicate package name '{name}' at line {line_number}")]
+    DuplicatePackage { name: String, line_number: usize },
+
+    #[error("Invalid package name '{name}' at line {line_number}: {reason}")]
+    InvalidPackageName {
+        name: String,
+        line_number: usize,
+        reason: String,
+    },
 
     #[error("SBOM generation failed for package '{package}': {reason}")]
     SbomGenerationFailed { package: String, reason: String },
@@ -241,6 +259,17 @@ pub enum Error {
     )]
     RotationSignatureInvalid { key_id: String },
 
+    #[error("Lockfile is unsigned but signatures are required (trusted keys were pinned)")]
+    UnsignedLockfile,
+
+    #[error("Lockfile carries @signature directives but no trusted keys are configured")]
+    SignatureWithoutTrustedKeys,
+
+    #[error(
+        "Rotation record claims signature by '{claimed}' but must be signed by the outgoing root '{expected}'"
+    )]
+    RotationSignerMismatch { claimed: String, expected: String },
+
     #[error("Line {line_number}: Invalid VEX status '{status}'")]
     InvalidVexStatus { line_number: usize, status: String },
 
@@ -275,9 +304,12 @@ impl Error {
             Error::DuplicateProvenance { .. } => "E0113",
             Error::InvalidWorkspaceHash { .. } => "E0114",
             Error::LazyIndexCorrupt { .. } => "E0115",
+            Error::DuplicatePackage { .. } => "E0122",
+            Error::InvalidPackageName { .. } => "E0123",
             Error::NonCanonicalVarint { .. } => "E0116",
             Error::InvalidUtf8 { .. } => "E0117",
             Error::DigestTooLong { .. } => "E0118",
+            Error::InvalidPatchHashLength { .. } => "E0124",
             Error::ContentIdCollision(_) => "E0119",
             Error::MultipleParseErrors { .. } => "E0121",
             // Digest: E0200-E0299
@@ -288,6 +320,7 @@ impl Error {
             Error::ArtifactDigestMismatch { .. } => "E0205",
             Error::ScriptDigestMismatch { .. } => "E0206",
             Error::MissingDigest => "E0207",
+            Error::DigestPlacement { .. } => "E0208",
             // Signature: E0300-E0399
             Error::InvalidSignature { .. } => "E0301",
             Error::TrustRootExpired { .. } => "E0302",
@@ -295,6 +328,9 @@ impl Error {
             Error::TrustRootVerificationFailed { .. } => "E0304",
             Error::TrustRootRotationInvalid { .. } => "E0305",
             Error::RotationSignatureInvalid { .. } => "E0306",
+            Error::UnsignedLockfile => "E0307",
+            Error::SignatureWithoutTrustedKeys => "E0308",
+            Error::RotationSignerMismatch { .. } => "E0309",
             // Lint: E0400-E0499
             Error::PhantomDependency { .. } => "E0401",
             Error::OrphanPatchHash { .. } => "E0402",
@@ -339,6 +375,15 @@ impl Error {
             ),
             Error::MissingDigest => Some(
                 "re-serialize with 'hlock digest --write <file>' to attach a whole-file digest",
+            ),
+            Error::DigestPlacement { .. } => Some(
+                "the @digest directive must be the last body line, followed only by @signature lines",
+            ),
+            Error::UnsignedLockfile => Some(
+                "sign the lockfile with 'hlock sign' or drop --trusted-key when signatures are not required",
+            ),
+            Error::SignatureWithoutTrustedKeys => Some(
+                "pin the signer with --trusted-key key_id:algo:hex or remove the @signature block",
             ),
             Error::DuplicateDigestDirective => {
                 Some("keep exactly one @digest directive, at the end of the file")
@@ -393,6 +438,7 @@ mod tests {
                 field: "name",
             },
             Error::DigestTooLong { len: 300 },
+            Error::InvalidPatchHashLength { len: 16 },
             Error::ContentIdCollision("a and b".into()),
             Error::MultipleParseErrors {
                 count: 2,
@@ -595,7 +641,7 @@ mod tests {
         let codes: Vec<&'static str> = variants.iter().map(Error::error_code).collect();
         assert_eq!(
             codes.len(),
-            61,
+            62,
             "expected the full variant list, got {}",
             codes.len()
         );
