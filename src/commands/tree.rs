@@ -25,20 +25,25 @@ impl TreeNode {
     }
 }
 
+/// Hard cap on rendered tree nodes: shared sub-DAGs re-expand per path, so a
+/// hostile diamond-heavy lockfile could otherwise render ~2^d nodes.
+const MAX_TREE_NODES: usize = 100_000;
+
 /// Version string `x.y.z` for `name` via the prebuilt index (O(1)).
+///
+/// The version is formatted from the `(major, minor, patch)` fields directly;
+/// deriving it from `version_string()` with `split('@')` yields `scope/pkg`
+/// for scoped names like `@scope/pkg`.
 fn version_of(lockfile: &hlock::Lockfile, index: &HashMap<&str, usize>, name: &str) -> String {
     index
         .get(name)
         .and_then(|&i| lockfile.packages.get(i))
         .map_or_else(String::new, |p| {
-            p.version_string()
-                .split('@')
-                .nth(1)
-                .unwrap_or_default()
-                .to_string()
+            format!("{}.{}.{}", p.major, p.minor, p.patch)
         })
 }
 
+#[allow(clippy::too_many_arguments)] // explicit traversal parameters
 fn build_tree(
     lockfile: &hlock::Lockfile,
     index: &HashMap<&str, usize>,
@@ -47,18 +52,23 @@ fn build_tree(
     max_depth: Option<u32>,
     dep_type_filter: &str,
     visited: &mut HashSet<String>,
+    budget: &mut usize,
 ) -> TreeNode {
+    if *budget == 0 {
+        return TreeNode {
+            name: "… (tree truncated: node budget exhausted)".to_string(),
+            version: String::new(),
+            dep_type: None,
+            dependencies: Vec::new(),
+        };
+    }
+    *budget -= 1;
+
     let pkg = lockfile.find_package(name);
     let mut node = TreeNode {
         name: name.to_string(),
         version: pkg
-            .map(|p| {
-                p.version_string()
-                    .split('@')
-                    .nth(1)
-                    .unwrap_or_default()
-                    .to_string()
-            })
+            .map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch))
             .unwrap_or_default(),
         dep_type: None,
         dependencies: Vec::new(),
@@ -104,6 +114,7 @@ fn build_tree(
                 max_depth,
                 dep_type_filter,
                 visited,
+                budget,
             );
             child.dep_type = Some(dt.to_string());
             node.dependencies.push(child);
@@ -112,6 +123,27 @@ fn build_tree(
 
     visited.remove(name);
     node
+}
+
+fn build_root_tree(
+    lockfile: &hlock::Lockfile,
+    index: &HashMap<&str, usize>,
+    root_name: &str,
+    max_depth: Option<u32>,
+    dep_type_filter: &str,
+) -> TreeNode {
+    let mut visited = HashSet::new();
+    let mut budget = MAX_TREE_NODES;
+    build_tree(
+        lockfile,
+        index,
+        root_name,
+        0,
+        max_depth,
+        dep_type_filter,
+        &mut visited,
+        &mut budget,
+    )
 }
 
 fn render_tree_text(node: &TreeNode, prefix: &str, is_last: bool, show_dep_type: bool) {
@@ -136,6 +168,15 @@ fn render_tree_text(node: &TreeNode, prefix: &str, is_last: bool, show_dep_type:
     for (i, child) in node.dependencies.iter().enumerate() {
         let is_last_child = i == dep_count - 1;
         render_tree_text(child, &child_prefix, is_last_child, show_dep_type);
+    }
+}
+
+/// `ok` is false when none of the requested roots exist in the lockfile.
+fn stdout_root_exists(json: &serde_json::Value) -> bool {
+    if let Some(tree) = json.get("tree") {
+        !tree["name"].as_str().unwrap_or("").contains(" ↻")
+    } else {
+        true
     }
 }
 
@@ -174,17 +215,13 @@ pub(crate) fn run(
     if fmt == output::OutputFormat::Json {
         let mut trees = Vec::new();
         for root_name in root_names {
-            let mut visited = HashSet::new();
-            let tree = build_tree(
+            trees.push(build_root_tree(
                 &lockfile,
                 &index,
                 root_name,
-                0,
                 max_depth,
                 filter_dep_type,
-                &mut visited,
-            );
-            trees.push(tree);
+            ));
         }
 
         let root_version = root_names
@@ -204,23 +241,18 @@ pub(crate) fn run(
             })
         };
         if !quiet {
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            let ok = stdout_root_exists(&json);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&super::envelope("tree", ok, &json)).unwrap()
+            );
         }
     } else if !quiet {
         for (i, root_name) in root_names.iter().enumerate() {
             if root_names.len() > 1 && i > 0 {
                 println!();
             }
-            let mut visited = HashSet::new();
-            let tree = build_tree(
-                &lockfile,
-                &index,
-                root_name,
-                0,
-                max_depth,
-                filter_dep_type,
-                &mut visited,
-            );
+            let tree = build_root_tree(&lockfile, &index, root_name, max_depth, filter_dep_type);
             let show_dep_type = filter_dep_type == "all";
             println!("{}@{}", tree.name, tree.version);
             let dep_count = tree.dependencies.len();
