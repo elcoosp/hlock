@@ -1,12 +1,22 @@
 //! `verify` command implementation.
+//!
+//! Gate semantics (v1.0.1):
+//! - the `@digest` directive is **mandatory** and must cover the whole file
+//!   (missing or misplaced digests are hard failures, spec §2.5);
+//! - when trusted keys are pinned, the lockfile **must** carry a valid
+//!   signature block — an unsigned file fails (E0307);
+//! - when the lockfile carries signatures but no keys are pinned, the gate
+//!   fails too (E0308): verification must never silently degrade to a
+//!   digest-only check;
+//! - `--time` governs signature expiry **and** trust-root expiry (§2.4).
 
 use super::{
-    Ctx, HashMap, Path, deserialize, output, parse_trusted_key, read_input, signature,
-    validate_digest, verify_signature,
+    Ctx, HashMap, Lockfile, Path, deserialize, now_epoch, output, parse_provenance_builder,
+    read_input, signature, validate_digest, verify_signature,
 };
 
 /// Runs the `verify` command.
-pub(crate) fn run(file: &Path, trusted_key: &[String], time: u64, _sigstore: bool, ctx: Ctx) {
+pub(crate) fn run(file: &Path, trusted_key: &[String], time: u64, sigstore: bool, ctx: Ctx) {
     let Ctx { verbose, .. } = ctx;
 
     if verbose {
@@ -22,12 +32,9 @@ pub(crate) fn run(file: &Path, trusted_key: &[String], time: u64, _sigstore: boo
 
     check_digest(&content, ctx);
 
-    let trusted = collect_trusted_keys(trusted_key);
-    if !trusted.is_empty() {
-        check_signature(&content, &trusted, ctx);
-    }
+    let now = if time > 0 { time } else { now_epoch() };
 
-    let lockfile = match deserialize(&content) {
+    let lockfile: Lockfile = match deserialize(&content) {
         Ok(lf) => lf,
         Err(e) => {
             eprintln!("✗ [{}] parse error: {}", e.error_code(), e);
@@ -42,9 +49,47 @@ pub(crate) fn run(file: &Path, trusted_key: &[String], time: u64, _sigstore: boo
         );
     }
 
-    let now = effective_time(time);
+    let signed = signature::has_signature_block(&content);
+    let trusted = collect_trusted_keys(trusted_key);
+    if trusted.is_empty() && signed {
+        super::fail_gate(&hlock::Error::SignatureWithoutTrustedKeys, ctx);
+    }
+    if !trusted.is_empty() {
+        if !signed {
+            super::fail_gate(&hlock::Error::UnsignedLockfile, ctx);
+        }
+        check_signature(&content, &trusted, now, ctx);
+    }
+
     if !lockfile.trust_roots.is_empty() {
         check_trust_chain(&lockfile, now, ctx);
+    }
+
+    if sigstore {
+        run_sigstore(&lockfile, file, ctx);
+    }
+}
+
+/// Implements `verify --sigstore`: bundle verification is only meaningful
+/// when the lockfile declares an SLSA builder via `@provenance`; the cosign
+/// certificate identity must match that builder (never `.*`).
+fn run_sigstore(lockfile: &Lockfile, file: &Path, ctx: Ctx) {
+    if file == std::path::Path::new("-") {
+        eprintln!("Error: --sigstore cannot verify stdin input");
+        std::process::exit(2);
+    }
+    let Some(builder) = parse_provenance_builder(lockfile) else {
+        eprintln!(
+            "✗ --sigstore requires an @provenance directive with an SLSA builder, but none is present"
+        );
+        std::process::exit(1);
+    };
+    if file.exists() {
+        if let Err(e) = hlock::verify_sigstore(file, None, Some(&builder)) {
+            eprintln!("✗ sigstore: {e}");
+            std::process::exit(1);
+        }
+        super::pass_gate("sigstore bundle valid", ctx);
     }
 }
 
@@ -64,23 +109,18 @@ fn check_digest(content: &str, ctx: Ctx) {
 fn collect_trusted_keys(
     trusted_key: &[String],
 ) -> HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> {
-    let mut trusted: HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)> = HashMap::new();
-    for spec in trusted_key {
-        if let Some((key_id, (pubkey, algo))) = parse_trusted_key(spec) {
-            trusted.insert(key_id, (pubkey, algo));
-        }
-    }
-    trusted
+    super::collect_trusted_keys_or_exit(trusted_key)
 }
 
 /// Fails the command when the `@signature` block does not verify.
 fn check_signature(
     content: &str,
     trusted: &HashMap<String, (Vec<u8>, signature::SignatureAlgorithm)>,
+    now: u64,
     ctx: Ctx,
 ) {
     let t = std::time::Instant::now();
-    if let Err(e) = verify_signature(content, trusted) {
+    if let Err(e) = verify_signature(content, trusted, now) {
         fail_with("✗", e, ctx);
     }
     if ctx.verbose {
@@ -95,17 +135,6 @@ fn check_trust_chain(lockfile: &hlock::Lockfile, now: u64, ctx: Ctx) {
         fail_with("✗", e, ctx);
     }
     pass_with("trust chain valid", ctx);
-}
-
-/// The verification time: the CLI override when set, otherwise the wall clock.
-fn effective_time(time: u64) -> u64 {
-    if time > 0 {
-        time
-    } else {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs())
-    }
 }
 
 /// Prints a green check-marked success line unless quiet.
