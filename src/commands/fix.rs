@@ -1,7 +1,7 @@
 //! `fix` command implementation.
 
 use super::{
-    Ctx, FixType, Path, apply_fixes, build_fix_plan, deserialize, output, serialize,
+    Ctx, FixType, Path, apply_fixes, atomic_write, build_fix_plan, deserialize, output, serialize,
     validate_digest,
 };
 use std::io::Write as _;
@@ -78,6 +78,9 @@ pub(crate) fn run(args: &FixArgs<'_>, ctx: Ctx) {
 
     let plan = match build_fix_plan(&lockfile, fix_type, timeout) {
         Ok(mut p) => {
+            for w in &p.warnings {
+                eprintln!("! {w}");
+            }
             // `--package <name> [--to <version>]` narrows the plan.
             if let Some(pkg) = *package {
                 p.fixes.retain(|f| f.package == *pkg);
@@ -99,22 +102,25 @@ pub(crate) fn run(args: &FixArgs<'_>, ctx: Ctx) {
         let known = lockfile.packages.iter().any(|p| p.name == *pkg);
         if !known {
             eprintln!("Error: package '{pkg}' not found in lockfile");
-            std::process::exit(1);
+            std::process::exit(2);
         }
     }
 
     if plan.fixes.is_empty() {
+        // "Nothing to fix" is a success per the exit-code contract, not a
+        // finding.
         if !quiet {
             println!("No fixes needed.");
         }
-        std::process::exit(1);
+        return;
     }
 
     let fmt = output::parse_format(format);
 
     if dry_run {
         render_dry_run(&plan, fmt, ctx);
-        std::process::exit(0);
+        // Pending fixes are findings (exit 1); a clean dry-run exits 0.
+        std::process::exit(i32::from(!plan.fixes.is_empty()));
     }
 
     if interactive {
@@ -142,13 +148,16 @@ pub(crate) fn run(args: &FixArgs<'_>, ctx: Ctx) {
         );
     }
 
-    if let Err(e) = std::fs::write(file, &serialized) {
+    if let Err(e) = atomic_write(file, &serialized) {
         eprintln!("Error writing {}: {}", (*file).display(), e);
         std::process::exit(1);
     }
 
     if !quiet {
         println!("Fix applied to {}", (*file).display());
+        eprintln!(
+            "  note: integrity hashes still describe the old artifacts; re-import to refresh them"
+        );
     }
 }
 
@@ -168,7 +177,10 @@ fn render_dry_run(plan: &hlock::FixPlan, fmt: output::OutputFormat, ctx: Ctx) {
             "total_vulnerabilities": plan.total_vulnerabilities,
         });
         if !quiet {
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&super::envelope("fix", true, &json)).unwrap()
+            );
         }
         return;
     }

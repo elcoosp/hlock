@@ -2,11 +2,15 @@
 
 use crate::lockfile::Lockfile;
 use crate::osv;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct FixPlan {
     pub fixes: Vec<FixEntry>,
     pub total_vulnerabilities: usize,
+    /// Packages that could not be checked (network failure). A plan with
+    /// unreachable packages must never read as "nothing to fix".
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +40,7 @@ pub fn build_fix_plan(
     timeout_secs: u64,
 ) -> Result<FixPlan, String> {
     let mut fixes = Vec::new();
+    let mut warnings = Vec::new();
 
     match fix_type {
         FixType::Audit => {
@@ -47,20 +52,24 @@ pub fn build_fix_plan(
 
                 let current = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
 
-                if let Ok(response) = osv::query_osv(&adv.package, &current, timeout_secs) {
-                    for vuln in &response.vulns {
-                        if let Some(fixed) = osv::find_fixed_version(vuln) {
-                            fixes.push(FixEntry {
-                                package: adv.package.clone(),
-                                current: current.clone(),
-                                fixed,
-                                advisory_id: vuln.id.clone(),
-                                advisory_summary: vuln.summary.clone(),
-                                fix_type: FixType::Audit,
-                            });
-                            break;
+                // OSV being down must never read as "no fix available".
+                match osv::query_osv(&adv.package, &current, timeout_secs) {
+                    Ok(response) => {
+                        for vuln in &response.vulns {
+                            if let Some(fixed) = osv::find_fixed_version(vuln) {
+                                fixes.push(FixEntry {
+                                    package: adv.package.clone(),
+                                    current: current.clone(),
+                                    fixed,
+                                    advisory_id: vuln.id.clone(),
+                                    advisory_summary: vuln.summary.clone(),
+                                    fix_type: FixType::Audit,
+                                });
+                                break;
+                            }
                         }
                     }
+                    Err(e) => warnings.push(e),
                 }
             }
         }
@@ -92,13 +101,50 @@ pub fn build_fix_plan(
         FixType::Outdated => fixes.len(),
     };
 
+    if let FixType::Audit = fix_type
+        && !warnings.is_empty()
+        && fixes.is_empty()
+    {
+        // Every query failed and nothing was learned: refuse to produce a
+        // plan that would look like "no fixes needed".
+        return Err(format!(
+            "OSV unreachable, fix plan inconclusive ({} package(s) could not be checked): {}",
+            warnings.len(),
+            warnings.first().cloned().unwrap_or_default()
+        ));
+    }
+
     Ok(FixPlan {
         fixes,
         total_vulnerabilities,
+        warnings,
     })
 }
 
+/// Parses an OSV "fixed" version string into a `(major, minor, patch)`
+/// triple the wire format can represent.
+///
+/// A single leading `v`/`V` is stripped. Prerelease/build suffixes have no
+/// representation in the `(u64, u64, u64)` version model and are rejected
+/// rather than silently applied as a different release (a fix released as
+/// `2.0.0-beta.1` is not the `2.0.0` release).
+fn parse_fixed_version(fixed: &str) -> Option<(u64, u64, u64)> {
+    let core = fixed.strip_prefix(['v', 'V']).unwrap_or(fixed);
+    if core.is_empty() || core.contains('-') || core.contains('+') {
+        return None;
+    }
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().map_or(Some(0), |p| p.parse().ok())?;
+    let patch = parts.next().map_or(Some(0), |p| p.parse().ok())?;
+    Some((major, minor, patch))
+}
+
 /// Apply fixes to a lockfile, returning a modified copy.
+///
+/// Beyond the version bump, every `resolved_peers` content id that pointed
+/// at the old version of a bumped package is refreshed — a stale cid would
+/// silently break peer-resolution integrity.
 pub fn apply_fixes(lockfile: &mut Lockfile, plan: &FixPlan, selected: &[bool]) -> usize {
     let mut applied = 0;
 
@@ -107,16 +153,8 @@ pub fn apply_fixes(lockfile: &mut Lockfile, plan: &FixPlan, selected: &[bool]) -
             continue;
         }
 
-        let ver_parts: Vec<u64> = fix
-            .fixed
-            .split('.')
-            .filter_map(|s| s.parse().ok())
-            .collect();
-        let (major, minor, patch) = match ver_parts.as_slice() {
-            [maj, min, pat] => (*maj, *min, *pat),
-            [maj, min] => (*maj, *min, 0),
-            [maj] => (*maj, 0, 0),
-            _ => continue,
+        let Some((major, minor, patch)) = parse_fixed_version(&fix.fixed) else {
+            continue;
         };
 
         if let Some(pkg) = lockfile.packages.iter_mut().find(|p| p.name == fix.package) {
@@ -124,6 +162,22 @@ pub fn apply_fixes(lockfile: &mut Lockfile, plan: &FixPlan, selected: &[bool]) -
             pkg.minor = minor;
             pkg.patch = patch;
             applied += 1;
+        }
+    }
+
+    if applied > 0 {
+        // Refresh peer-resolution cids for every package whose version moved.
+        let cid_by_name: HashMap<String, u64> = lockfile
+            .packages
+            .iter()
+            .map(|p| (p.name.clone(), crate::cid::package_cid(p)))
+            .collect();
+        for pkg in &mut lockfile.packages {
+            for peer in &mut pkg.resolved_peers {
+                if let Some(&cid) = cid_by_name.get(&peer.peer_name) {
+                    peer.satisfied_by_content_id = cid;
+                }
+            }
         }
     }
 
@@ -172,6 +226,7 @@ mod tests {
                 fix_type: FixType::Audit,
             }],
             total_vulnerabilities: 1,
+            warnings: Vec::new(),
         };
 
         let applied = apply_fixes(&mut lockfile, &plan, &[true]);
@@ -224,6 +279,7 @@ mod tests {
                 },
             ],
             total_vulnerabilities: 2,
+            warnings: Vec::new(),
         };
 
         let applied = apply_fixes(&mut lockfile, &plan, &[true, false]);
@@ -334,6 +390,7 @@ mod tests {
                 entry("one", "9"),
             ],
             total_vulnerabilities: 3,
+            warnings: Vec::new(),
         };
         let applied = apply_fixes(&mut lockfile, &plan, &[true, true, true]);
         assert_eq!(applied, 3);
@@ -395,6 +452,7 @@ mod tests {
                 },
             ],
             total_vulnerabilities: 2,
+            warnings: Vec::new(),
         };
         let applied = apply_fixes(&mut lockfile, &plan, &[true, true]);
         assert_eq!(applied, 0);
@@ -426,6 +484,7 @@ mod tests {
                 fix_type: FixType::Outdated,
             }],
             total_vulnerabilities: 1,
+            warnings: Vec::new(),
         };
         assert_eq!(apply_fixes(&mut lockfile, &plan, &[]), 0);
         assert_eq!(apply_fixes(&mut lockfile, &plan, &[false]), 0);
