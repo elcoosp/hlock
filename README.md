@@ -6,7 +6,7 @@
     fast enough to run on every merge.
   </p>
   <p>
-    <img src="https://img.shields.io/badge/version-1.0.0-000000?style=flat-square" alt="v1.0.0"/>
+    <img src="https://img.shields.io/badge/version-1.0.1-000000?style=flat-square" alt="v1.0.0"/>
     <img src="https://img.shields.io/badge/Rust-2024%20edition-000000?style=flat-square&logo=rust" alt="Rust"/>
     <img src="https://img.shields.io/badge/License-MIT-blue?style=flat-square" alt="License MIT"/>
     <img src="https://img.shields.io/badge/Crypto-BLAKE3%20%2B%20Ed25519%20%2B%20ML--DSA--65-FFA500?style=flat-square" alt="Cryptography"/>
@@ -169,11 +169,17 @@ let out = serialize(&sub)?; // no &mut: the caller's data is never reordered
 ## Development
 
 ```bash
-cargo test                 # 550+ tests, all green
+cargo test                 # 581 tests, all green — includes the
+                           # adversarial security suite (tests/adversarial_security.rs)
 cargo clippy --all-targets -- -W clippy::pedantic   # 0 warnings
 cargo fmt --check
 cargo run --release --example bench                # perf gate
 ```
+
+> **v1.0.1** is a security & correctness release: the full audit with every
+> finding, exploit reproduction and fix is documented in
+> [`AUDIT.md`](AUDIT.md), and the changes are summarized in
+> [`CHANGELOG.md`](CHANGELOG.md).
 
 Layout: `src/lockfile/` (canonical format + digest), `src/payload.rs` (binary
 wire format v0x10), `src/graph.rs` (CSR analysis engine), `src/signature.rs`
