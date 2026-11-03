@@ -1,4 +1,10 @@
 use fips204::traits::SerDes as FipsSerDes;
+fn now_epoch() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 use hlock::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -1024,7 +1030,7 @@ fn test_e2e_sign_lockfile_and_verify() {
         "ci@company.com".to_string(),
         (verifying_key_bytes.to_vec(), SignatureAlgorithm::Ed25519),
     );
-    let verify_result = verify_signature(&signed, &trusted);
+    let verify_result = verify_signature(&signed, &trusted, now_epoch());
     assert!(verify_result.is_ok());
 }
 
@@ -1554,11 +1560,15 @@ fn test_e2e_sbom_spdx() {
         vex_entries: vec![],
         compat: None,
     };
-    let json_str =
-        hlock::generate_sbom(&lockfile, hlock::SbomFormat::SpdxJson, "my-project").unwrap();
+    let json_str = hlock::generate_sbom(
+        &lockfile,
+        hlock::SbomFormat::SpdxJson,
+        "https://sbom.example/my-project",
+    )
+    .unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     assert_eq!(parsed["spdxVersion"], "SPDX-2.3");
-    assert_eq!(parsed["name"], "my-project");
+    assert_eq!(parsed["name"], "https://sbom.example/my-project");
     assert_eq!(parsed["packages"].as_array().unwrap().len(), 2);
 }
 
@@ -1593,8 +1603,12 @@ fn test_e2e_sbom_cyclonedx() {
         vex_entries: vec![],
         compat: None,
     };
-    let json_str =
-        hlock::generate_sbom(&lockfile, hlock::SbomFormat::CycloneDxJson, "my-project").unwrap();
+    let json_str = hlock::generate_sbom(
+        &lockfile,
+        hlock::SbomFormat::CycloneDxJson,
+        "https://sbom.example/my-project",
+    )
+    .unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     assert_eq!(parsed["bomFormat"], "CycloneDX");
     assert_eq!(parsed["specVersion"], "1.5");
@@ -2000,7 +2014,7 @@ fn test_e2e_ml_dsa65_signed_lockfile() {
         (vk_bytes.to_vec(), SignatureAlgorithm::MlDsa65),
     );
 
-    assert!(verify_signature(&signed, &trusted).is_ok());
+    assert!(verify_signature(&signed, &trusted, now_epoch()).is_ok());
 
     let deserialized = deserialize(&signed).unwrap();
     assert_eq!(deserialized.packages.len(), 1);

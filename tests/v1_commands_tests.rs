@@ -93,10 +93,17 @@ fn bootstrap(dir: &std::path::Path) -> (PathBuf, String) {
 #[test]
 fn test_init_produces_verifiable_lockfile() {
     let dir = scratch_dir("init");
-    let (lf, _) = bootstrap(&dir);
+    let (lf, pubkey) = bootstrap(&dir);
 
+    // v1.0.1: a signed file demands pinned keys — verify without them
+    // fails with E0308 instead of silently skipping the signature gate.
     let verify = Command::new(hlock_bin())
-        .args(["verify", lf.to_str().unwrap()])
+        .args([
+            "verify",
+            lf.to_str().unwrap(),
+            "--trusted-key",
+            &format!("ci@test:ed25519:{pubkey}"),
+        ])
         .output()
         .unwrap();
     assert!(
@@ -201,7 +208,7 @@ fn test_ci_json_envelope() {
 #[test]
 fn test_trust_rotate_round_trip() {
     let dir = scratch_dir("trust");
-    let (lf, _) = bootstrap(&dir);
+    let (lf, pubkey) = bootstrap(&dir);
 
     // Rotate the root key with the old private key.
     let rotate = Command::new(hlock_bin())
@@ -232,11 +239,16 @@ fn test_trust_rotate_round_trip() {
     assert!(stdout.contains("Rotation records"), "{stdout}");
 
     // The rotated lockfile still verifies (rotation signature validates).
+    // v1.0.1: `trust rotate` rewrites the file, which drops the old
+    // @signature block (its digest no longer matches) — so the file is
+    // unsigned again and must verify without pinned keys; the rotation
+    // record itself is checked by the trust-chain gate.
     let verify = Command::new(hlock_bin())
         .args(["verify", lf.to_str().unwrap()])
         .output()
         .unwrap();
     assert!(verify.status.success(), "verify after rotation failed");
+    let _ = pubkey;
 
     // JSON output exposes both sections.
     let list_json = Command::new(hlock_bin())
@@ -245,8 +257,9 @@ fn test_trust_rotate_round_trip() {
         .unwrap();
     let json: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&list_json.stdout)).unwrap();
-    assert_eq!(json["rotations"].as_array().unwrap().len(), 1);
-    assert_eq!(json["rotations"][0]["signed_by"], "ci@test");
+    let data = &json["data"];
+    assert_eq!(data["rotations"].as_array().unwrap().len(), 1);
+    assert_eq!(data["rotations"][0]["signed_by"], "ci@test");
 }
 
 #[test]
@@ -259,8 +272,9 @@ fn test_trust_list_json_empty() {
         .unwrap();
     let json: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
-    assert_eq!(json["rotations"].as_array().unwrap().len(), 0);
-    assert_eq!(json["trust_roots"].as_array().unwrap().len(), 1);
+    let data = &json["data"];
+    assert_eq!(data["rotations"].as_array().unwrap().len(), 0);
+    assert_eq!(data["trust_roots"].as_array().unwrap().len(), 1);
 }
 
 // ---------------------------------------------------------------- config ----
@@ -450,7 +464,7 @@ fn test_global_json_shorthand() {
     let json: serde_json::Value =
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).unwrap();
     assert!(
-        json["total_packages"].is_number(),
+        json["data"]["total_packages"].is_number(),
         "--json must force JSON output"
     );
 }

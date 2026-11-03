@@ -146,8 +146,14 @@ fn test_why_json() {
     assert!(output.status.success(), "why --format json should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("should be valid JSON");
-    assert!(parsed["package"].is_string(), "should have package field");
-    assert!(parsed["chains"].is_array(), "should have chains array");
+    assert!(
+        parsed["data"]["package"].is_string(),
+        "should have data.package field"
+    );
+    assert!(
+        parsed["data"]["chains"].is_array(),
+        "should have data.chains array"
+    );
 }
 
 #[test]

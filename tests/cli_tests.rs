@@ -175,7 +175,8 @@ fn test_cli_sbom_spdx() {
         .arg("sbom")
         .arg(&path)
         .arg("--namespace")
-        .arg("test-namespace")
+        // SPDX requires an absolute URI for documentNamespace.
+        .arg("https://spdx.example/test-namespace")
         .output()
         .expect("failed to run hlock");
     assert!(

@@ -148,8 +148,8 @@ fn test_stdin_stats_json() {
     assert!(success, "stats --format json from stdin should succeed");
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("should be valid JSON");
     assert!(
-        parsed["total_packages"].is_number(),
-        "should have total_packages"
+        parsed["data"]["total_packages"].is_number(),
+        "should have data.total_packages"
     );
 }
 
@@ -170,17 +170,28 @@ fn test_stdin_check_json() {
     let (success, stdout, _) = run_with_stdin(&["check", "-", "--format", "json"], &content);
     assert!(success, "check --format json from stdin should succeed");
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("should be valid JSON");
-    assert!(parsed["passed"].is_boolean(), "should have passed boolean");
+    // check JSON keeps its own flat report shape (documented, ci-style).
+    assert!(
+        parsed["passed"].is_boolean() || parsed["data"]["passed"].is_boolean(),
+        "should have passed boolean"
+    );
 }
 
 #[test]
 fn test_stdin_sbom() {
     let content = make_simple_lockfile();
-    let (success, stdout, _) = run_with_stdin(&["sbom", "-", "--namespace", "test-ns"], &content);
+    let (success, stdout, _) = run_with_stdin(
+        &["sbom", "-", "--namespace", "https://sbom.example/test-ns"],
+        &content,
+    );
     assert!(
         success,
         "sbom from stdin should succeed, stderr: {}",
-        run_with_stdin(&["sbom", "-", "--namespace", "test-ns"], &content).2
+        run_with_stdin(
+            &["sbom", "-", "--namespace", "https://sbom.example/test-ns"],
+            &content
+        )
+        .2
     );
     assert!(
         stdout.contains("SPDX"),

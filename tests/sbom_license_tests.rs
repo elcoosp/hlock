@@ -21,7 +21,12 @@ fn test_sbom_spdx_includes_license() {
         ..Lockfile::default()
     };
 
-    let sbom = generate_sbom(&lockfile, SbomFormat::SpdxJson, "test-ns").unwrap();
+    let sbom = generate_sbom(
+        &lockfile,
+        SbomFormat::SpdxJson,
+        "https://sbom.example/test-ns",
+    )
+    .unwrap();
     assert!(sbom.contains("licenseConcluded"));
     assert!(sbom.contains("MIT"));
 }
@@ -45,7 +50,12 @@ fn test_sbom_cyclonedx_includes_license() {
         ..Lockfile::default()
     };
 
-    let sbom = generate_sbom(&lockfile, SbomFormat::CycloneDxJson, "test-ns").unwrap();
+    let sbom = generate_sbom(
+        &lockfile,
+        SbomFormat::CycloneDxJson,
+        "https://sbom.example/test-ns",
+    )
+    .unwrap();
     assert!(sbom.contains("licenses"));
     assert!(sbom.contains("MIT"));
 }

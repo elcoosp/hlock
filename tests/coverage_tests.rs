@@ -458,16 +458,17 @@ fn test_stats_json_output() {
     ]);
     assert_eq!(code, Some(0), "stderr: {stderr}");
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(json["total_packages"], 2);
-    assert_eq!(json["by_kind"]["runtime"], 2);
-    assert!(json["by_kind"]["dev"].as_u64().is_some());
-    assert_eq!(json["workspace_sources"], 0);
-    assert_eq!(json["advisories_by_severity"]["high"], 1);
-    assert_eq!(json["advisories_by_severity"]["critical"], 1);
-    assert_eq!(json["sources"], 2);
-    assert_eq!(json["policies"], 2);
-    assert_eq!(json["vex_entries"], 1);
-    assert_eq!(json["license_histogram"][0]["license"], "MIT");
+    let data = &json["data"];
+    assert_eq!(data["total_packages"], 2);
+    assert_eq!(data["by_kind"]["runtime"], 2);
+    assert!(data["by_kind"]["dev"].as_u64().is_some());
+    assert_eq!(data["workspace_sources"], 0);
+    assert_eq!(data["advisories_by_severity"]["high"], 1);
+    assert_eq!(data["advisories_by_severity"]["critical"], 1);
+    assert_eq!(data["sources"], 2);
+    assert_eq!(data["policies"], 2);
+    assert_eq!(data["vex_entries"], 1);
+    assert_eq!(data["license_histogram"][0]["license"], "MIT");
 }
 
 #[test]
@@ -580,18 +581,19 @@ fn test_policy_test_json_reports_decisions() {
     ]);
     assert_eq!(code, Some(0), "stderr: {stderr}");
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(json["package"], "hooked");
-    assert_eq!(json["hook"]["decision"], "denied");
+    let data = &json["data"];
+    assert_eq!(data["package"], "hooked");
+    assert_eq!(data["hook"]["decision"], "denied");
     assert!(
-        json["hook"]["reason"]
+        data["hook"]["reason"]
             .as_str()
             .unwrap()
             .contains("postinstall")
     );
-    assert_eq!(json["script"], serde_json::Value::Null);
-    assert_eq!(json["full_report"]["build_env"], "node20");
+    assert_eq!(data["script"], serde_json::Value::Null);
+    assert_eq!(data["full_report"]["build_env"], "node20");
     assert_eq!(
-        json["full_report"]["violations"][0]["policy_type"],
+        data["full_report"]["violations"][0]["policy_type"],
         "deny-hook"
     );
 }
@@ -793,7 +795,7 @@ fn test_stats_dedup_json_is_valid() {
     assert_eq!(code, Some(0), "stderr: {stderr}");
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     assert!(
-        json["opportunities"].is_array(),
+        json["data"]["opportunities"].is_array(),
         "opportunities must be an array"
     );
 }
@@ -826,9 +828,10 @@ fn test_why_json_prints_chains() {
     ]);
     assert_eq!(code, Some(0), "stderr: {stderr}");
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(json["package"], "alpha");
-    assert_eq!(json["version"], "1.2.3");
-    let chains = json["chains"].as_array().unwrap();
+    let data = &json["data"];
+    assert_eq!(data["package"], "alpha");
+    assert_eq!(data["version"], "1.2.3");
+    let chains = data["chains"].as_array().unwrap();
     assert!(
         chains
             .iter()
@@ -880,7 +883,7 @@ fn test_deps_json_and_dep_type_filter() {
     ]);
     assert_eq!(code, Some(0), "stderr: {stderr}");
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(json["direct"][0]["dep_type"], "runtime");
+    assert_eq!(json["data"]["direct"][0]["dep_type"], "runtime");
 }
 
 #[test]
@@ -917,10 +920,11 @@ fn test_explain_rule_json() {
     ]);
     assert_eq!(code, Some(0), "stderr: {stderr}");
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(json["name"], "require-license");
-    assert_eq!(json["kind"], "rule");
-    assert_eq!(json["severity"], "error");
-    assert_ne!(json["why_it_matters"].as_array().unwrap().len(), 0);
+    let data = &json["data"];
+    assert_eq!(data["name"], "require-license");
+    assert_eq!(data["kind"], "rule");
+    assert_eq!(data["severity"], "error");
+    assert_ne!(data["why_it_matters"].as_array().unwrap().len(), 0);
 }
 
 #[test]
@@ -954,10 +958,11 @@ fn test_explain_advisory_json() {
     ]);
     assert_eq!(code, Some(0), "stderr: {stderr}");
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(json["kind"], "advisory");
-    assert_eq!(json["category"], "vulnerability");
+    let data = &json["data"];
+    assert_eq!(data["kind"], "advisory");
+    assert_eq!(data["category"], "vulnerability");
     assert_eq!(
-        json["references"][0],
+        data["references"][0],
         "https://osv.dev/vulnerability/GHSA-test-0001"
     );
 }
@@ -1021,7 +1026,7 @@ fn test_import_npm_to_output_file() {
 }
 
 #[test]
-fn test_import_pnpm_uses_yarn_parser() {
+fn test_import_pnpm_is_rejected() {
     let pnpm_like = "chalk@^5.0.0:\n  version \"5.3.0\"\n";
     let path = write_temp_file("pnpm-lock.yaml", pnpm_like);
     let (_, stderr, code) = run_cli(&[
@@ -1030,8 +1035,13 @@ fn test_import_pnpm_uses_yarn_parser() {
         "--from".as_ref(),
         "pnpm".as_ref(),
     ]);
-    assert_eq!(code, Some(0), "stderr: {stderr}");
-    assert!(stderr.contains("Imported 1 packages"), "stderr: {stderr}");
+    // v1.0.1: pnpm fed to the yarn parser produced silently wrong versions;
+    // the import is now a hard usage error instead of corrupt data.
+    assert_eq!(code, Some(2), "stderr: {stderr}");
+    assert!(
+        stderr.contains("pnpm import is not supported"),
+        "stderr: {stderr}"
+    );
 }
 
 #[test]
@@ -1110,26 +1120,33 @@ fn test_verify_expired_trust_root_fails() {
 }
 
 #[test]
-fn test_verify_malformed_trusted_key_spec_is_ignored() {
+fn test_verify_malformed_trusted_key_spec_is_hard_error() {
     let content = simple_lockfile();
     let path = write_temp_file("verify_badkey.hlock", &content);
-    let (stdout, stderr, code) = run_cli(&[
+    let (_, stderr, code) = run_cli(&[
         "verify".as_ref(),
         path.as_os_str(),
         "--trusted-key".as_ref(),
         "not-a-valid-spec".as_ref(),
     ]);
-    assert_eq!(code, Some(0), "stderr: {stderr}");
-    assert!(stdout.contains("digest valid"), "stdout: {stdout}");
+    // v1.0.1: a malformed key spec used to be silently dropped, which
+    // degraded the gate to digest-only; it is now a hard usage error.
+    assert_eq!(code, Some(2), "stderr: {stderr}");
+    assert!(stderr.contains("not-a-valid-spec"), "stderr: {stderr}");
 }
 
 #[test]
-fn test_verify_untrusted_signature_fails() {
+fn test_verify_signed_without_keys_fails() {
     let content = signed_with_test_key(&simple_lockfile());
     let path = write_temp_file("verify_untrusted.hlock", &content);
-    // No --trusted-key passed: signature check is skipped entirely.
+    // No --trusted-key passed: v1.0.1 refuses to silently skip signature
+    // verification on a signed file (E0308).
     let (_, stderr, code) = run_cli(&["verify".as_ref(), path.as_os_str()]);
-    assert_eq!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(code, Some(1), "stderr: {stderr}");
+    assert!(
+        stderr.contains("no trusted keys are configured"),
+        "stderr: {stderr}"
+    );
 
     let (_, stderr, code) = run_cli(&[
         "verify".as_ref(),
@@ -1182,9 +1199,13 @@ fn test_outdated_skips_non_registry_packages_without_network() {
     ]);
     assert_eq!(code, Some(0));
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
-    assert_eq!(json["summary"]["total"], 2);
-    assert_eq!(json["summary"]["skipped"], 2);
-    let reasons: Vec<&str> = json["skipped"]
+    // v1.0.1: JSON output uses the stable envelope (spec §9).
+    assert_eq!(json["schema"], "hlock/v1");
+    assert_eq!(json["command"], "outdated");
+    let data = &json["data"];
+    assert_eq!(data["summary"]["total"], 2);
+    assert_eq!(data["summary"]["skipped"], 2);
+    let reasons: Vec<&str> = data["skipped"]
         .as_array()
         .unwrap()
         .iter()
@@ -1199,7 +1220,8 @@ fn test_fix_outdated_without_fixes_reports_and_exits_one() {
     let content = non_registry_lockfile();
     let path = write_temp_file("fix_nofixes.hlock", &content);
     let (stdout, _, code) = run_cli(&["fix".as_ref(), path.as_os_str(), "--outdated".as_ref()]);
-    assert_eq!(code, Some(1));
+    // v1.0.1: "nothing to fix" is a success (exit 0) per the CLI contract.
+    assert_eq!(code, Some(0));
     assert!(stdout.contains("No fixes needed."), "stdout: {stdout}");
 }
 
@@ -1215,7 +1237,7 @@ fn test_fix_dry_run_without_fixes_exits_one() {
         "--format".as_ref(),
         "json".as_ref(),
     ]);
-    assert_eq!(code, Some(1));
+    assert_eq!(code, Some(0));
 }
 
 #[test]

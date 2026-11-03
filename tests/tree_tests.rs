@@ -118,8 +118,8 @@ fn test_tree_json() {
     assert!(output.status.success(), "tree --format json should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("should be valid JSON");
-    let has_roots = parsed["roots"].is_array();
-    let has_root = parsed["root"].is_string();
+    let has_roots = parsed["data"]["roots"].is_array();
+    let has_root = parsed["data"]["root"].is_string();
     assert!(
         has_roots || has_root,
         "should have 'roots' array or 'root' string, got keys: {:?}",
