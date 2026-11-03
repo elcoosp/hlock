@@ -44,6 +44,40 @@ fn hex_digest(digest: &[u8]) -> String {
     crate::lockfile::digest::bytes_to_hex(digest)
 }
 
+/// Sanitizes a package identity into an SPDXID token. SPDX-2.3 only allows
+/// `[A-Za-z0-9.-]`; `@scope/pkg` and version dots must not leak other bytes.
+fn spdx_id_token(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '.' || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+/// Validates the `--namespace` value: SPDX requires an absolute URI for
+/// `documentNamespace`. Returns `Err` with a user-facing reason.
+fn validate_namespace(namespace: &str) -> Result<(), Error> {
+    let ok = (namespace.starts_with("http://") || namespace.starts_with("https://"))
+        && namespace.len() > "https://".len()
+        && namespace
+            .chars()
+            .all(|c| !c.is_control() && c != ' ' && c != '<' && c != '>');
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::SbomGenerationFailed {
+            package: "<document>".to_string(),
+            reason: format!(
+                "namespace must be an absolute http(s) URI without control characters, got {namespace:?}"
+            ),
+        })
+    }
+}
+
 fn purl(name: &str, version: &str) -> String {
     let encoded_name = if name.starts_with('@') {
         name.replace('@', "%40")
@@ -83,12 +117,17 @@ fn download_location(source: &Source, name: &str, version: &str) -> String {
 }
 
 fn generate_spdx(lockfile: &Lockfile, namespace: &str) -> Result<String, Error> {
+    validate_namespace(namespace)?;
     let mut packages_json = Vec::new();
     let mut relationships_json = Vec::new();
 
     for pkg in &lockfile.packages {
         let ver = version_string(pkg.major, pkg.minor, pkg.patch);
-        let spdx_id = format!("SPDXRef-Package-{}-{}", pkg.name, ver);
+        let spdx_id = format!(
+            "SPDXRef-Package-{}-{}",
+            spdx_id_token(&pkg.name),
+            spdx_id_token(&ver)
+        );
         let source = lockfile.sources.get(pkg.source_idx);
 
         let mut hashes_obj = serde_json::Map::new();
@@ -150,7 +189,11 @@ fn generate_spdx(lockfile: &Lockfile, namespace: &str) -> Result<String, Error> 
                 && let Some(dep_pkg) = lockfile.packages.iter().find(|p| p.name == dep.name)
             {
                 let dep_ver = version_string(dep_pkg.major, dep_pkg.minor, dep_pkg.patch);
-                let dep_spdx_id = format!("SPDXRef-Package-{}-{}", dep_pkg.name, dep_ver);
+                let dep_spdx_id = format!(
+                    "SPDXRef-Package-{}-{}",
+                    spdx_id_token(&dep_pkg.name),
+                    spdx_id_token(&dep_ver)
+                );
                 relationships_json.push(serde_json::json!({
                     "spdxElementId": spdx_id,
                     "relationshipType": "DEPENDS_ON",
@@ -307,10 +350,11 @@ mod tests {
     #[test]
     fn test_sbom_spdx_basic() {
         let lf = sample_lockfile();
-        let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
+        let json_str =
+            generate_sbom(&lf, SbomFormat::SpdxJson, "https://sbom.example/test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["spdxVersion"], "SPDX-2.3");
-        assert_eq!(parsed["name"], "test-ns");
+        assert_eq!(parsed["name"], "https://sbom.example/test-ns");
         let pkgs = parsed["packages"].as_array().unwrap();
         assert_eq!(pkgs.len(), 2);
     }
@@ -318,7 +362,8 @@ mod tests {
     #[test]
     fn test_sbom_spdx_hashes() {
         let lf = sample_lockfile();
-        let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
+        let json_str =
+            generate_sbom(&lf, SbomFormat::SpdxJson, "https://sbom.example/test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         let lodash_pkg = parsed["packages"]
             .as_array()
@@ -332,7 +377,8 @@ mod tests {
     #[test]
     fn test_sbom_spdx_relationships() {
         let lf = sample_lockfile();
-        let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
+        let json_str =
+            generate_sbom(&lf, SbomFormat::SpdxJson, "https://sbom.example/test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         let rels = parsed["relationships"].as_array().unwrap();
         assert_eq!(rels.len(), 1);
@@ -358,7 +404,8 @@ mod tests {
                 dep_type: DepType::Dev,
                 requested_features: vec![],
             });
-        let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
+        let json_str =
+            generate_sbom(&lf, SbomFormat::SpdxJson, "https://sbom.example/test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         let rels = parsed["relationships"].as_array().unwrap();
         let jest_rels: Vec<_> = rels
@@ -376,7 +423,12 @@ mod tests {
     #[test]
     fn test_sbom_cyclonedx_basic() {
         let lf = sample_lockfile();
-        let json_str = generate_sbom(&lf, SbomFormat::CycloneDxJson, "test-ns").unwrap();
+        let json_str = generate_sbom(
+            &lf,
+            SbomFormat::CycloneDxJson,
+            "https://sbom.example/test-ns",
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         assert_eq!(parsed["bomFormat"], "CycloneDX");
         assert_eq!(parsed["specVersion"], "1.5");
@@ -387,7 +439,12 @@ mod tests {
     #[test]
     fn test_sbom_cyclonedx_hashes() {
         let lf = sample_lockfile();
-        let json_str = generate_sbom(&lf, SbomFormat::CycloneDxJson, "test-ns").unwrap();
+        let json_str = generate_sbom(
+            &lf,
+            SbomFormat::CycloneDxJson,
+            "https://sbom.example/test-ns",
+        )
+        .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         let lodash = parsed["components"]
             .as_array()
@@ -428,7 +485,8 @@ mod tests {
             vex_entries: vec![],
             compat: None,
         };
-        let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
+        let json_str =
+            generate_sbom(&lf, SbomFormat::SpdxJson, "https://sbom.example/test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         let my_app = parsed["packages"]
             .as_array()
@@ -469,7 +527,8 @@ mod tests {
             vex_entries: vec![],
             compat: None,
         };
-        let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
+        let json_str =
+            generate_sbom(&lf, SbomFormat::SpdxJson, "https://sbom.example/test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         let pkg = &parsed["packages"][0];
         let purl_val = pkg["externalRefs"][0]["referenceLocator"].as_str().unwrap();
@@ -479,7 +538,8 @@ mod tests {
     #[test]
     fn test_sbom_download_location() {
         let lf = sample_lockfile();
-        let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
+        let json_str =
+            generate_sbom(&lf, SbomFormat::SpdxJson, "https://sbom.example/test-ns").unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
         let lodash = parsed["packages"]
             .as_array()
@@ -496,7 +556,8 @@ mod tests {
     #[test]
     fn test_sbom_uses_cargo_version() {
         let lf = sample_lockfile();
-        let json_str = generate_sbom(&lf, SbomFormat::SpdxJson, "test-ns").unwrap();
+        let json_str =
+            generate_sbom(&lf, SbomFormat::SpdxJson, "https://sbom.example/test-ns").unwrap();
         assert!(
             json_str.contains(env!("CARGO_PKG_VERSION")),
             "SPDX SBOM should contain CARGO_PKG_VERSION"
@@ -506,7 +567,12 @@ mod tests {
             "SPDX SBOM should not contain hardcoded 0.14.0"
         );
 
-        let json_str2 = generate_sbom(&lf, SbomFormat::CycloneDxJson, "test-ns").unwrap();
+        let json_str2 = generate_sbom(
+            &lf,
+            SbomFormat::CycloneDxJson,
+            "https://sbom.example/test-ns",
+        )
+        .unwrap();
         assert!(
             json_str2.contains(env!("CARGO_PKG_VERSION")),
             "CycloneDX SBOM should contain CARGO_PKG_VERSION"
