@@ -1,6 +1,7 @@
 //! `stats` command implementation — one-shot lockfile metrics.
 
 use super::{Ctx, HashMap, HashSet, Path, deserialize, output, read_input};
+use std::collections::BTreeMap;
 
 /// Aggregate metrics for a lockfile.
 struct LockfileStats {
@@ -14,7 +15,7 @@ struct LockfileStats {
     deepest_chain: usize,
     license_histogram: Vec<(String, usize)>,
     unlicensed: usize,
-    advisories: HashMap<String, usize>,
+    advisories: BTreeMap<String, usize>,
     sources: usize,
     mirrors: usize,
     policies: usize,
@@ -55,7 +56,8 @@ pub(crate) fn run(file: &Path, dedup: bool, format: &str, ctx: Ctx) {
         if !quiet {
             println!(
                 "{}",
-                serde_json::to_string_pretty(&stats_json(&stats)).unwrap()
+                serde_json::to_string_pretty(&super::envelope("stats", true, &stats_json(&stats)))
+                    .unwrap()
             );
         }
     } else {
@@ -80,7 +82,11 @@ fn render_dedup(lockfile: &hlock::Lockfile, format: &str, ctx: Ctx) {
             "opportunities": opportunities.iter().map(|o| serde_json::json!({"package": o.package_name, "versions": o.versions, "potential_saving_bytes": o.potential_saving_bytes})).collect::<Vec<_>>(),
         });
         if !quiet {
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&super::envelope("stats --dedup", true, &json))
+                    .unwrap()
+            );
         }
     } else if !quiet {
         if opportunities.is_empty() {
@@ -172,7 +178,7 @@ fn compute(lockfile: &hlock::Lockfile) -> LockfileStats {
         .filter(|p| !licensed.contains(p.name.as_str()))
         .count();
 
-    let mut advisories: HashMap<String, usize> = HashMap::new();
+    let mut advisories: BTreeMap<String, usize> = BTreeMap::new();
     for adv in &lockfile.advisories {
         *advisories
             .entry(adv.severity.as_str().to_string())
