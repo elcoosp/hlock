@@ -22,14 +22,14 @@ pub(crate) fn run(algorithm: &str, key_id: &str, expires: u64, out: Option<&Path
         }
     };
 
-    // Write the private key to a file when requested; it must never sit in a shell history.
-    if let Some(path) = out {
-        if let Err(e) = std::fs::write(path, format!("{private_hex}\n")) {
-            eprintln!("Error writing private key: {e}");
-            std::process::exit(2);
-        }
-        #[cfg(unix)]
-        restrict_permissions(path);
+    // Write the private key to a file when requested; it must never sit in a
+    // shell history. The file is created with 0600 from the start — never
+    // world-readable for even an instant.
+    if let Some(path) = out
+        && let Err(e) = write_private_key_file(path, &format!("{private_hex}\n"))
+    {
+        eprintln!("Error writing private key: {e}");
+        std::process::exit(2);
     }
 
     if quiet {
@@ -68,10 +68,24 @@ pub(crate) fn run(algorithm: &str, key_id: &str, expires: u64, out: Option<&Path
     );
 }
 
-#[cfg(unix)]
-fn restrict_permissions(path: &Path) {
-    use std::os::unix::fs::PermissionsExt as _;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+/// Creates `path` (0600 from creation on unix) and writes the key material.
+fn write_private_key_file(path: &Path, contents: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(contents.as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, contents)
+    }
 }
 
 /// Fills `dest` with cryptographically secure random bytes from the OS.
