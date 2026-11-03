@@ -836,16 +836,31 @@ impl<'a> Graph<'a> {
     ///
     /// Node ids are stable indices (`n0`, `n1`, …) so duplicate
     /// `name@version` labels can no longer collide; labels stay
-    /// `name@x.y.z`. Edges carry the dependency type and are styled per kind.
+    /// `name@x.y.z`. Label text is escaped so hostile package names cannot
+    /// inject DOT syntax.
     #[must_use]
     pub fn export_dot(&self) -> String {
         use std::fmt::Write as _;
+        let escape = |s: &str| {
+            let mut out = String::with_capacity(s.len());
+            for c in s.chars() {
+                match c {
+                    '"' | '\\' => {
+                        out.push('\\');
+                        out.push(c);
+                    }
+                    '\n' | '\r' => out.push(' '),
+                    _ => out.push(c),
+                }
+            }
+            out
+        };
         let mut out = String::with_capacity(self.len() * 48 + 64);
         out.push_str("digraph dependencies {\n");
         out.push_str("  rankdir=LR;\n");
         out.push_str("  node [shape=box, style=rounded, fontname=\"Helvetica\"];\n");
         for (i, pkg) in self.lockfile.packages.iter().enumerate() {
-            let _ = writeln!(out, "  n{i} [label=\"{}\"];", pkg.version_string());
+            let _ = writeln!(out, "  n{i} [label=\"{}\"];", escape(&pkg.version_string()));
         }
         for (i, pkg) in self.lockfile.packages.iter().enumerate() {
             for dep in &pkg.dependencies {
@@ -855,14 +870,14 @@ impl<'a> Graph<'a> {
                     DepType::Peer => ", style=bold",
                     DepType::Optional | DepType::OptionalTarget(_, _) => ", style=dotted",
                 };
-                let target = self
-                    .name_to_idx
-                    .get(dep.name.as_str())
-                    .map_or_else(|| dep.name.clone(), |&t| format!("n{t}"));
+                let target = self.name_to_idx.get(dep.name.as_str()).map_or_else(
+                    || format!("\"{}\"", escape(&dep.name)),
+                    |&t| format!("n{t}"),
+                );
                 let _ = writeln!(
                     out,
-                    "  n{i} -> \"{target}\" [label=\"{}\"{style}];",
-                    dep.dep_type.as_str()
+                    "  n{i} -> {target} [label=\"{}\"{style}];",
+                    escape(dep.dep_type.as_str())
                 );
             }
         }

@@ -80,7 +80,13 @@ pub(crate) fn run(
 
     match result {
         Ok(sub) => {
-            let serialized = serialize(&sub).unwrap();
+            let serialized = match serialize(&sub) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("[{}] Serialize error: {}", e.error_code(), e);
+                    std::process::exit(1);
+                }
+            };
             if let Some(out) = output {
                 if let Err(e) = std::fs::write(out, &serialized) {
                     eprintln!("Error writing {}: {}", out.display(), e);
