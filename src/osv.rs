@@ -1,17 +1,37 @@
 //! OSV (osv.dev) API client for live vulnerability queries
+//!
+//! v1.0.1: one shared pooled client, per-request timeouts, bounded response
+//! buffering (a hostile endpoint cannot OOM the gate), and the batch
+//! endpoint `/v1/querybatch` for `audit --online` (spec §7).
 
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 
-#[derive(Serialize)]
+/// Cap on response bodies read from OSV (10 MiB): vulnerability documents
+/// are far smaller, so anything bigger is treated as hostile.
+const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
+#[derive(Serialize, Clone)]
 pub struct OsvQuery {
     pub package: OsvPackage,
     pub version: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct OsvPackage {
     pub name: String,
     pub ecosystem: String,
+}
+
+#[derive(Serialize)]
+pub struct OsvBatchQuery {
+    pub queries: Vec<OsvQuery>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct OsvBatchResponse {
+    #[serde(default)]
+    pub results: Vec<OsvResponse>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -74,17 +94,81 @@ pub struct OsvRangeEvent {
     pub fixed: Option<String>,
 }
 
+/// The shared pooled HTTP client for OSV queries.
+fn shared_client() -> Result<&'static reqwest::blocking::Client, String> {
+    static CLIENT: OnceLock<Option<reqwest::blocking::Client>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::blocking::Client::builder()
+                .redirect(reqwest::redirect::Policy::limited(3))
+                .build()
+                .ok()
+        })
+        .as_ref()
+        .ok_or_else(|| "Failed to create HTTP client".to_string())
+}
+
+/// Reads a response body with a hard size cap.
+fn read_body_capped(response: reqwest::blocking::Response, what: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let mut body = Vec::new();
+    let mut reader = response.take(MAX_RESPONSE_BYTES as u64 + 1);
+    reader
+        .read_to_end(&mut body)
+        .map_err(|e| format!("{what}: failed to read response body: {e}"))?;
+    if body.len() > MAX_RESPONSE_BYTES {
+        return Err(format!(
+            "{what}: response exceeds the {MAX_RESPONSE_BYTES}-byte safety cap"
+        ));
+    }
+    Ok(body)
+}
+
+/// Sends one OSV request with retry + exponential backoff on 5xx/timeouts
+/// (2 attempts total, spec §7).
+fn post_osv<T: serde::Serialize>(
+    url: &str,
+    payload: &T,
+    timeout_secs: u64,
+    what: &str,
+) -> Result<Vec<u8>, String> {
+    let client = shared_client()?;
+    let mut last_err = String::new();
+    for attempt in 0u64..2 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(300 * attempt));
+        }
+        let result = client
+            .post(url)
+            .timeout(std::time::Duration::from_secs(timeout_secs.max(1)))
+            .json(payload)
+            .send();
+        match result {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_server_error() {
+                    last_err = format!("{what}: OSV API returned HTTP {status}");
+                    continue;
+                }
+                if !status.is_success() {
+                    return Err(format!("{what}: OSV API returned HTTP {status}"));
+                }
+                return read_body_capped(response, what);
+            }
+            Err(e) => {
+                last_err = format!("{what}: OSV request failed: {e}");
+            }
+        }
+    }
+    Err(last_err)
+}
+
 ///
 /// # Errors
 ///
 /// Returns `Err` if input validation fails.
 /// Query the OSV API for vulnerabilities affecting a package at a given version.
 pub fn query_osv(name: &str, version: &str, timeout_secs: u64) -> Result<OsvResponse, String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_secs.max(1)))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
-
     let query = OsvQuery {
         package: OsvPackage {
             name: name.to_string(),
@@ -92,20 +176,47 @@ pub fn query_osv(name: &str, version: &str, timeout_secs: u64) -> Result<OsvResp
         },
         version: version.to_string(),
     };
-
-    let response = client
-        .post("https://api.osv.dev/v1/query")
-        .json(&query)
-        .send()
-        .map_err(|e| format!("OSV query failed for {name}@{version}: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err(format!("OSV API returned status {}", response.status()));
-    }
-
-    response
-        .json::<OsvResponse>()
+    let body = post_osv(
+        "https://api.osv.dev/v1/query",
+        &query,
+        timeout_secs,
+        &format!("{name}@{version}"),
+    )?;
+    serde_json::from_slice::<OsvResponse>(&body)
         .map_err(|e| format!("Failed to parse OSV response for {name}@{version}: {e}"))
+}
+
+/// Batch query: one round-trip for the whole graph (spec §7).
+/// The returned vector is index-aligned with the input queries.
+///
+/// # Errors
+/// Returns `Err` when the batch request itself fails; per-query failures
+/// surface as an empty `OsvResponse` in the result vector.
+pub fn query_osv_batch(
+    queries: &[OsvQuery],
+    timeout_secs: u64,
+) -> Result<Vec<OsvResponse>, String> {
+    if queries.is_empty() {
+        return Ok(Vec::new());
+    }
+    let body = post_osv(
+        "https://api.osv.dev/v1/querybatch",
+        &OsvBatchQuery {
+            queries: queries.to_vec(),
+        },
+        timeout_secs,
+        "batch",
+    )?;
+    let batch: OsvBatchResponse = serde_json::from_slice(&body)
+        .map_err(|e| format!("Failed to parse OSV batch response: {e}"))?;
+    if batch.results.len() != queries.len() {
+        return Err(format!(
+            "OSV batch response has {} results for {} queries",
+            batch.results.len(),
+            queries.len()
+        ));
+    }
+    Ok(batch.results)
 }
 
 /// Extract the first fixed version from an OSV vulnerability entry.
