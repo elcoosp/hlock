@@ -1,6 +1,17 @@
-//! Outdated package checking via npm registry queries
-
+//! Outdated package checking via npm registry queries.
+//!
+//! v1.0.1 hardening:
+//! - **Network failures no longer masquerade as "up to date"** (spec §7):
+//!   connection errors and non-2xx responses return `Err`; the CLI renders
+//!   them as an explicit `unknown` bucket instead of a clean report;
+//! - one **shared, pooled HTTP client** with per-request timeouts (one TLS
+//!   handshake per process, not per package);
+//! - package names are **percent-encoded** into the registry path, so a
+//!   hostile name cannot rewrite the request URL;
+//! - `compare_versions` understands semver prerelease ordering (a release
+//!   is always newer than its own `-beta.1`).
 use serde::Deserialize;
+use std::sync::OnceLock;
 
 #[derive(Deserialize, Debug)]
 pub struct NpmAbbreviatedResponse {
@@ -67,11 +78,52 @@ impl SourceType {
     }
 }
 
+/// The shared pooled HTTP client. One TLS config, one connection pool for
+/// the whole process; timeouts are attached per request.
+fn shared_client() -> Result<&'static reqwest::blocking::Client, String> {
+    static CLIENT: OnceLock<Option<reqwest::blocking::Client>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            reqwest::blocking::Client::builder()
+                .redirect(reqwest::redirect::Policy::limited(3))
+                .build()
+                .ok()
+        })
+        .as_ref()
+        .ok_or_else(|| "Failed to create HTTP client".to_string())
+}
+
+/// Percent-encodes a package name for the registry URL path.
+///
+/// Scoped names keep their separators encoded (`@scope/pkg` becomes
+/// `@scope%2Fpkg`, the canonical abbreviated-document form), so `/`, `?`,
+/// `#` or `..` in a name can never rewrite the request path.
+#[must_use]
+pub fn registry_path_segment(name: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = Vec::with_capacity(name.len());
+    for &b in name.as_bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'@' => {
+                out.push(b);
+            }
+            _ => {
+                out.push(b'%');
+                out.push(HEX[usize::from(b >> 4)]);
+                out.push(HEX[usize::from(b & 0x0F)]);
+            }
+        }
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
 ///
 /// # Errors
 ///
-/// Returns `Err` if input validation fails.
-/// Check a single package for newer versions via the npm registry.
+/// Returns `Err` with a human-readable reason when the package cannot be
+/// checked (network failure, non-2xx registry response, bad payload).
+/// Non-registry sources are skipped without touching the network and return
+/// `Ok` with `latest: None`.
 pub fn check_outdated(
     name: &str,
     current_version: &str,
@@ -88,38 +140,25 @@ pub fn check_outdated(
         });
     }
 
-    let client = reqwest::blocking::Client::builder()
+    let client = shared_client()?;
+    let url = format!(
+        "https://registry.npmjs.org/{}/latest",
+        registry_path_segment(name)
+    );
+    let response = client
+        .get(&url)
         .timeout(std::time::Duration::from_secs(timeout_secs.max(1)))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {e}"))?;
+        .send()
+        .map_err(|e| format!("{name}: request failed: {e}"))?;
 
-    let url = format!("https://registry.npmjs.org/{name}/latest");
-    let response = match client.get(&url).send() {
-        Ok(r) => r,
-        Err(_e) => {
-            return Ok(OutdatedInfo {
-                package: name.to_string(),
-                current: current_version.to_string(),
-                latest: None,
-                update_type: UpdateType::Patch,
-                source_type,
-            });
-        }
-    };
-
-    if !response.status().is_success() {
-        return Ok(OutdatedInfo {
-            package: name.to_string(),
-            current: current_version.to_string(),
-            latest: None,
-            update_type: UpdateType::Patch,
-            source_type,
-        });
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("{name}: registry returned HTTP {status}"));
     }
 
     let abbreviated: NpmAbbreviatedResponse = response
         .json()
-        .map_err(|e| format!("Failed to parse registry response for {name}: {e}"))?;
+        .map_err(|e| format!("{name}: failed to parse registry response: {e}"))?;
 
     let latest = abbreviated.version;
     let update_type = if let Some(ref lat) = latest {
@@ -138,17 +177,22 @@ pub fn check_outdated(
 }
 
 /// Compare two semver versions and return the type of update.
+///
+/// Prerelease ordering is respected: `2.0.0-beta.1 < 2.0.0`, so a package on
+/// a beta is reported as outdated by the release. Unparseable inputs return
+/// `None` (caller decides the fallback).
 #[must_use]
 pub fn compare_versions(current: &str, latest: &str) -> Option<UpdateType> {
-    let cur_parts: Vec<u64> = current.split('.').filter_map(|s| s.parse().ok()).collect();
-    let lat_parts: Vec<u64> = latest.split('.').filter_map(|s| s.parse().ok()).collect();
-
-    if cur_parts.len() < 3 || lat_parts.len() < 3 {
-        return None;
-    }
+    let (cur_core, cur_pre) = split_prerelease(current);
+    let (lat_core, lat_pre) = split_prerelease(latest);
+    let cur_parts = parse_triple(cur_core)?;
+    let lat_parts = parse_triple(lat_core)?;
 
     if cur_parts == lat_parts {
-        return None;
+        return match (cur_pre, lat_pre) {
+            (true, false) => Some(UpdateType::Patch), // release beats its own prerelease
+            _ => None,
+        };
     }
 
     if cur_parts[0] != lat_parts[0] {
@@ -158,6 +202,22 @@ pub fn compare_versions(current: &str, latest: &str) -> Option<UpdateType> {
     } else {
         Some(UpdateType::Patch)
     }
+}
+
+/// Splits `1.2.3-beta.1` into `("1.2.3", true)` and `1.2.3` into `("1.2.3", false)`.
+fn split_prerelease(v: &str) -> (&str, bool) {
+    match v.split_once('-') {
+        Some((core, pre)) if !pre.is_empty() => (core, true),
+        _ => (v, false),
+    }
+}
+
+fn parse_triple(core: &str) -> Option<[u64; 3]> {
+    let mut it = core.split('.');
+    let a = it.next()?.parse().ok()?;
+    let b = it.next()?.parse().ok()?;
+    let c = it.next()?.parse().ok()?;
+    Some([a, b, c])
 }
 
 #[cfg(test)]
@@ -261,8 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compare_versions_ignores_non_numeric_suffixes() {
-        // "1.0.0" parses; "1.0.0-rc.1" contributes 1,0,0 via filter_map.
+    fn test_compare_versions_handles_prerelease_suffixes() {
         assert_eq!(
             compare_versions("1.0.0-rc.1", "1.1.0"),
             Some(UpdateType::Minor)
@@ -271,5 +330,24 @@ mod tests {
         assert_eq!(compare_versions("1.0.0", "2.0"), None);
         // Non-numeric junk drops below three parts.
         assert_eq!(compare_versions("x.y.z", "1.0.0"), None);
+    }
+
+    #[test]
+    fn test_compare_prerelease_release_ordering() {
+        // A release is newer than its own prerelease.
+        assert_eq!(
+            compare_versions("2.0.0-beta.1", "2.0.0"),
+            Some(UpdateType::Patch)
+        );
+        // Staying on the same prerelease is not an update.
+        assert_eq!(compare_versions("2.0.0-beta.1", "2.0.0-beta.1"), None);
+    }
+
+    #[test]
+    fn test_registry_path_segment_encodes_metacharacters() {
+        assert_eq!(registry_path_segment("lodash"), "lodash");
+        assert_eq!(registry_path_segment("@scope/pkg"), "@scope%2Fpkg");
+        assert_eq!(registry_path_segment("a?b#c"), "a%3Fb%23c");
+        assert_eq!(registry_path_segment("../etc"), "..%2Fetc");
     }
 }
