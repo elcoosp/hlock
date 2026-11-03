@@ -46,7 +46,10 @@ pub(crate) fn run(file: &Path, package: &str, format: &str, ctx: Ctx) {
             "chains": chains,
         });
         if !quiet {
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&super::envelope("why", true, &json)).unwrap()
+            );
         }
     } else if !quiet {
         println!("{}@{}", bold(package), cyan(&version));

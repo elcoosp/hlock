@@ -56,7 +56,10 @@ fn advisory_json(explanation: &Explanation) -> serde_json::Value {
 /// Pretty-prints a JSON explanation, unless output is suppressed.
 fn print_json(json: &serde_json::Value, quiet: bool) {
     if !quiet {
-        println!("{}", serde_json::to_string_pretty(json).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&super::envelope("explain", true, &json.clone())).unwrap()
+        );
     }
 }
 

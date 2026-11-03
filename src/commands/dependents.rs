@@ -3,6 +3,7 @@
 use super::{Ctx, Path, deserialize, output, read_input};
 
 /// Runs the `dependents` command.
+#[allow(clippy::too_many_lines)] // linear orchestration, split adds indirection
 pub(crate) fn run(
     file: &Path,
     package: &str,
@@ -51,7 +52,22 @@ pub(crate) fn run(
             })
         })
         .map(|p| {
-            let dep = p.dependencies.iter().find(|d| d.name == package).unwrap();
+            // Re-find with the same predicate as the filter so the reported
+            // dep_type belongs to an edge that actually matched.
+            let dep = p
+                .dependencies
+                .iter()
+                .find(|d| {
+                    d.name == package
+                        && (dep_type == "all"
+                            || match dep_type {
+                                "runtime" => matches!(d.dep_type, hlock::DepType::Runtime),
+                                "dev" => matches!(d.dep_type, hlock::DepType::Dev),
+                                _ => true,
+                            })
+                })
+                .or_else(|| p.dependencies.iter().find(|d| d.name == package))
+                .unwrap();
             let dt = match dep.dep_type {
                 hlock::DepType::Runtime => "runtime",
                 hlock::DepType::Dev => "dev",
@@ -104,7 +120,10 @@ pub(crate) fn run(
             "transitive": transitive_list.iter().map(|(n, v)| serde_json::json!({"name": n, "version": v})).collect::<Vec<_>>(),
         });
         if !quiet {
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&super::envelope("dependents", true, &json)).unwrap()
+            );
         }
     } else if !quiet {
         render_text(package, &direct, &transitive_list, transitive, ctx);

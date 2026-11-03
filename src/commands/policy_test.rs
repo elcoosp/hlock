@@ -57,7 +57,10 @@ pub(crate) fn run(
             },
         });
         if !quiet {
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&super::envelope("policy-test", true, &json)).unwrap()
+            );
         }
         return;
     }

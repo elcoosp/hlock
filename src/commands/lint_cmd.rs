@@ -96,15 +96,16 @@ fn render_json(report: &hlock::lint::LintReport, min_sev: lint::LintSeverity, qu
         .count();
     let info_count = findings.iter().filter(|f| f["severity"] == "info").count();
     if !quiet {
+        let data = serde_json::json!({
+            "findings": findings,
+            "error_count": error_count,
+            "warning_count": warning_count,
+            "info_count": info_count,
+        });
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "findings": findings,
-                "error_count": error_count,
-                "warning_count": warning_count,
-                "info_count": info_count,
-            }))
-            .unwrap()
+            serde_json::to_string_pretty(&super::envelope("lint", error_count == 0, &data,))
+                .unwrap()
         );
     }
 }

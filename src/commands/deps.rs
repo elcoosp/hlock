@@ -3,6 +3,7 @@
 use super::{Ctx, HashSet, Path, deserialize, output, read_input};
 
 /// Runs the `deps` command.
+#[allow(clippy::too_many_lines)] // linear orchestration, split adds indirection
 pub(crate) fn run(
     file: &Path,
     package: &str,
@@ -104,7 +105,10 @@ pub(crate) fn run(
             "transitive": transitive_list.iter().map(|(n, v)| serde_json::json!({"name": n, "version": v})).collect::<Vec<_>>(),
         });
         if !quiet {
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&super::envelope("deps", true, &json)).unwrap()
+            );
         }
     } else if !quiet {
         if verbose {
