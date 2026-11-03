@@ -102,6 +102,19 @@ fn summarize(entries: &[LicenseEntry]) -> LicenseSummary {
     }
 }
 
+/// Splits an SPDX expression into its license tokens: `"MIT OR GPL-3.0-only
+/// AND Apache-2.0"` → `["MIT", "GPL-3.0-only", "Apache-2.0"]`. Operators,
+/// parentheses and WITH-exceptions are dropped; `WITH X` keeps the base id.
+fn license_terms(expression: &str) -> Vec<String> {
+    expression
+        .split(|c: char| c.is_whitespace() || c == '(' || c == ')')
+        .filter(|t| {
+            !t.is_empty() && !matches!(t.to_ascii_uppercase().as_str(), "OR" | "AND" | "WITH")
+        })
+        .map(str::to_string)
+        .collect()
+}
+
 /// Collects license policy violations (denied, not-allowed and undeclared).
 fn find_violations(
     entries: &[LicenseEntry],
@@ -116,8 +129,12 @@ fn find_violations(
             continue;
         }
         if let Some(ref lic) = entry.license {
+            // SPDX expression terms ("MIT OR GPL-3.0-only" → ["MIT",
+            // "GPL-3.0-only"]): substring matching on the whole expression
+            // would let allowlist "MIT" bless "MIT OR GPL-3.0-only".
+            let terms = license_terms(lic);
             for denied_license in denied {
-                if lic.contains(denied_license) {
+                if terms.iter().any(|t| t.contains(denied_license.as_str())) {
                     violations.push(serde_json::json!({
                         "package": entry.name,
                         "reason": "denied",
@@ -126,7 +143,9 @@ fn find_violations(
                 }
             }
             if !allowed.is_empty() {
-                let is_allowed = allowed.iter().any(|a| lic.contains(a) || a == lic);
+                let is_allowed = terms
+                    .iter()
+                    .all(|t| allowed.iter().any(|a| a == t || t.contains(a.as_str())));
                 if !is_allowed {
                     violations.push(serde_json::json!({
                         "package": entry.name,
@@ -179,7 +198,15 @@ fn render_json(
         "total_packages": entries.len(),
     });
     if !quiet {
-        println!("{}", serde_json::to_string_pretty(&json).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&super::envelope(
+                "licenses",
+                violations.is_empty(),
+                &json
+            ))
+            .unwrap()
+        );
     }
 }
 
