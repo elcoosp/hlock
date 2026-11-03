@@ -73,10 +73,15 @@ pub fn parse_signature_directive(line: &str) -> Result<SignatureDirective, Signa
             reason: "invalid key_id".to_string(),
         });
     }
-    let algo_id =
+    let algo_id = if algo_hex.len() == 2 && algo_hex.as_bytes().iter().all(u8::is_ascii_hexdigit) {
         u8::from_str_radix(algo_hex, 16).map_err(|_| SignatureError::MalformedDirective {
             reason: "algo_id must be two hex digits".to_string(),
-        })?;
+        })?
+    } else {
+        return Err(SignatureError::MalformedDirective {
+            reason: "algo_id must be two hex digits".to_string(),
+        });
+    };
     let algorithm = match algo_id {
         0x00 => SignatureAlgorithm::Ed25519,
         0x02 => SignatureAlgorithm::MlDsa65,
@@ -188,7 +193,12 @@ pub fn sign_lockfile(
 
 /// Verifies every `@signature` directive in `lockfile_content` against `trusted_keys`.
 ///
-/// A lockfile without any `@signature` line is considered unsigned and passes.
+/// A lockfile without any `@signature` line is considered unsigned and passes
+/// at this layer; the CLI gates (`verify`/`check`/`ci`) decide whether an
+/// unsigned file is acceptable for the requested trust policy.
+///
+/// `now_epoch` governs signature expiry (spec §2.4): callers pass the CLI
+/// `--time` override or the wall clock.
 ///
 /// # Errors
 ///
@@ -200,6 +210,7 @@ pub fn sign_lockfile(
 pub fn verify_signature<S: BuildHasher + Default>(
     lockfile_content: &str,
     trusted_keys: &HashMap<String, (Vec<u8>, SignatureAlgorithm), S>,
+    now_epoch: u64,
 ) -> Result<(), SignatureError> {
     let Some((sig_start, sig_directives)) = collect_signature_region(lockfile_content)? else {
         return Ok(());
@@ -215,13 +226,21 @@ pub fn verify_signature<S: BuildHasher + Default>(
                 ),
             });
         }
-        check_signature_expiry(directive)?;
+        check_signature_expiry(directive, now_epoch)?;
         match directive.algorithm {
             SignatureAlgorithm::Ed25519 => verify_ed25519(message, directive, &expected_pub_key)?,
             SignatureAlgorithm::MlDsa65 => verify_mldsa65(message, directive, &expected_pub_key)?,
         }
     }
     Ok(())
+}
+
+/// True when the content carries at least one `@signature` directive line.
+#[must_use]
+pub fn has_signature_block(lockfile_content: &str) -> bool {
+    lockfile_content
+        .lines()
+        .any(|line| line.starts_with("@signature "))
 }
 
 /// Scans the `@signature` block, returning its start offset and parsed directives.
@@ -231,15 +250,29 @@ pub fn verify_signature<S: BuildHasher + Default>(
 fn collect_signature_region(
     lockfile_content: &str,
 ) -> Result<Option<(usize, Vec<SignatureDirective>)>, SignatureError> {
+    let bytes = lockfile_content.as_bytes();
     let mut sig_start: Option<usize> = None;
     let mut sig_directives: Vec<SignatureDirective> = Vec::new();
-    for line in lockfile_content.lines() {
+    let mut offset = 0usize;
+    while offset <= bytes.len() {
+        let line_end = bytes[offset..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(bytes.len(), |i| offset + i);
+        let mut line = &lockfile_content[offset..line_end];
+        if line.ends_with('\r') {
+            line = &line[..line.len() - 1];
+        }
         if line.starts_with("@signature ") {
             if sig_start.is_none() {
-                sig_start = lockfile_content.find("@signature ");
+                sig_start = Some(offset);
             }
             sig_directives.push(parse_signature_directive(line)?);
         }
+        if line_end >= bytes.len() {
+            break;
+        }
+        offset = line_end + 1;
     }
     if sig_directives.is_empty() {
         return Ok(None);
@@ -248,14 +281,19 @@ fn collect_signature_region(
         // Unreachable when a directive was parsed, but treat defensively as unsigned.
         return Ok(None);
     };
-    if sig_start > 0 && lockfile_content.as_bytes()[sig_start - 1] != b'\n' {
+    if sig_start > 0 && bytes[sig_start - 1] != b'\n' {
         return Ok(None);
     }
-    let after_sigs = &lockfile_content[sig_start..];
-    let last_sig_end = after_sigs
-        .rfind('\n')
-        .map_or(lockfile_content.len(), |i| sig_start + i + 1);
-    if last_sig_end < lockfile_content.len() {
+    let last_line_end = bytes[sig_start..]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(sig_start, |i| sig_start + i);
+    // Everything after the last signature line must be empty (i.e. the file
+    // ends with the block and its final newline).
+    if lockfile_content[last_line_end..]
+        .lines()
+        .any(|l| !l.trim().is_empty())
+    {
         return Err(SignatureError::MalformedDirective {
             reason: "@signature must be the last lines in the file".to_string(),
         });
@@ -278,15 +316,16 @@ fn trusted_key_for<S: BuildHasher + Default>(
     )
 }
 
-/// Rejects the directive when its expiry epoch is in the past.
-fn check_signature_expiry(directive: &SignatureDirective) -> Result<(), SignatureError> {
+/// Rejects the directive when its expiry epoch is in the past at `now_epoch`.
+/// `expires_epoch == 0` means the signature never expires.
+fn check_signature_expiry(
+    directive: &SignatureDirective,
+    now_epoch: u64,
+) -> Result<(), SignatureError> {
     if directive.expires_epoch == 0 {
         return Ok(());
     }
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    if now > directive.expires_epoch {
+    if now_epoch > directive.expires_epoch {
         return Err(SignatureError::SignatureExpired {
             key_id: directive.key_id.clone(),
             expires_epoch: directive.expires_epoch,
@@ -639,7 +678,7 @@ mod tests {
         assert!(signed.starts_with(lockfile));
         assert!(signed.contains("@signature ci@example.com 00 0 "));
         assert!(signed.ends_with('\n'));
-        assert!(verify_signature(&signed, &make_trusted()).is_ok());
+        assert!(verify_signature(&signed, &make_trusted(), 0).is_ok());
     }
 
     #[test]
@@ -654,7 +693,7 @@ mod tests {
         )
         .unwrap();
         let tampered = signed.replace("r.com", "r.org");
-        match verify_signature(&tampered, &make_trusted()) {
+        match verify_signature(&tampered, &make_trusted(), 0) {
             Err(SignatureError::VerificationFailed) => {}
             other => panic!("expected VerificationFailed, got {other:?}"),
         }
@@ -664,7 +703,7 @@ mod tests {
     fn test_verify_no_signature() {
         let lockfile = "@source 0 https://r.com/\n\npkg\tAAAA\n";
         let trusted: HashMap<String, (Vec<u8>, SignatureAlgorithm)> = HashMap::new();
-        assert!(verify_signature(lockfile, &trusted).is_ok());
+        assert!(verify_signature(lockfile, &trusted, 0).is_ok());
     }
 
     #[test]
@@ -716,7 +755,7 @@ mod tests {
         .unwrap();
         let with_embedded = signed.replace("@signature ", "x@signature ");
         let trusted: HashMap<String, (Vec<u8>, SignatureAlgorithm)> = HashMap::new();
-        assert!(verify_signature(&with_embedded, &trusted).is_ok());
+        assert!(verify_signature(&with_embedded, &trusted, 0).is_ok());
     }
 
     #[test]
@@ -731,7 +770,7 @@ mod tests {
         )
         .unwrap();
         let trusted: HashMap<String, (Vec<u8>, SignatureAlgorithm)> = HashMap::new();
-        match verify_signature(&signed, &trusted) {
+        match verify_signature(&signed, &trusted, 0) {
             Err(SignatureError::UntrustedKey { key_id }) if key_id == "ci@example.com" => {}
             other => panic!("expected UntrustedKey, got {other:?}"),
         }
@@ -749,7 +788,7 @@ mod tests {
         )
         .unwrap();
         let with_extra = format!("{signed}extra");
-        match verify_signature(&with_extra, &make_trusted()) {
+        match verify_signature(&with_extra, &make_trusted(), 0) {
             Err(SignatureError::MalformedDirective { .. }) => {}
             other => panic!("expected MalformedDirective, got {other:?}"),
         }
@@ -758,7 +797,7 @@ mod tests {
     #[test]
     fn test_verify_rejects_empty_signature() {
         let content = "@source 0 https://r.com/\n\npkg\tAAAA\n@signature ci@example.com 00 0 \n";
-        match verify_signature(content, &make_trusted()) {
+        match verify_signature(content, &make_trusted(), 0) {
             Err(SignatureError::MalformedDirective { .. }) => {}
             other => panic!("expected MalformedDirective, got {other:?}"),
         }
@@ -768,7 +807,7 @@ mod tests {
     fn test_verify_rejects_invalid_base64() {
         let content =
             "@source 0 https://r.com/\n\npkg\tAAAA\n@signature ci@example.com 00 0 !!!invalid!!!\n";
-        match verify_signature(content, &make_trusted()) {
+        match verify_signature(content, &make_trusted(), 0) {
             Err(SignatureError::InvalidBase64(_)) => {}
             other => panic!("expected InvalidBase64, got {other:?}"),
         }
@@ -786,7 +825,7 @@ mod tests {
         )
         .unwrap();
         let trusted: HashMap<String, (Vec<u8>, SignatureAlgorithm)> = HashMap::new();
-        match verify_signature(&signed, &trusted) {
+        match verify_signature(&signed, &trusted, 0) {
             Err(SignatureError::UntrustedKey { .. }) => {}
             other => panic!("expected UntrustedKey, got {other:?}"),
         }
@@ -831,7 +870,7 @@ mod tests {
             (vk_bytes.to_vec(), SignatureAlgorithm::MlDsa65),
         );
 
-        let result = verify_signature(&signed, &trusted);
+        let result = verify_signature(&signed, &trusted, 0);
         assert!(result.is_ok(), "ML-DSA-65 verify failed: {result:?}");
     }
 
@@ -858,7 +897,7 @@ mod tests {
             (vk_bytes.to_vec(), SignatureAlgorithm::MlDsa65),
         );
 
-        match verify_signature(&tampered, &trusted) {
+        match verify_signature(&tampered, &trusted, 0) {
             Err(SignatureError::MlDsaVerificationFailed) => {}
             other => panic!("expected MlDsaVerificationFailed, got {other:?}"),
         }
@@ -908,7 +947,7 @@ mod tests {
             (public_key().to_vec(), SignatureAlgorithm::Ed25519),
         );
 
-        assert!(verify_signature(&signed, &trusted).is_ok());
+        assert!(verify_signature(&signed, &trusted, 0).is_ok());
     }
 
     #[test]
@@ -1032,7 +1071,7 @@ mod tests {
             1_000,
         )
         .unwrap();
-        match verify_signature(&signed, &make_trusted()) {
+        match verify_signature(&signed, &make_trusted(), 2_000) {
             Err(SignatureError::SignatureExpired {
                 key_id,
                 expires_epoch,
@@ -1058,7 +1097,7 @@ mod tests {
             "pq@x".to_string(),
             (vk_bytes.to_vec(), SignatureAlgorithm::Ed25519),
         );
-        match verify_signature(&signed, &trusted) {
+        match verify_signature(&signed, &trusted, 0) {
             Err(SignatureError::MalformedDirective { reason }) => {
                 assert!(reason.contains("uses algo"), "{reason}");
             }
@@ -1076,7 +1115,7 @@ mod tests {
             "ci@x".to_string(),
             (vec![1, 2, 3], SignatureAlgorithm::Ed25519),
         );
-        match verify_signature(&signed, &trusted) {
+        match verify_signature(&signed, &trusted, 0) {
             Err(SignatureError::MalformedDirective { reason }) => {
                 assert!(reason.contains("32 bytes"), "{reason}");
             }
@@ -1097,7 +1136,7 @@ mod tests {
             "pq@x".to_string(),
             (vk_bytes[..16].to_vec(), SignatureAlgorithm::MlDsa65),
         );
-        match verify_signature(&signed, &trusted) {
+        match verify_signature(&signed, &trusted, 0) {
             Err(SignatureError::MalformedDirective { reason }) => {
                 assert!(reason.contains("ML-DSA-65 public key"), "{reason}");
             }
