@@ -103,12 +103,19 @@ pub fn pack_payload(data: &PayloadData) -> Result<Vec<u8>, Error> {
     Ok(buf)
 }
 
+/// Maximum pre-allocation for count-driven collections. Counts come from
+/// attacker-controlled varints; the true element count is bounded by the
+/// remaining input anyway (every element consumes at least one byte), so a
+/// huge count is truncated by the input before the loop ever reaches it.
+const MAX_PREALLOC: usize = 4096;
+
 /// Rejects payload data that cannot round-trip the wire format **before** any
 /// bytes are written: digests must fit the 1-byte wire length and the patch
 /// hash must be exactly 32 bytes (fixed-width field).
 ///
 /// # Errors
-/// Returns [`Error::DigestTooLong`] for oversized digests.
+/// Returns [`Error::DigestTooLong`] for oversized digests and
+/// [`Error::InvalidPatchHashLength`] for a patch hash that is not 32 bytes.
 fn validate_payload(data: &PayloadData) -> Result<(), Error> {
     for hash in &data.hashes {
         check_digest_len(&hash.digest)?;
@@ -127,6 +134,9 @@ fn validate_payload(data: &PayloadData) -> Result<(), Error> {
     }
     if let Some((_, digest)) = &data.patch_hash {
         check_digest_len(digest)?;
+        if digest.len() != 32 {
+            return Err(Error::InvalidPatchHashLength { len: digest.len() });
+        }
     }
     Ok(())
 }
@@ -529,7 +539,7 @@ fn unpack_features(
     count: usize,
     line_number: usize,
 ) -> Result<Vec<String>, Error> {
-    let mut features = Vec::with_capacity(count);
+    let mut features = Vec::with_capacity(count.min(MAX_PREALLOC));
     for _ in 0..count {
         let str_len = read_varint(bytes, cursor, line_number)?;
         features.push(read_string(bytes, cursor, str_len, line_number)?);
@@ -588,7 +598,7 @@ fn unpack_deps(
         }
 
         let req_count = read_varint(bytes, cursor, line_number)?;
-        let mut req_indices = Vec::with_capacity(req_count);
+        let mut req_indices = Vec::with_capacity(req_count.min(MAX_PREALLOC));
         for _ in 0..req_count {
             req_indices.push(read_varint(bytes, cursor, line_number)?);
         }
