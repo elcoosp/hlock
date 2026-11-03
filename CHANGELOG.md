@@ -1,3 +1,52 @@
+## [1.0.1] - 2026-11-03
+
+**Security & correctness release.** Full audit in [`AUDIT.md`](AUDIT.md);
+adversarial regression suite in `tests/adversarial_security.rs` (22 tests,
+each reproducing a pre-fix exploit).
+
+### 🔒 Security fixes
+- **Digest gate**: a `@digest` line placed anywhere but the end of the body
+  authenticated only a prefix (`E0208 DigestPlacement`); missing digests now
+  fail the gates with `E0205` (spec §2.5 enforced).
+- **Signature gate can no longer be skipped**: unsigned files fail when
+  trusted keys are pinned (`E0307`); signed files fail without pinned keys
+  (`E0308`); malformed `--trusted-key` specs are a hard usage error (they
+  used to be silently dropped, degrading a keyed gate to digest-only).
+- **`--time` now governs signature expiry** (spec §2.4).
+- Decoy `@signature` text inside earlier lines can no longer switch the
+  verifier into "unsigned" mode (byte-offset block scan).
+- Policy globs require the `/` boundary (`@internal/*` no longer matches
+  `@internalx/y`); script policies use the documented precedence ladder.
+- Sigstore verification pins the certificate identity to the SLSA builder —
+  the previous `.*` regexp accepted any signer.
+- Terminal-escape sanitization at every output boundary; package-name
+  validation rejects whitespace/control/`?`/`#`/`..` (URL & DOT injection,
+  terminal spoofing).
+- Registry lookups percent-encode package names; shared pooled HTTP client
+  with per-request timeouts, redirect limits and a 10 MiB response cap.
+- Payload decoding is allocation-bomb-proof (pre-fix: a ~30-byte payload
+  aborted the process with a 412 GB allocation).
+- Private key files are created 0600 from the first byte; all mutating
+  commands write atomically (temp file + rename).
+
+### 🐛 Correctness
+- `merge` keeps (unioned) advisories, licenses, policies, trust roots,
+  rotations, VEX entries and mirrors instead of silently dropping them.
+- `fix` parses OSV fixed versions strictly (`v` prefix ok, prereleases
+  refused without corruption) and refreshes stale peer content ids.
+- CRLF lockfiles: byte-correct digest boundaries, lazy scanner and header
+  separator (pre-fix: body dropped / slices could panic mid-UTF-8).
+- `tree` renders scoped names correctly and is capped against diamond-blowup.
+- VEX/advisory free text round-trips (space-safe encoding).
+- Duplicate package names are a hard parse error (`E0122`).
+- `outdated`/`audit --online` fail closed on network errors (spec §7):
+  explicit `unknown` bucket, `audit --online` uses `/v1/querybatch` with
+  retry/backoff.
+- Exit codes normalized to the documented 0/1/2 contract.
+- JSON envelope (`schema`/`command`/`ok`/`data`/`error`) emitted by every
+  command in JSON mode; `NO_COLOR`/`FORCE_COLOR`/`CLICOLOR_FORCE` honored;
+  `[verify] trusted_keys` config wired into `verify`/`ci`.
+
 ## [1.0.0] - 2026-11-03
 
 **Breaking release.** No backward compatibility with the 0.x wire format or
