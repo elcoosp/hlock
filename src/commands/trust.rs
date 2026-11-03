@@ -42,7 +42,7 @@ fn run_list(file: &Path, format: &str, ctx: Ctx) {
 
     if output::parse_format(format) == output::OutputFormat::Json {
         if !quiet {
-            let json = serde_json::json!({
+            let data = serde_json::json!({
                 "trust_roots": lockfile.trust_roots.iter().map(|r| serde_json::json!({
                     "key_id": r.key_id,
                     "algorithm": algo_name(r.algorithm),
@@ -60,7 +60,10 @@ fn run_list(file: &Path, format: &str, ctx: Ctx) {
                     "signed_by": rot.rotation_signature_key_id,
                 })).collect::<Vec<_>>(),
             });
-            println!("{}", serde_json::to_string_pretty(&json).unwrap());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&super::envelope("trust list", true, &data)).unwrap()
+            );
         }
         return;
     }
@@ -179,7 +182,8 @@ fn run_rotate(
     ctx: Ctx,
 ) {
     let Ctx { quiet, .. } = ctx;
-    let (_, mut lockfile) = load(file);
+    let (content, mut lockfile) = load(file);
+    let had_signature = hlock::signature::has_signature_block(&content);
 
     let new_algo = parse_algorithm(new_algorithm);
     let new_role = match role {
@@ -282,21 +286,16 @@ fn run_rotate(
         }
     };
     let target = output_path.unwrap_or(file);
-    if let Err(e) = std::fs::write(target, &serialized) {
+    if let Err(e) = super::atomic_write(target, &serialized) {
         eprintln!("Error writing {}: {e}", target.display());
         std::process::exit(2);
     }
 
     if let Some(sk_hex) = new_private_hex {
         let sk_path = target.with_extension("new-key");
-        if let Err(e) = std::fs::write(&sk_path, format!("{sk_hex}\n")) {
+        if let Err(e) = super::atomic_write(&sk_path, &format!("{sk_hex}\n")) {
             eprintln!("Error writing new private key: {e}");
             std::process::exit(2);
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let _ = std::fs::set_permissions(&sk_path, std::fs::Permissions::from_mode(0o600));
         }
         if !quiet {
             println!(
@@ -318,6 +317,18 @@ fn run_rotate(
             "Rotation record appended: {} → {} (signed by {}, verified)",
             old_root.key_id, new_key_id, old_root.key_id
         );
+        if had_signature {
+            // The rewrite cannot keep the old @signature block: the digest
+            // it signed no longer matches. Say so instead of silently
+            // stripping the operator's signature.
+            eprintln!(
+                "! the previous @signature block was removed (the file changed); re-sign with the new key:"
+            );
+            eprintln!(
+                "  hlock sign {} --key-id {new_key_id} --in-place …",
+                target.display()
+            );
+        }
     }
 }
 
