@@ -3,7 +3,6 @@
 use super::{Ctx, Path, deserialize, output, read_input};
 
 /// Runs the `dependents` command.
-#[allow(clippy::too_many_lines)] // linear orchestration, split adds indirection
 pub(crate) fn run(
     file: &Path,
     package: &str,
@@ -37,51 +36,7 @@ pub(crate) fn run(
     let version = format!("{}.{}.{}", pkg.major, pkg.minor, pkg.patch);
     let fmt = output::parse_format(format);
 
-    let direct: Vec<(String, String, String)> = lockfile
-        .packages
-        .iter()
-        .filter(|p| {
-            p.dependencies.iter().any(|d| {
-                d.name == package
-                    && (dep_type == "all"
-                        || match dep_type {
-                            "runtime" => matches!(d.dep_type, hlock::DepType::Runtime),
-                            "dev" => matches!(d.dep_type, hlock::DepType::Dev),
-                            _ => true,
-                        })
-            })
-        })
-        .map(|p| {
-            // Re-find with the same predicate as the filter so the reported
-            // dep_type belongs to an edge that actually matched.
-            let dep = p
-                .dependencies
-                .iter()
-                .find(|d| {
-                    d.name == package
-                        && (dep_type == "all"
-                            || match dep_type {
-                                "runtime" => matches!(d.dep_type, hlock::DepType::Runtime),
-                                "dev" => matches!(d.dep_type, hlock::DepType::Dev),
-                                _ => true,
-                            })
-                })
-                .or_else(|| p.dependencies.iter().find(|d| d.name == package))
-                .unwrap();
-            let dt = match dep.dep_type {
-                hlock::DepType::Runtime => "runtime",
-                hlock::DepType::Dev => "dev",
-                hlock::DepType::Peer => "peer",
-                hlock::DepType::Optional => "optional",
-                hlock::DepType::OptionalTarget(_, _) => "optional-target",
-            };
-            (
-                p.name.clone(),
-                format!("{}.{}.{}", p.major, p.minor, p.patch),
-                dt.to_string(),
-            )
-        })
-        .collect();
+    let direct = collect_direct_dependents(&lockfile, package, dep_type);
 
     let transitive_names: Vec<String> = if transitive {
         let graph = match hlock::Graph::new(&lockfile) {
@@ -128,6 +83,60 @@ pub(crate) fn run(
     } else if !quiet {
         render_text(package, &direct, &transitive_list, transitive, ctx);
     }
+}
+
+/// Collects the direct dependents of `package` matching `dep_type`, resolved
+/// to `(name, version, dep_type)` against the lockfile's package set.
+fn collect_direct_dependents(
+    lockfile: &hlock::Lockfile,
+    package: &str,
+    dep_type: &str,
+) -> Vec<(String, String, String)> {
+    lockfile
+        .packages
+        .iter()
+        .filter(|p| {
+            p.dependencies.iter().any(|d| {
+                d.name == package
+                    && (dep_type == "all"
+                        || match dep_type {
+                            "runtime" => matches!(d.dep_type, hlock::DepType::Runtime),
+                            "dev" => matches!(d.dep_type, hlock::DepType::Dev),
+                            _ => true,
+                        })
+            })
+        })
+        .map(|p| {
+            // Re-find with the same predicate as the filter so the reported
+            // dep_type belongs to an edge that actually matched.
+            let dep = p
+                .dependencies
+                .iter()
+                .find(|d| {
+                    d.name == package
+                        && (dep_type == "all"
+                            || match dep_type {
+                                "runtime" => matches!(d.dep_type, hlock::DepType::Runtime),
+                                "dev" => matches!(d.dep_type, hlock::DepType::Dev),
+                                _ => true,
+                            })
+                })
+                .or_else(|| p.dependencies.iter().find(|d| d.name == package))
+                .unwrap();
+            let dt = match dep.dep_type {
+                hlock::DepType::Runtime => "runtime",
+                hlock::DepType::Dev => "dev",
+                hlock::DepType::Peer => "peer",
+                hlock::DepType::Optional => "optional",
+                hlock::DepType::OptionalTarget(_, _) => "optional-target",
+            };
+            (
+                p.name.clone(),
+                format!("{}.{}.{}", p.major, p.minor, p.patch),
+                dt.to_string(),
+            )
+        })
+        .collect()
 }
 
 /// Renders the direct/transitive dependents listing as human-readable text.

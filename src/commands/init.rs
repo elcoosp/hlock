@@ -20,7 +20,6 @@ pub(crate) struct InitArgs<'a> {
 }
 
 /// Runs the `init` command.
-#[allow(clippy::too_many_lines)] // linear orchestration, split adds indirection
 pub(crate) fn run(args: &InitArgs<'_>, ctx: Ctx) {
     let Ctx { quiet, .. } = ctx;
 
@@ -32,66 +31,14 @@ pub(crate) fn run(args: &InitArgs<'_>, ctx: Ctx) {
         }
     };
 
-    if args.from == "pnpm" {
-        // A pnpm-lock.yaml fed to the yarn parser yields silently wrong
-        // versions; a security gate refuses rather than guesses.
-        eprintln!(
-            "Error: pnpm import is not supported yet (the yarn parser produces wrong versions); convert with 'pnpm import' to npm first"
-        );
-        std::process::exit(2);
-    }
-    let (mut lockfile, result) = match args.from {
-        "yarn" | "pnpm" => match import_yarn(&source_content, args.registry) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("[{}] Import failed: {}", e.error_code(), e);
-                std::process::exit(2);
-            }
-        },
-        "npm" => match import_npm(&source_content, args.registry) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("[{}] Import failed: {}", e.error_code(), e);
-                std::process::exit(2);
-            }
-        },
-        other => {
-            eprintln!("Error: unknown format '{other}'. Supported: yarn, npm, pnpm");
-            std::process::exit(2);
-        }
-    };
+    let (mut lockfile, result) = import_lockfile(args.from, &source_content, args.registry);
 
     // Optional trust root: generate the keypair, attach the root directive.
-    let mut private_key_hex: Option<String> = None;
-    if args.with_trust_root {
-        let algo = match args.algorithm {
-            "ed25519" => hlock::signature::SignatureAlgorithm::Ed25519,
-            "ml-dsa-65" | "mldsa65" => hlock::signature::SignatureAlgorithm::MlDsa65,
-            other => {
-                eprintln!("Error: unknown algorithm '{other}'. Supported: ed25519, ml-dsa-65");
-                std::process::exit(2);
-            }
-        };
-        let (private_hex, public_hex) = match algo {
-            hlock::signature::SignatureAlgorithm::Ed25519 => super::keygen::generate_ed25519(),
-            hlock::signature::SignatureAlgorithm::MlDsa65 => super::keygen::generate_ml_dsa_65(),
-        };
-        let pubkey = match hlock::hex::decode(public_hex.trim()) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                eprintln!("Error decoding generated public key: {e}");
-                std::process::exit(2);
-            }
-        };
-        lockfile.trust_roots.push(hlock::policy::TrustRoot {
-            key_id: args.key_id.to_string(),
-            algorithm: algo,
-            public_key: pubkey,
-            expires_epoch: args.expires,
-            role: hlock::policy::TrustRole::Root,
-        });
-        private_key_hex = Some(private_hex);
-    }
+    let private_key_hex = if args.with_trust_root {
+        Some(attach_trust_root(&mut lockfile, args))
+    } else {
+        None
+    };
 
     let out_path = args.output.map_or_else(
         || PathBuf::from("hlock.lock"),
@@ -178,3 +125,72 @@ pub(crate) fn run(args: &InitArgs<'_>, ctx: Ctx) {
 }
 
 use std::path::PathBuf;
+
+/// Imports the ecosystem lockfile (`npm`/`yarn`), refusing `pnpm` and unknown
+/// formats. Exits the process on failure.
+fn import_lockfile(
+    from: &str,
+    source_content: &str,
+    registry: &str,
+) -> (hlock::Lockfile, hlock::ImportResult) {
+    if from == "pnpm" {
+        // A pnpm-lock.yaml fed to the yarn parser yields silently wrong
+        // versions; a security gate refuses rather than guesses.
+        eprintln!(
+            "Error: pnpm import is not supported yet (the yarn parser produces wrong versions); convert with 'pnpm import' to npm first"
+        );
+        std::process::exit(2);
+    }
+    match from {
+        "yarn" | "pnpm" => match import_yarn(source_content, registry) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[{}] Import failed: {}", e.error_code(), e);
+                std::process::exit(2);
+            }
+        },
+        "npm" => match import_npm(source_content, registry) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[{}] Import failed: {}", e.error_code(), e);
+                std::process::exit(2);
+            }
+        },
+        other => {
+            eprintln!("Error: unknown format '{other}'. Supported: yarn, npm, pnpm");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Generates a root keypair and attaches the root trust directive to
+/// `lockfile`, returning the private key hex for the caller to persist.
+fn attach_trust_root(lockfile: &mut hlock::Lockfile, args: &InitArgs<'_>) -> String {
+    let algo = match args.algorithm {
+        "ed25519" => hlock::signature::SignatureAlgorithm::Ed25519,
+        "ml-dsa-65" | "mldsa65" => hlock::signature::SignatureAlgorithm::MlDsa65,
+        other => {
+            eprintln!("Error: unknown algorithm '{other}'. Supported: ed25519, ml-dsa-65");
+            std::process::exit(2);
+        }
+    };
+    let (private_hex, public_hex) = match algo {
+        hlock::signature::SignatureAlgorithm::Ed25519 => super::keygen::generate_ed25519(),
+        hlock::signature::SignatureAlgorithm::MlDsa65 => super::keygen::generate_ml_dsa_65(),
+    };
+    let pubkey = match hlock::hex::decode(public_hex.trim()) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("Error decoding generated public key: {e}");
+            std::process::exit(2);
+        }
+    };
+    lockfile.trust_roots.push(hlock::policy::TrustRoot {
+        key_id: args.key_id.to_string(),
+        algorithm: algo,
+        public_key: pubkey,
+        expires_epoch: args.expires,
+        role: hlock::policy::TrustRole::Root,
+    });
+    private_hex
+}

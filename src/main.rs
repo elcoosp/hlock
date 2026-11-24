@@ -12,7 +12,6 @@ pub(crate) use hlock::{
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[allow(clippy::struct_excessive_bools)] // clap global flags, not state logic
 #[command(
     name = "hlock",
     version,
@@ -23,22 +22,8 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    #[arg(short, long, global = true, help = "Suppress non-error output")]
-    quiet: bool,
-
-    #[arg(short, long, global = true, help = "Show extra diagnostic information")]
-    verbose: bool,
-
-    #[arg(long, global = true, help = "Disable colored output")]
-    no_color: bool,
-
-    #[arg(
-        long,
-        default_value = "auto",
-        global = true,
-        help = "When to colorize: auto, always, never"
-    )]
-    color: String,
+    #[command(flatten)]
+    output_flags: OutputFlags,
 
     #[arg(
         short = 'J',
@@ -48,8 +33,30 @@ struct Cli {
     )]
     json: bool,
 
+    #[arg(
+        long,
+        default_value = "auto",
+        global = true,
+        help = "When to colorize: auto, always, never"
+    )]
+    color: String,
+
     #[arg(long, global = true, help = "Path to config file (.hlockrc syntax)")]
     config: Option<PathBuf>,
+}
+
+/// Global output-affecting flags. Flattened into [`Cli`] and grouped so the
+/// parent struct stays within the bool-count lint.
+#[derive(Parser)]
+struct OutputFlags {
+    #[arg(short, long, global = true, help = "Suppress non-error output")]
+    quiet: bool,
+
+    #[arg(short, long, global = true, help = "Show extra diagnostic information")]
+    verbose: bool,
+
+    #[arg(long, global = true, help = "Disable colored output")]
+    no_color: bool,
 }
 
 #[derive(Subcommand)]
@@ -532,17 +539,20 @@ fn main() {
     let (config, config_source) = load_config_or_exit(cli.config.as_deref());
 
     // CLI flags win over the config file; the file wins over defaults.
-    let quiet = cli.quiet || config.output.quiet;
-    let verbose = (cli.verbose || config.output.verbose) && !quiet;
-    let color_flag = if cli.no_color {
+    let quiet = cli.output_flags.quiet || config.output.quiet;
+    let verbose = (cli.output_flags.verbose || config.output.verbose) && !quiet;
+    let color_flag = if cli.output_flags.no_color {
         "never"
     } else if cli.color != "auto" {
         cli.color.as_str()
     } else {
         config.output.color.as_str()
     };
-    let color_config =
-        output::ColorConfig::from_cli_args(color_flag, cli.no_color, output::OutputFormat::Text);
+    let color_config = output::ColorConfig::from_cli_args(
+        color_flag,
+        cli.output_flags.no_color,
+        output::OutputFormat::Text,
+    );
     let color_enabled = color_config.should_color();
 
     let ctx = commands::Ctx {
@@ -586,8 +596,30 @@ fn dispatch(
 }
 
 /// Runs the graph-structure and maintenance commands.
-#[allow(clippy::too_many_lines)] // one arm per subcommand is intentional
 fn dispatch_mutation(command: Commands, json: bool, config: &HlockConfig, ctx: commands::Ctx) {
+    match command {
+        Commands::Graph { .. }
+        | Commands::Tree { .. }
+        | Commands::Merge { .. }
+        | Commands::Import { .. }
+        | Commands::Init { .. }
+        | Commands::Completions { .. } => dispatch_mutation_early(command, json, config, ctx),
+        Commands::Fix { .. } | Commands::Sign { .. } | Commands::Keygen { .. } => {
+            dispatch_mutation_mid(command, json, config, ctx);
+        }
+        // Remaining maintenance commands (Trust) plus the unreachable guard.
+        other => dispatch_mutation_late(other, json, ctx),
+    }
+}
+
+/// First group of maintenance commands: graph, tree, merge, import, init,
+/// completions.
+fn dispatch_mutation_early(
+    command: Commands,
+    json: bool,
+    config: &HlockConfig,
+    ctx: commands::Ctx,
+) {
     match command {
         Commands::Graph {
             file,
@@ -660,6 +692,15 @@ fn dispatch_mutation(command: Commands, json: bool, config: &HlockConfig, ctx: c
                 ctx,
             );
         }
+        Commands::Completions { shell } => commands::completions::run(&shell, ctx),
+        // Routing guarantees only the early-group commands reach here.
+        _ => unreachable!("non-early command reached dispatch_mutation_early"),
+    }
+}
+
+/// Second group of maintenance commands: fix, sign, keygen.
+fn dispatch_mutation_mid(command: Commands, json: bool, _config: &HlockConfig, ctx: commands::Ctx) {
+    match command {
         Commands::Fix {
             file,
             audit,
@@ -715,6 +756,14 @@ fn dispatch_mutation(command: Commands, json: bool, config: &HlockConfig, ctx: c
             expires,
             output,
         } => commands::keygen::run(&algorithm, &key_id, expires, output.as_deref(), ctx),
+        // Routing guarantees only the mid-group commands reach here.
+        _ => unreachable!("non-mid command reached dispatch_mutation_mid"),
+    }
+}
+
+/// Remaining maintenance commands (trust) plus the unreachable guard.
+fn dispatch_mutation_late(command: Commands, json: bool, ctx: commands::Ctx) {
+    match command {
         Commands::Trust(trust_cmd) => {
             let args = match trust_cmd {
                 TrustCommand::List { file, format } => commands::trust::TrustArgs::List {
@@ -745,19 +794,35 @@ fn dispatch_mutation(command: Commands, json: bool, config: &HlockConfig, ctx: c
             };
             commands::trust::run(&args, ctx);
         }
-        Commands::Completions { shell } => commands::completions::run(&shell, ctx),
         // `dispatch` only routes the commands above here.
-        _ => unreachable!("non-maintenance command reached dispatch_mutation"),
+        _ => unreachable!("non-maintenance command reached dispatch_mutation_late"),
     }
 }
 
 /// Runs the inspection commands (read-only lockfile analysis).
-#[allow(clippy::too_many_lines)] // one arm per subcommand is intentional
 fn dispatch_inspection(
     command: Commands,
     json: bool,
     config: &HlockConfig,
     config_source: &'static str,
+    ctx: commands::Ctx,
+) {
+    match command {
+        Commands::Ci { .. } | Commands::Verify { .. } | Commands::Lint { .. } => {
+            dispatch_inspection_gates(command, json, config, ctx);
+        }
+        Commands::Diff { .. } | Commands::Audit { .. } | Commands::Sbom { .. } => {
+            dispatch_inspection_reports(command, json, config, ctx);
+        }
+        other => dispatch_reports(other, json, config, config_source, ctx),
+    }
+}
+
+/// The verification/lint gate inspection commands: ci, verify, lint.
+fn dispatch_inspection_gates(
+    command: Commands,
+    json: bool,
+    config: &HlockConfig,
     ctx: commands::Ctx,
 ) {
     match command {
@@ -833,6 +898,19 @@ fn dispatch_inspection(
             };
             commands::lint_cmd::run(&file, &effective_rules, &severity, fmt(&format, json), ctx);
         }
+        // Routing guarantees only the gate commands reach here.
+        _ => unreachable!("non-gate command reached dispatch_inspection_gates"),
+    }
+}
+
+/// The remaining inspection commands: diff, audit, sbom.
+fn dispatch_inspection_reports(
+    command: Commands,
+    json: bool,
+    config: &HlockConfig,
+    ctx: commands::Ctx,
+) {
+    match command {
         Commands::Diff {
             old_file,
             new_file,
@@ -867,17 +945,44 @@ fn dispatch_inspection(
             namespace,
             format,
         } => commands::sbom_cmd::run(&file, &namespace, fmt(&format, json), ctx),
-        other => dispatch_reports(other, json, config, config_source, ctx),
+        // Routing guarantees only the report commands reach here.
+        _ => unreachable!("non-report command reached dispatch_inspection_reports"),
     }
 }
 
 /// Runs the report-style commands (summaries, listings and explanations).
-#[allow(clippy::too_many_lines)] // one arm per subcommand is intentional
 fn dispatch_reports(
     command: Commands,
     json: bool,
     config: &HlockConfig,
     config_source: &'static str,
+    ctx: commands::Ctx,
+) {
+    match command {
+        Commands::Why { .. }
+        | Commands::Deps { .. }
+        | Commands::Dependents { .. }
+        | Commands::Check { .. }
+        | Commands::Licenses { .. } => dispatch_reports_analysis(command, json, config, ctx),
+        Commands::Outdated { .. }
+        | Commands::Explain { .. }
+        | Commands::Stats { .. }
+        | Commands::Digest { .. }
+        | Commands::PolicyTest { .. }
+        | Commands::Config { .. } => {
+            dispatch_reports_info(command, json, config, config_source, ctx);
+        }
+        // Routing guarantees only the report commands reach here.
+        _ => unreachable!("non-report command reached dispatch_reports"),
+    }
+}
+
+/// The dependency/analysis report commands: why, deps, dependents, check,
+/// licenses.
+fn dispatch_reports_analysis(
+    command: Commands,
+    json: bool,
+    config: &HlockConfig,
     ctx: commands::Ctx,
 ) {
     match command {
@@ -967,6 +1072,21 @@ fn dispatch_reports(
                 ctx,
             );
         }
+        // Routing guarantees only the analysis commands reach here.
+        _ => unreachable!("non-analysis command reached dispatch_reports_analysis"),
+    }
+}
+
+/// The informational report commands: outdated, explain, stats, digest,
+/// policy-test, config.
+fn dispatch_reports_info(
+    command: Commands,
+    json: bool,
+    config: &HlockConfig,
+    config_source: &'static str,
+    ctx: commands::Ctx,
+) {
+    match command {
         Commands::Outdated {
             file,
             major,
@@ -1020,7 +1140,7 @@ fn dispatch_reports(
         Commands::Config { format } => {
             commands::config_cmd::run(config, config_source, fmt(&format, json), ctx);
         }
-        // `dispatch_inspection` only routes the report commands above here.
-        _ => unreachable!("non-report command reached dispatch_reports"),
+        // Routing guarantees only the info commands reach here.
+        _ => unreachable!("non-info command reached dispatch_reports_info"),
     }
 }

@@ -408,6 +408,26 @@ fn verify_mldsa65(
 /// Domain-separation tag for the canonical root-rotation payload.
 const ROTATION_DOMAIN: &[u8] = b"hlock/rotation/v1";
 
+/// The parameters of a root-key rotation, shared by the payload builder and
+/// the signer.
+#[derive(Debug, Clone, Copy)]
+pub struct RotationSpec<'a> {
+    /// Identifier of the new root key.
+    pub new_key_id: &'a str,
+    /// Algorithm of the new root key.
+    pub algorithm: SignatureAlgorithm,
+    /// Raw public key bytes of the new root key.
+    pub new_public_key: &'a [u8],
+    /// Expiry (epoch seconds) of the new root key.
+    pub new_expires_epoch: u64,
+    /// Role granted to the new root key.
+    pub new_role: crate::policy::TrustRole,
+    /// Identifier of the *old* root key that signs this rotation.
+    pub old_key_id: &'a str,
+    /// Quorum threshold of the new root key.
+    pub threshold: u8,
+}
+
 /// Builds the canonical rotation payload signed by the *old* root key:
 ///
 /// `"hlock/rotation/v1" || len32le(new_key_id) || new_key_id || algo_id ||
@@ -417,16 +437,16 @@ const ROTATION_DOMAIN: &[u8] = b"hlock/rotation/v1";
 /// Every variable-length field is length-prefixed, so the encoding is
 /// injective and no field boundary can be forged.
 #[must_use]
-#[allow(clippy::cast_possible_truncation)] // length prefixes of bounded fields
-pub fn rotation_payload(
-    new_key_id: &str,
-    algorithm: SignatureAlgorithm,
-    new_public_key: &[u8],
-    new_expires_epoch: u64,
-    new_role: crate::policy::TrustRole,
-    old_key_id: &str,
-    threshold: u8,
-) -> Vec<u8> {
+pub fn rotation_payload(spec: &RotationSpec<'_>) -> Vec<u8> {
+    let RotationSpec {
+        new_key_id,
+        algorithm,
+        new_public_key,
+        new_expires_epoch,
+        new_role,
+        old_key_id,
+        threshold,
+    } = *spec;
     let mut out = Vec::with_capacity(
         ROTATION_DOMAIN.len()
             + 4
@@ -441,21 +461,34 @@ pub fn rotation_payload(
             + 1,
     );
     out.extend_from_slice(ROTATION_DOMAIN);
-    out.extend_from_slice(&(new_key_id.len() as u32).to_le_bytes());
+    out.extend_from_slice(&len_prefixed_u32(new_key_id.len()));
     out.extend_from_slice(new_key_id.as_bytes());
     out.push(match algorithm {
         SignatureAlgorithm::Ed25519 => 0x00,
         SignatureAlgorithm::MlDsa65 => 0x02,
     });
-    out.extend_from_slice(&(new_public_key.len() as u32).to_le_bytes());
+    out.extend_from_slice(&len_prefixed_u32(new_public_key.len()));
     out.extend_from_slice(new_public_key);
     out.extend_from_slice(&new_expires_epoch.to_le_bytes());
-    out.push(new_role.as_str().len() as u8);
+    out.push(len_prefixed_u8(new_role.as_str().len()));
     out.extend_from_slice(new_role.as_str().as_bytes());
-    out.extend_from_slice(&(old_key_id.len() as u32).to_le_bytes());
+    out.extend_from_slice(&len_prefixed_u32(old_key_id.len()));
     out.extend_from_slice(old_key_id.as_bytes());
     out.push(threshold);
     out
+}
+
+/// Encodes a field length as a `u32` little-endian prefix, saturating at
+/// `u32::MAX`. Variable-length fields in a [`Lockfile`] are bounded far below
+/// 4 GiB, so saturation is unreachable in practice.
+fn len_prefixed_u32(len: usize) -> [u8; 4] {
+    u32::try_from(len).unwrap_or(u32::MAX).to_le_bytes()
+}
+
+/// Encodes a field length as a single `u8` prefix, saturating at `u8::MAX`.
+/// Role names are short static strings, so saturation is unreachable.
+fn len_prefixed_u8(len: usize) -> u8 {
+    u8::try_from(len).unwrap_or(u8::MAX)
 }
 
 /// Signs the canonical rotation payload with the old root's private key.
@@ -463,27 +496,12 @@ pub fn rotation_payload(
 /// # Errors
 /// Returns [`SignatureError::MalformedDirective`] when the key length does
 /// not match the algorithm.
-#[allow(clippy::too_many_arguments)] // explicit crypto parameter list
 pub fn sign_rotation(
-    new_key_id: &str,
-    algorithm: SignatureAlgorithm,
-    new_public_key: &[u8],
-    new_expires_epoch: u64,
-    new_role: crate::policy::TrustRole,
-    old_key_id: &str,
-    threshold: u8,
+    spec: &RotationSpec<'_>,
     old_algorithm: SignatureAlgorithm,
     old_private_key: &[u8],
 ) -> Result<Vec<u8>, SignatureError> {
-    let payload = rotation_payload(
-        new_key_id,
-        algorithm,
-        new_public_key,
-        new_expires_epoch,
-        new_role,
-        old_key_id,
-        threshold,
-    );
+    let payload = rotation_payload(spec);
     match old_algorithm {
         SignatureAlgorithm::Ed25519 => {
             let seed: [u8; 32] =
@@ -536,15 +554,15 @@ pub fn verify_rotation_signature(
     old_public_key: &[u8],
     old_algorithm: SignatureAlgorithm,
 ) -> Result<(), SignatureError> {
-    let payload = rotation_payload(
-        &rotation.new_key_id,
-        rotation.new_algorithm,
-        &rotation.new_public_key,
-        rotation.new_expires_epoch,
-        rotation.new_role,
-        &rotation.old_key_id,
-        rotation.threshold,
-    );
+    let payload = rotation_payload(&RotationSpec {
+        new_key_id: &rotation.new_key_id,
+        algorithm: rotation.new_algorithm,
+        new_public_key: &rotation.new_public_key,
+        new_expires_epoch: rotation.new_expires_epoch,
+        new_role: rotation.new_role,
+        old_key_id: &rotation.old_key_id,
+        threshold: rotation.threshold,
+    });
     match old_algorithm {
         SignatureAlgorithm::Ed25519 => {
             if old_public_key.len() != ed25519_dalek::PUBLIC_KEY_LENGTH {

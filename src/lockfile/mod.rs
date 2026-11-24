@@ -326,8 +326,7 @@ fn unescape_field(field: &str) -> String {
             )
             && let (Some(hi), Some(lo)) = (hi, lo)
         {
-            #[allow(clippy::cast_possible_truncation)] // hi/lo are 0..=15
-            out.push(((hi * 16) + lo) as u8);
+            out.push(u8::try_from((hi * 16) + lo).unwrap_or(0));
             i += 3;
         } else {
             out.push(bytes[i]);

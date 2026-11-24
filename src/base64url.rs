@@ -35,13 +35,11 @@ const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 /// Const decode table: `255` marks invalid bytes.
 const fn build_lookup() -> [u8; 256] {
     let mut lookup = [255u8; 256];
-    let mut i = 0;
+    // `i` stays a `u8` (bounded by 64) so the assignment needs no narrowing
+    // cast; `ALPHABET` values are themselves valid `u8` indices.
+    let mut i: u8 = 0;
     while i < 64 {
-        // Loop bound guarantees i < 64, so the casts are lossless.
-        #[allow(clippy::cast_possible_truncation)]
-        {
-            lookup[ALPHABET[i] as usize] = i as u8;
-        }
+        lookup[ALPHABET[i as usize] as usize] = i;
         i += 1;
     }
     lookup
@@ -112,8 +110,8 @@ pub fn decode_into(data: &[u8], out: &mut Vec<u8>) -> Result<(), Base64Error> {
         if bits >= 8 {
             bits -= 8;
             // Invariant: `bits + 8 <= 14`, so the extracted byte fits in u8.
-            #[allow(clippy::cast_possible_truncation)]
-            out.push((buffer >> bits) as u8);
+            let byte = u8::try_from(buffer >> bits).unwrap_or(0);
+            out.push(byte);
             buffer &= (1 << bits) - 1;
         }
     }
@@ -146,8 +144,9 @@ mod tests {
     #[test]
     fn roundtrip_lengths_0_to_70() {
         for len in 0..=70usize {
-            #[allow(clippy::cast_possible_truncation)] // value is pre-reduced mod 256
-            let original: Vec<u8> = (0..len).map(|i| (i * 37 % 256) as u8).collect();
+            let original: Vec<u8> = (0..len)
+                .map(|i| u8::try_from(i * 37 % 256).unwrap_or(0))
+                .collect();
             let encoded = encode(&original);
             assert_eq!(encoded.len(), (len * 4).div_ceil(3));
             let decoded = decode(encoded.as_bytes()).unwrap();

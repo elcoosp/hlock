@@ -66,6 +66,16 @@ impl EdgeFilter {
     }
 }
 
+/// Converts a package/edge index to the `u32` used by the CSR arrays.
+///
+/// A lockfile with more than `u32::MAX` packages cannot be held in memory in
+/// the first place, so this saturates rather than truncating: a saturated
+/// index still keeps the arrays in bounds (the value is only ever compared and
+/// used as a slot, and `n` is bounded by allocation limits far below 2^32).
+fn csr_index(index: usize) -> u32 {
+    u32::try_from(index).unwrap_or(u32::MAX)
+}
+
 /// Cached dependency graph: name index + cid map + CSR forward/reverse adjacency.
 pub struct Graph<'a> {
     lockfile: &'a Lockfile,
@@ -88,7 +98,6 @@ impl<'a> Graph<'a> {
     /// # Errors
     /// Returns [`Error::ContentIdCollision`] when two distinct
     /// `(name, version)` identities share a 64-bit content id.
-    #[allow(clippy::cast_possible_truncation)] // CSR u32 indices, see below
     pub fn new(lockfile: &'a Lockfile) -> Result<Self, Error> {
         let n = lockfile.packages.len();
         let mut name_to_idx: HashMap<&'a str, usize> = HashMap::with_capacity(n);
@@ -145,13 +154,13 @@ impl<'a> Graph<'a> {
         for pkg in &lockfile.packages {
             for dep in &pkg.dependencies {
                 if let Some(&target) = name_to_idx.get(dep.name.as_str()) {
-                    fwd_targets.push(target as u32);
+                    fwd_targets.push(csr_index(target));
                     fwd_kinds.push(dep.dep_type.id());
                     rev_counts[target + 1] += 1;
                 }
             }
             let last = fwd_offsets.last().copied().unwrap_or_default();
-            fwd_offsets.push(last + (fwd_targets.len() as u32 - last));
+            fwd_offsets.push(last + (csr_index(fwd_targets.len()) - last));
         }
 
         // Prefix-sum reverse offsets.
@@ -168,7 +177,7 @@ impl<'a> Graph<'a> {
             for dep in &pkg.dependencies {
                 if let Some(&target) = name_to_idx.get(dep.name.as_str()) {
                     let slot = rev_fill[target] as usize;
-                    rev_sources[slot] = i as u32;
+                    rev_sources[slot] = csr_index(i);
                     rev_fill[target] += 1;
                 }
             }

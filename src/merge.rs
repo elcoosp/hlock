@@ -34,7 +34,6 @@ pub struct MergeResult {
 /// Returns [`Error::MergeFailed`] when `strategy` is
 /// [`ConflictStrategy::Fail`] and at least one package-level conflict was
 /// detected between `ours` and `theirs`.
-#[allow(clippy::too_many_lines)] // linear orchestration, one union per directive list
 pub fn merge_lockfiles(
     base: &Lockfile,
     ours: &Lockfile,
@@ -74,6 +73,56 @@ pub fn merge_lockfiles(
 
     let merged_patches = merge_patches(base, ours, theirs);
 
+    let merged_provenance = merge_provenance(base, ours, theirs, &merged_packages);
+
+    if strategy == ConflictStrategy::Fail && !conflicts.is_empty() {
+        return Err(Error::MergeFailed {
+            count: conflicts.len(),
+        });
+    }
+
+    let mut merged_packages = merged_packages;
+    merged_packages.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // Security-relevant directives are unioned (deduplicated, base first so
+    // ours/theirs only add). Silently dropping embedded advisories, licenses,
+    // policies, trust roots or rotations would destroy supply-chain state.
+    let merged = merge_directives(base, ours, theirs);
+
+    Ok(MergeResult {
+        lockfile: Lockfile {
+            sources: merged_sources,
+            overrides: merged_overrides,
+            features: merged_features,
+            metadata: merged_metadata,
+            workspace_root: merged_workspace_root,
+            workspace_pkgs: merged_workspace_pkgs,
+            hoist_boundaries: merged_hoist_boundaries,
+            packages: merged_packages,
+            artifacts: merged_artifacts,
+            patches: merged_patches,
+            provenance: merged_provenance,
+            advisories: merged.advisories,
+            licenses: merged.licenses,
+            policies: merged.policies,
+            trust_roots: merged.trust_roots,
+            mirrors: merged.mirrors,
+            root_rotations: merged.root_rotations,
+            vex_entries: merged.vex_entries,
+            compat: None,
+        },
+        conflicts,
+    })
+}
+
+/// Merges per-package provenance records, keeping ours/theirs entries that
+/// override a base entry and dropping entries whose package was removed.
+fn merge_provenance(
+    base: &Lockfile,
+    ours: &Lockfile,
+    theirs: &Lockfile,
+    merged_packages: &[Package],
+) -> Vec<ResolutionProvenance> {
     let merged_pkg_names: HashSet<String> =
         merged_packages.iter().map(|p| p.name.clone()).collect();
     let mut merged_provenance: Vec<ResolutionProvenance> = Vec::new();
@@ -100,86 +149,67 @@ pub fn merge_lockfiles(
             }
         }
     }
+    merged_provenance
+}
 
-    if strategy == ConflictStrategy::Fail && !conflicts.is_empty() {
-        return Err(Error::MergeFailed {
-            count: conflicts.len(),
-        });
+/// The security-relevant directive lists carried by a merged lockfile.
+struct MergedDirectives {
+    advisories: Vec<crate::policy::Advisory>,
+    licenses: Vec<crate::policy::LicenseEntry>,
+    policies: Vec<crate::policy::Policy>,
+    trust_roots: Vec<crate::policy::TrustRoot>,
+    root_rotations: Vec<crate::lockfile::TrustRootRotation>,
+    vex_entries: Vec<crate::lockfile::VexEntry>,
+    mirrors: Vec<crate::lockfile::Mirror>,
+}
+
+/// Unions the security-relevant directive lists across `base`, `ours` and
+/// `theirs` (deduplicated, base first so ours/theirs only add).
+fn merge_directives(base: &Lockfile, ours: &Lockfile, theirs: &Lockfile) -> MergedDirectives {
+    MergedDirectives {
+        advisories: union_dedup(
+            base.advisories
+                .iter()
+                .chain(ours.advisories.iter())
+                .chain(theirs.advisories.iter()),
+        ),
+        licenses: union_dedup(
+            base.licenses
+                .iter()
+                .chain(ours.licenses.iter())
+                .chain(theirs.licenses.iter()),
+        ),
+        policies: union_dedup(
+            base.policies
+                .iter()
+                .chain(ours.policies.iter())
+                .chain(theirs.policies.iter()),
+        ),
+        trust_roots: union_dedup(
+            base.trust_roots
+                .iter()
+                .chain(ours.trust_roots.iter())
+                .chain(theirs.trust_roots.iter()),
+        ),
+        root_rotations: union_dedup(
+            base.root_rotations
+                .iter()
+                .chain(ours.root_rotations.iter())
+                .chain(theirs.root_rotations.iter()),
+        ),
+        vex_entries: union_dedup(
+            base.vex_entries
+                .iter()
+                .chain(ours.vex_entries.iter())
+                .chain(theirs.vex_entries.iter()),
+        ),
+        mirrors: union_dedup(
+            base.mirrors
+                .iter()
+                .chain(ours.mirrors.iter())
+                .chain(theirs.mirrors.iter()),
+        ),
     }
-
-    let mut merged_packages = merged_packages;
-    merged_packages.sort_by(|a, b| a.name.cmp(&b.name));
-
-    // Security-relevant directives are unioned (deduplicated, base first so
-    // ours/theirs only add). Silently dropping embedded advisories, licenses,
-    // policies, trust roots or rotations would destroy supply-chain state.
-    let merged_advisories = union_dedup(
-        base.advisories
-            .iter()
-            .chain(ours.advisories.iter())
-            .chain(theirs.advisories.iter()),
-    );
-    let merged_licenses = union_dedup(
-        base.licenses
-            .iter()
-            .chain(ours.licenses.iter())
-            .chain(theirs.licenses.iter()),
-    );
-    let merged_policies = union_dedup(
-        base.policies
-            .iter()
-            .chain(ours.policies.iter())
-            .chain(theirs.policies.iter()),
-    );
-    let merged_trust_roots = union_dedup(
-        base.trust_roots
-            .iter()
-            .chain(ours.trust_roots.iter())
-            .chain(theirs.trust_roots.iter()),
-    );
-    let merged_root_rotations = union_dedup(
-        base.root_rotations
-            .iter()
-            .chain(ours.root_rotations.iter())
-            .chain(theirs.root_rotations.iter()),
-    );
-    let merged_vex_entries = union_dedup(
-        base.vex_entries
-            .iter()
-            .chain(ours.vex_entries.iter())
-            .chain(theirs.vex_entries.iter()),
-    );
-    let merged_mirrors = union_dedup(
-        base.mirrors
-            .iter()
-            .chain(ours.mirrors.iter())
-            .chain(theirs.mirrors.iter()),
-    );
-
-    Ok(MergeResult {
-        lockfile: Lockfile {
-            sources: merged_sources,
-            overrides: merged_overrides,
-            features: merged_features,
-            metadata: merged_metadata,
-            workspace_root: merged_workspace_root,
-            workspace_pkgs: merged_workspace_pkgs,
-            hoist_boundaries: merged_hoist_boundaries,
-            packages: merged_packages,
-            artifacts: merged_artifacts,
-            patches: merged_patches,
-            provenance: merged_provenance,
-            advisories: merged_advisories,
-            licenses: merged_licenses,
-            policies: merged_policies,
-            trust_roots: merged_trust_roots,
-            mirrors: merged_mirrors,
-            root_rotations: merged_root_rotations,
-            vex_entries: merged_vex_entries,
-            compat: None,
-        },
-        conflicts,
-    })
 }
 
 /// Deduplicates `base + ours + theirs` directive lists while preserving

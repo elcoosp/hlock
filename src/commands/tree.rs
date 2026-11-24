@@ -43,18 +43,20 @@ fn version_of(lockfile: &hlock::Lockfile, index: &HashMap<&str, usize>, name: &s
         })
 }
 
-#[allow(clippy::too_many_arguments)] // explicit traversal parameters
-fn build_tree(
-    lockfile: &hlock::Lockfile,
-    index: &HashMap<&str, usize>,
-    name: &str,
-    current_depth: u32,
+/// Immutable traversal configuration shared across the recursion, plus the
+/// mutable cycle-detection and budget state. Bundling these keeps `build_tree`
+/// within the argument limit while making the two state fields explicit.
+struct TreeWalk<'a> {
+    lockfile: &'a hlock::Lockfile,
+    index: &'a HashMap<&'a str, usize>,
     max_depth: Option<u32>,
-    dep_type_filter: &str,
-    visited: &mut HashSet<String>,
-    budget: &mut usize,
-) -> TreeNode {
-    if *budget == 0 {
+    dep_type_filter: &'a str,
+    visited: HashSet<String>,
+    budget: usize,
+}
+
+fn build_tree(walk: &mut TreeWalk<'_>, name: &str, current_depth: u32) -> TreeNode {
+    if walk.budget == 0 {
         return TreeNode {
             name: "… (tree truncated: node budget exhausted)".to_string(),
             version: String::new(),
@@ -62,9 +64,9 @@ fn build_tree(
             dependencies: Vec::new(),
         };
     }
-    *budget -= 1;
+    walk.budget -= 1;
 
-    let pkg = lockfile.find_package(name);
+    let pkg = walk.lockfile.find_package(name);
     let mut node = TreeNode {
         name: name.to_string(),
         version: pkg
@@ -74,18 +76,18 @@ fn build_tree(
         dependencies: Vec::new(),
     };
 
-    if max_depth.is_some_and(|max| current_depth >= max) {
+    if walk.max_depth.is_some_and(|max| current_depth >= max) {
         return node;
     }
 
-    if visited.contains(name) {
+    if walk.visited.contains(name) {
         return node;
     }
-    visited.insert(name.to_string());
+    walk.visited.insert(name.to_string());
 
     if let Some(pkg) = pkg {
         for dep in &pkg.dependencies {
-            let follows = match dep_type_filter {
+            let follows = match walk.dep_type_filter {
                 "runtime" => matches!(dep.dep_type, hlock::DepType::Runtime),
                 "dev" => matches!(dep.dep_type, hlock::DepType::Dev),
                 "peer" => matches!(dep.dep_type, hlock::DepType::Peer),
@@ -96,32 +98,23 @@ fn build_tree(
             }
 
             let dt = dep.dep_type.as_str();
-            if visited.contains(&dep.name) {
+            if walk.visited.contains(&dep.name) {
                 node.dependencies.push(TreeNode {
                     name: format!("{} ↻", dep.name),
-                    version: version_of(lockfile, index, &dep.name),
+                    version: version_of(walk.lockfile, walk.index, &dep.name),
                     dep_type: Some(dt.to_string()),
                     dependencies: Vec::new(),
                 });
                 continue;
             }
 
-            let mut child = build_tree(
-                lockfile,
-                index,
-                &dep.name,
-                current_depth + 1,
-                max_depth,
-                dep_type_filter,
-                visited,
-                budget,
-            );
+            let mut child = build_tree(walk, &dep.name, current_depth + 1);
             child.dep_type = Some(dt.to_string());
             node.dependencies.push(child);
         }
     }
 
-    visited.remove(name);
+    walk.visited.remove(name);
     node
 }
 
@@ -132,18 +125,15 @@ fn build_root_tree(
     max_depth: Option<u32>,
     dep_type_filter: &str,
 ) -> TreeNode {
-    let mut visited = HashSet::new();
-    let mut budget = MAX_TREE_NODES;
-    build_tree(
+    let mut walk = TreeWalk {
         lockfile,
         index,
-        root_name,
-        0,
         max_depth,
         dep_type_filter,
-        &mut visited,
-        &mut budget,
-    )
+        visited: HashSet::new(),
+        budget: MAX_TREE_NODES,
+    };
+    build_tree(&mut walk, root_name, 0)
 }
 
 fn render_tree_text(node: &TreeNode, prefix: &str, is_last: bool, show_dep_type: bool) {

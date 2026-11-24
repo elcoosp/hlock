@@ -154,8 +154,8 @@ fn push_str_field(buf: &mut Vec<u8>, s: &str) {
 /// has already rejected lengths of 256 or more, so the cast cannot truncate.
 fn push_digest(buf: &mut Vec<u8>, digest: &[u8]) {
     debug_assert!(digest.len() < 256, "validated by validate_payload");
-    #[allow(clippy::cast_possible_truncation)] // enforced by debug_assert + validate_payload
-    buf.push(digest.len() as u8);
+    let len = u8::try_from(digest.len()).unwrap_or(u8::MAX);
+    buf.push(len);
     buf.extend_from_slice(digest);
 }
 
@@ -852,7 +852,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::items_after_test_module)]
     fn test_pack_base_structure() {
         let data = PayloadData {
             logical_name: None,

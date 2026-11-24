@@ -166,27 +166,24 @@ fn decode_key_arg(spec: &str, expected_len: usize, what: &str) -> Vec<u8> {
     }
 }
 
-/// Rotates the root key: generates the new key, signs with the old key,
-/// appends the rotation record and rewrites the lockfile.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn run_rotate(
-    file: &Path,
-    new_key_id: &str,
-    new_algorithm: &str,
-    new_public_key_hex: Option<&str>,
+/// Bundled inputs for [`run_rotate`]. Grouping the rotation parameters keeps
+/// the entry point within the argument limit; the body is split into helpers
+/// below so no single function grows past the line budget.
+struct RotateParams<'a> {
+    file: &'a Path,
+    new_key_id: &'a str,
+    new_algorithm: &'a str,
+    new_public_key_hex: Option<&'a str>,
     new_expires: u64,
-    role: &str,
+    role: &'a str,
     threshold: u8,
-    old_private_key: &str,
-    output_path: Option<&Path>,
-    ctx: Ctx,
-) {
-    let Ctx { quiet, .. } = ctx;
-    let (content, mut lockfile) = load(file);
-    let had_signature = hlock::signature::has_signature_block(&content);
+    old_private_key: &'a str,
+    output_path: Option<&'a Path>,
+}
 
-    let new_algo = parse_algorithm(new_algorithm);
-    let new_role = match role {
+/// Parses the requested role, exiting with a usage error on an unknown value.
+fn parse_role(role: &str) -> hlock::policy::TrustRole {
+    match role {
         "root" => hlock::policy::TrustRole::Root,
         "targets" => hlock::policy::TrustRole::Targets,
         "snapshot" => hlock::policy::TrustRole::Snapshot,
@@ -197,9 +194,11 @@ fn run_rotate(
             );
             std::process::exit(2);
         }
-    };
+    }
+}
 
-    // Resolve the old root key: the record is signed by the current root.
+/// Resolves the current root trust record to rotate from, exiting when absent.
+fn require_old_root(lockfile: &hlock::Lockfile) -> hlock::policy::TrustRoot {
     let old_root = lockfile
         .trust_roots
         .iter()
@@ -211,42 +210,57 @@ fn run_rotate(
         );
         std::process::exit(1);
     };
+    old_root
+}
 
-    let old_sk_len = match old_root.algorithm {
+/// Resolves the new public key: either decodes the supplied hex or generates a
+/// fresh keypair, returning the public bytes and any generated private key.
+fn resolve_new_key(
+    new_algorithm: &str,
+    new_public_key_hex: Option<&str>,
+) -> (Vec<u8>, Option<String>) {
+    let new_algo = parse_algorithm(new_algorithm);
+    if let Some(pk_hex) = new_public_key_hex {
+        let pk_len = match new_algo {
+            SignatureAlgorithm::Ed25519 => 32,
+            SignatureAlgorithm::MlDsa65 => fips204::ml_dsa_65::PK_LEN,
+        };
+        return (decode_key_arg(pk_hex, pk_len, "new public key"), None);
+    }
+    let (sk, pk) = match new_algo {
+        SignatureAlgorithm::Ed25519 => super::keygen::generate_ed25519(),
+        SignatureAlgorithm::MlDsa65 => super::keygen::generate_ml_dsa_65(),
+    };
+    let pk_len = match new_algo {
         SignatureAlgorithm::Ed25519 => 32,
-        SignatureAlgorithm::MlDsa65 => fips204::ml_dsa_65::SK_LEN,
+        SignatureAlgorithm::MlDsa65 => fips204::ml_dsa_65::PK_LEN,
     };
-    let old_private = decode_key_arg(old_private_key, old_sk_len, "old private key");
+    (decode_key_arg(&pk, pk_len, "new public key"), Some(sk))
+}
 
-    // Either use the supplied new public key or generate a fresh keypair.
-    let (new_public, new_private_hex) = if let Some(pk_hex) = new_public_key_hex {
-        let pk_len = match new_algo {
-            SignatureAlgorithm::Ed25519 => 32,
-            SignatureAlgorithm::MlDsa65 => fips204::ml_dsa_65::PK_LEN,
-        };
-        (decode_key_arg(pk_hex, pk_len, "new public key"), None)
-    } else {
-        let (sk, pk) = match new_algo {
-            SignatureAlgorithm::Ed25519 => super::keygen::generate_ed25519(),
-            SignatureAlgorithm::MlDsa65 => super::keygen::generate_ml_dsa_65(),
-        };
-        let pk_len = match new_algo {
-            SignatureAlgorithm::Ed25519 => 32,
-            SignatureAlgorithm::MlDsa65 => fips204::ml_dsa_65::PK_LEN,
-        };
-        (decode_key_arg(&pk, pk_len, "new public key"), Some(sk))
-    };
-
+/// Appends the rotation record to `lockfile`, signing it with the old key and
+/// self-checking that the freshly produced record validates.
+fn push_rotation_record(
+    lockfile: &mut hlock::Lockfile,
+    params: &RotateParams<'_>,
+    new_algo: SignatureAlgorithm,
+    new_role: hlock::policy::TrustRole,
+    old_root: &hlock::policy::TrustRoot,
+    old_private: &[u8],
+    new_public: Vec<u8>,
+) {
     let rotation_signature = match hlock::signature::sign_rotation(
-        new_key_id,
-        new_algo,
-        &new_public,
-        new_expires,
-        new_role,
-        &old_root.key_id,
-        threshold,
+        &hlock::signature::RotationSpec {
+            new_key_id: params.new_key_id,
+            algorithm: new_algo,
+            new_public_key: &new_public,
+            new_expires_epoch: params.new_expires,
+            new_role,
+            old_key_id: &old_root.key_id,
+            threshold: params.threshold,
+        },
         old_root.algorithm,
-        &old_private,
+        old_private,
     ) {
         Ok(sig) => sig,
         Err(e) => {
@@ -257,13 +271,13 @@ fn run_rotate(
 
     lockfile
         .root_rotations
-        .push(hlock::lockfile::types::TrustRootRotation {
+        .push(hlock::lockfile::TrustRootRotation {
             old_key_id: old_root.key_id.clone(),
-            new_key_id: new_key_id.to_string(),
-            threshold,
+            new_key_id: params.new_key_id.to_string(),
+            threshold: params.threshold,
             new_algorithm: new_algo,
             new_public_key: new_public,
-            new_expires_epoch: new_expires,
+            new_expires_epoch: params.new_expires,
             new_role,
             rotation_signature_key_id: old_root.key_id.clone(),
             rotation_signature,
@@ -277,19 +291,63 @@ fn run_rotate(
         eprintln!("Error: generated rotation record failed validation: {e}");
         std::process::exit(1);
     }
+}
 
-    let serialized = match serialize(&lockfile) {
+/// Serializes and atomically writes the updated lockfile, returning the path
+/// that was written.
+fn write_updated_lockfile(lockfile: &hlock::Lockfile, params: &RotateParams<'_>) -> PathBuf {
+    let serialized = match serialize(lockfile) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("[{}] Serialize error: {}", e.error_code(), e);
             std::process::exit(2);
         }
     };
-    let target = output_path.unwrap_or(file);
-    if let Err(e) = super::atomic_write(target, &serialized) {
+    let target = params
+        .output_path
+        .map_or_else(|| params.file.to_path_buf(), Path::to_path_buf);
+    if let Err(e) = super::atomic_write(&target, &serialized) {
         eprintln!("Error writing {}: {e}", target.display());
         std::process::exit(2);
     }
+    target
+}
+
+/// Rotates the root key: generates the new key, signs with the old key,
+/// appends the rotation record and rewrites the lockfile.
+fn run_rotate(params: &RotateParams<'_>, ctx: Ctx) {
+    let Ctx { quiet, .. } = ctx;
+    run_rotate_inner(params, quiet);
+}
+
+fn run_rotate_inner(params: &RotateParams<'_>, quiet: bool) {
+    let (content, mut lockfile) = load(params.file);
+    let had_signature = hlock::signature::has_signature_block(&content);
+
+    let new_algo = parse_algorithm(params.new_algorithm);
+    let new_role = parse_role(params.role);
+    let old_root = require_old_root(&lockfile);
+
+    let old_sk_len = match old_root.algorithm {
+        SignatureAlgorithm::Ed25519 => 32,
+        SignatureAlgorithm::MlDsa65 => fips204::ml_dsa_65::SK_LEN,
+    };
+    let old_private = decode_key_arg(params.old_private_key, old_sk_len, "old private key");
+
+    let (new_public, new_private_hex) =
+        resolve_new_key(params.new_algorithm, params.new_public_key_hex);
+
+    push_rotation_record(
+        &mut lockfile,
+        params,
+        new_algo,
+        new_role,
+        &old_root,
+        &old_private,
+        new_public,
+    );
+
+    let target = write_updated_lockfile(&lockfile, params);
 
     if let Some(sk_hex) = new_private_hex {
         let sk_path = target.with_extension("new-key");
@@ -304,8 +362,9 @@ fn run_rotate(
             );
             println!("Distribute the matching public key to verifiers, then:");
             println!(
-                "  hlock sign {} --key-id {new_key_id} --algorithm {} --private-key @{} --in-place",
+                "  hlock sign {} --key-id {} --algorithm {} --private-key @{} --in-place",
                 target.display(),
+                params.new_key_id,
                 algo_name(new_algo),
                 sk_path.display()
             );
@@ -315,7 +374,7 @@ fn run_rotate(
     if !quiet {
         println!(
             "Rotation record appended: {} → {} (signed by {}, verified)",
-            old_root.key_id, new_key_id, old_root.key_id
+            old_root.key_id, params.new_key_id, old_root.key_id
         );
         if had_signature {
             // The rewrite cannot keep the old @signature block: the digest
@@ -325,8 +384,9 @@ fn run_rotate(
                 "! the previous @signature block was removed (the file changed); re-sign with the new key:"
             );
             eprintln!(
-                "  hlock sign {} --key-id {new_key_id} --in-place …",
-                target.display()
+                "  hlock sign {} --key-id {} --in-place …",
+                target.display(),
+                params.new_key_id
             );
         }
     }
@@ -347,15 +407,17 @@ pub(crate) fn run(args: &TrustArgs, ctx: Ctx) {
             old_private_key,
             output,
         } => run_rotate(
-            file,
-            new_key_id,
-            new_algorithm,
-            new_public_key.as_deref(),
-            *new_expires,
-            role,
-            *threshold,
-            old_private_key,
-            output.as_deref(),
+            &RotateParams {
+                file,
+                new_key_id,
+                new_algorithm,
+                new_public_key_hex: new_public_key.as_deref(),
+                new_expires: *new_expires,
+                role,
+                threshold: *threshold,
+                old_private_key,
+                output_path: output.as_deref(),
+            },
             ctx,
         ),
     }

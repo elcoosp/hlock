@@ -143,16 +143,16 @@ pub(crate) fn run(args: &AuditArgs<'_>, ctx: Ctx) {
             );
         }
     } else {
-        audit_text(
-            &report,
-            &lockfile,
-            &online_vulns,
-            &online_errors,
-            *merge,
-            *online,
-            &new_ids,
+        audit_text(&AuditText {
+            report: &report,
+            lockfile: &lockfile,
+            online_vulns: &online_vulns,
+            online_errors: &online_errors,
+            merge: *merge,
+            online: *online,
+            new_ids: &new_ids,
             ctx,
-        );
+        });
     }
 
     if !new_ids.is_empty() {
@@ -269,18 +269,31 @@ fn audit_json(
     .unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
 }
 
-/// Prints the text audit report.
-#[allow(clippy::too_many_arguments)] // renderer parameters are all used
-fn audit_text(
-    report: &hlock::policy::AuditReport,
-    lockfile: &hlock::Lockfile,
-    online_vulns: &[hlock::osv::OsvVulnerability],
-    online_errors: &[String],
+/// Inputs for [`audit_text`], bundled to keep the renderer within the argument
+/// limit. `merge`/`online` mirror the corresponding CLI flags.
+struct AuditText<'a> {
+    report: &'a hlock::policy::AuditReport,
+    lockfile: &'a hlock::Lockfile,
+    online_vulns: &'a [hlock::osv::OsvVulnerability],
+    online_errors: &'a [String],
     merge: bool,
     online: bool,
-    new_ids: &BTreeSet<String>,
+    new_ids: &'a BTreeSet<String>,
     ctx: Ctx,
-) {
+}
+
+/// Prints the text audit report.
+fn audit_text(args: &AuditText<'_>) {
+    let AuditText {
+        report,
+        lockfile,
+        online_vulns,
+        online_errors,
+        merge,
+        online,
+        new_ids,
+        ctx,
+    } = *args;
     let Ctx {
         quiet,
         color_enabled,

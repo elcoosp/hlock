@@ -30,7 +30,6 @@ pub(crate) struct FixArgs<'a> {
 }
 
 /// Runs the `fix` command.
-#[allow(clippy::too_many_lines)] // linear orchestration, split adds indirection
 pub(crate) fn run(args: &FixArgs<'_>, ctx: Ctx) {
     let FixArgs {
         file,
@@ -76,27 +75,7 @@ pub(crate) fn run(args: &FixArgs<'_>, ctx: Ctx) {
         eprintln!("[verbose] Building fix plan...");
     }
 
-    let plan = match build_fix_plan(&lockfile, fix_type, timeout) {
-        Ok(mut p) => {
-            for w in &p.warnings {
-                eprintln!("! {w}");
-            }
-            // `--package <name> [--to <version>]` narrows the plan.
-            if let Some(pkg) = *package {
-                p.fixes.retain(|f| f.package == *pkg);
-                if let Some(target) = *to {
-                    for fix in &mut p.fixes {
-                        fix.fixed = (*target).to_string();
-                    }
-                }
-            }
-            p
-        }
-        Err(e) => {
-            eprintln!("Error building fix plan: {e}");
-            std::process::exit(2);
-        }
-    };
+    let plan = build_narrowed_plan(&lockfile, fix_type, *package, *to, timeout);
 
     if let Some(pkg) = *package {
         let known = lockfile.packages.iter().any(|p| p.name == *pkg);
@@ -158,6 +137,38 @@ pub(crate) fn run(args: &FixArgs<'_>, ctx: Ctx) {
         eprintln!(
             "  note: integrity hashes still describe the old artifacts; re-import to refresh them"
         );
+    }
+}
+
+/// Builds the fix plan, printing warnings, and narrows it to `--package`
+/// (optionally retargeting every fix to `--to`).
+fn build_narrowed_plan(
+    lockfile: &hlock::Lockfile,
+    fix_type: FixType,
+    package: Option<&str>,
+    to: Option<&str>,
+    timeout: u64,
+) -> hlock::FixPlan {
+    match build_fix_plan(lockfile, fix_type, timeout) {
+        Ok(mut p) => {
+            for w in &p.warnings {
+                eprintln!("! {w}");
+            }
+            // `--package <name> [--to <version>]` narrows the plan.
+            if let Some(pkg) = package {
+                p.fixes.retain(|f| f.package == pkg);
+                if let Some(target) = to {
+                    for fix in &mut p.fixes {
+                        fix.fixed = target.to_string();
+                    }
+                }
+            }
+            p
+        }
+        Err(e) => {
+            eprintln!("Error building fix plan: {e}");
+            std::process::exit(2);
+        }
     }
 }
 

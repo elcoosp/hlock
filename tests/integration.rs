@@ -2464,24 +2464,24 @@ fn test_root_rotation_rejects_expired_old_key() {
 #[test]
 fn test_root_rotation_accepts_valid() {
     // v1.0: a rotation record must carry a real signature by the old root key.
-    #[allow(clippy::cast_possible_truncation)] // i < 32
-    let old_seed: [u8; 32] = core::array::from_fn(|i| i as u8 + 1);
+    let old_seed: [u8; 32] = core::array::from_fn(|i| u8::try_from(i).unwrap_or(0) + 1);
     let old_signing = ed25519_dalek::SigningKey::from_bytes(&old_seed);
     let old_pub = old_signing.verifying_key().as_bytes().to_vec();
 
-    #[allow(clippy::cast_possible_truncation)] // i < 32
-    let new_seed: [u8; 32] = core::array::from_fn(|i| i as u8 + 100);
+    let new_seed: [u8; 32] = core::array::from_fn(|i| u8::try_from(i).unwrap_or(0) + 100);
     let new_signing = ed25519_dalek::SigningKey::from_bytes(&new_seed);
     let new_pub = new_signing.verifying_key().as_bytes().to_vec();
 
     let rotation_signature = hlock::signature::sign_rotation(
-        "new@key",
-        hlock::signature::SignatureAlgorithm::Ed25519,
-        &new_pub,
-        9999,
-        hlock::policy::TrustRole::Root,
-        "old@key",
-        1,
+        &hlock::signature::RotationSpec {
+            new_key_id: "new@key",
+            algorithm: hlock::signature::SignatureAlgorithm::Ed25519,
+            new_public_key: &new_pub,
+            new_expires_epoch: 9999,
+            new_role: hlock::policy::TrustRole::Root,
+            old_key_id: "old@key",
+            threshold: 1,
+        },
         hlock::signature::SignatureAlgorithm::Ed25519,
         &old_seed,
     )
@@ -2531,8 +2531,7 @@ fn test_root_rotation_accepts_valid() {
 fn test_root_rotation_rejects_forged_signature() {
     // v1.0 (E0306): a rotation record signed by anything but the old root
     // key must fail validation.
-    #[allow(clippy::cast_possible_truncation)] // i < 32
-    let old_seed: [u8; 32] = core::array::from_fn(|i| i as u8 + 1);
+    let old_seed: [u8; 32] = core::array::from_fn(|i| u8::try_from(i).unwrap_or(0) + 1);
     let old_signing = ed25519_dalek::SigningKey::from_bytes(&old_seed);
     let old_pub = old_signing.verifying_key().as_bytes().to_vec();
 

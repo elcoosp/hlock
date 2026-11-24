@@ -215,15 +215,6 @@ impl C<'_> {
             self.sanitized()
         }
     }
-    #[allow(dead_code)]
-    pub fn b(&self) -> String {
-        if self.on {
-            use owo_colors::OwoColorize;
-            self.sanitized().bold().to_string()
-        } else {
-            self.sanitized()
-        }
-    }
 }
 
 #[cfg(test)]
