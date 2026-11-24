@@ -233,14 +233,14 @@ fn merge_sources(
     let mut ours_map: HashMap<usize, usize> = (0..ours.sources.len()).map(|i| (i, i)).collect();
     let mut theirs_map: HashMap<usize, usize> = (0..theirs.sources.len()).map(|i| (i, i)).collect();
 
-    for i in base.sources.len()..ours.sources.len() {
+    for (i, src) in ours.sources.iter().enumerate().skip(base.sources.len()) {
         ours_map.insert(i, merged.len());
-        merged.push(ours.sources[i].clone());
+        merged.push(src.clone());
     }
 
-    for i in base.sources.len()..theirs.sources.len() {
+    for (i, src) in theirs.sources.iter().enumerate().skip(base.sources.len()) {
         theirs_map.insert(i, merged.len());
-        merged.push(theirs.sources[i].clone());
+        merged.push(src.clone());
     }
 
     (merged, ours_map, theirs_map)

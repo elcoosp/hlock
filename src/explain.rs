@@ -353,8 +353,9 @@ pub fn explain_advisory(id: &str, lockfile: &Lockfile) -> Option<Explanation> {
         .packages
         .iter()
         .find(|p| p.name == adv.package)
-        .map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch))
-        .unwrap_or_default();
+        .map_or_else(String::new, |p| {
+            format!("{}.{}.{}", p.major, p.minor, p.patch)
+        });
 
     Some(Explanation {
         name: id.to_string(),

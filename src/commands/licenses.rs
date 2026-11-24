@@ -40,8 +40,9 @@ fn load_lockfile(file: &Path) -> Lockfile {
 
 /// Splits a comma-separated license list into trimmed entries.
 fn parse_license_list(spec: Option<&str>) -> Vec<String> {
-    spec.map(|s| s.split(',').map(|x| x.trim().to_string()).collect())
-        .unwrap_or_default()
+    spec.map_or_else(Vec::new, |s| {
+        s.split(',').map(|x| x.trim().to_string()).collect()
+    })
 }
 
 /// Builds one report row per package with its declared license and source.

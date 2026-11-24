@@ -69,9 +69,9 @@ fn build_tree(walk: &mut TreeWalk<'_>, name: &str, current_depth: u32) -> TreeNo
     let pkg = walk.lockfile.find_package(name);
     let mut node = TreeNode {
         name: name.to_string(),
-        version: pkg
-            .map(|p| format!("{}.{}.{}", p.major, p.minor, p.patch))
-            .unwrap_or_default(),
+        version: pkg.map_or_else(String::new, |p| {
+            format!("{}.{}.{}", p.major, p.minor, p.patch)
+        }),
         dep_type: None,
         dependencies: Vec::new(),
     };
